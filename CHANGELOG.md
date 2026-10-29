@@ -1,5 +1,51 @@
 # Journal des versions
 
+## 1.3.0 — 2026-10-29
+
+### Fiabilité en direct
+- **Talkback jamais bloqué** : le relâché part toujours vers le bus et les touches de l'appui, même si tu changes de page, modifies ou effaces la touche pendant que tu la maintiens. Un « off » perdu est renvoyé jusqu'à ce que py-intercom confirme le micro fermé.
+- **Tout est relâché** à la fermeture de LiveDeck (raccourcis maintenus, interrupteurs, micros py-intercom), et ce que tenait un Stream Deck quand il est débranché, sans couper le talkback des autres decks.
+- **Maintien sur toutes les touches** : un raccourci maintenu ou un talkback marche aussi sur une touche avec appui long, avec sécurité (à partir de ½ s) ou en interrupteur (1er appui ouvre, 2e ferme). Un interrupteur verrouillé est relâché si sa touche est effacée ou changée ; un interrupteur sécurisé ne bascule qu'après ½ s de maintien.
+- **Configuration protégée** : écriture atomique, une sauvegarde par jour et avant chaque import dans `%APPDATA%\LiveDeck\backups` (20 gardées). Une configuration abîmée est mise de côté et LiveDeck démarre quand même, en te disant où retrouver tes sauvegardes ; une configuration seulement verrouillée (OneDrive, antivirus) n'est jamais écrasée.
+- Un vMix figé est détecté (plus de réponse depuis 3,5 s) et LiveDeck se reconnecte tout seul ; une erreur dans un fil ne l'arrête plus, et tout est écrit dans le journal (`livedeck.log`, tournant).
+- Les Stream Decks gardent leur page après les Réglages, le Diagnostic ou une coupure USB. Nouveaux modèles : Stream Deck + XL, Studio et Pedal ; les touches tactiles du Neo changent de page.
+
+### Take et vMix
+- **Take plus clair** : touche verte = en preview, prête à prendre ; rouge = à l'antenne (le rouge l'emporte toujours) ; liseré vert sous le rouge = aussi en preview. Sur un input déjà à l'antenne, Take ne fait rien.
+- **Double appui rapide** : l'état est mis à jour dès l'envoi de la commande, sans attendre la lecture de vMix, donc deux appuis rapprochés font bien preview puis antenne, Mix 2 à 4 compris.
+- **2e appui sur une Preview** : option pour envoyer à l'antenne un input déjà en preview, avec la transition de ton choix (aussi proposée à l'import Companion). Par défaut, rien ne change.
+- Liste des transitions complète (effets inversés, boutons de transition 1-4 réglés dans vMix, Stingers) ; FTB démarrer / arrêter n'envoie la commande que si nécessaire.
+- Un input vide ou introuvable n'envoie plus rien et le Moniteur le dit ; un refus de vMix cite la commande refusée. Les valeurs avec espaces (`SetText`…) sont envoyées telles quelles.
+
+### Intégrations
+- **Diagnostic py-intercom** : chaque échec a son explication en français (client fermé, « Contrôle HTTP » non coché, mauvaise IP, pare-feu, proxy, client désarmé, bus absent…). Bouton **Tester** pour chaque intégration dans Réglages → Intégrations (sur les adresses que tu viens de saisir) et dans l'inspecteur.
+- **Bus découverts** : la liste des bus vient du client py-intercom ; la touche affiche HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT (bus « Toujours actif »).
+- **Raccourci de secours** : un raccourci clavier peut prendre le relais si py-intercom ne répond pas (si le client était seulement lent, le relâché lui envoie aussi « off »). Il est gardé à la conversion d'une config Companion.
+- **Proxy** : les adresses locales (127.0.0.1, réseau privé, `.local`) ne passent plus jamais par le proxy de Windows.
+- **orchestream** : liste d'overlays libre (Réglages → Intégrations), et les overlays vus dans le flux en direct sont proposés automatiquement. Tally32 : message clair si le firmware est trop ancien.
+- L'import Companion ne convertit vers py-intercom / orchestream / Tally32 que si tu coches « Convertir vers les intégrations natives ». Avec « Ajouter les pages », les réglages trouvés (orchestream, overlays, tallys) complètent les tiens.
+
+### Nouvelles actions
+- **Message OSC** (QLab, Reaper, X32, TouchDesigner…) et **Commande TCP / UDP** (texte avec `\r \n \xNN` ou hexadécimal), dans la nouvelle catégorie *Réseau*.
+- Retour d'état **Valeur d'une API JSON** : lit une URL, compare une valeur (égal, supérieur, contient…) et peut l'afficher sur la touche (`Spectateurs\n{value}`).
+
+### Texte dynamique
+- Le texte d'une touche peut contenir des variables mises à jour en direct : `$(vmix:program_title)`, `$(vmix:remaining:Magneto)`, `$(vmix:text:Bandeau:Headline)`, `$(time)`… Menu **Variables…** dans l'inspecteur. Les variables Companion sont converties à l'import.
+
+### Interface
+- **Colonne de droite redimensionnable**, sans défilement horizontal ; les colonnes se règlent à la souris et LiveDeck s'en souvient.
+- **Touche vide** : toutes les familles d'actions (vidéo, audio, production, intégrations, clavier, web, réseau, deck), avec recherche et catégories. Une intégration pas encore réglée est marquée « à configurer ».
+- **Prochain appui** affiché sous le titre de la touche ; Take, Program, Preview, Overlay et Son demandent leur input dès la création ; **Convertir en Take** (touche, rangée ou page).
+- **Statut des intégrations** : une pastille par intégration utilisée dans l'en-tête (clic = réglages), statut et Tester dans l'inspecteur.
+- **Moniteur** : compteur d'erreurs et d'alertes, filtre (erreurs, actions envoyées), Copier, Effacer, accès au fichier journal ; les alertes s'affichent aussi en bandeau.
+- **Remplir la rangée…** (clic droit) : place une série d'inputs en Take, Preview, Overlay…; **export / import d'une page** seule (menu de l'onglet ou **Fichier**).
+- Mode Live : vue de la touche en lecture seule (ce qu'elle fait, prochain appui, problèmes). Survoler une touche du deck à l'écran affiche ce qu'elle fait.
+- Menu **Fichier** (import, export, Diagnostic, aide), raccourcis **F1** (raccourcis et légende des couleurs), **F2** (texte), **Entrée** (tester), **Ctrl+Pg↑ / Pg↓** (page).
+
+### Compatibilité
+- Le talkback demande **py-intercom compilé le 29/10/2026 ou plus récent**, avec « Contrôle HTTP » coché dans la zone Parler (et « Depuis le réseau » si LiveDeck tourne sur un autre PC).
+- Ta configuration est reprise telle quelle (les transitions « FadeToBlack » deviennent des touches FTB).
+
 ## 1.2.0 — 2026-10-29
 
 ### Intégrations maison natives

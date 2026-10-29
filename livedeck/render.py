@@ -68,7 +68,7 @@ def _layout(draw, text, size_px, box_w, box_h):
     words = text.split()
     for px in range(int(box_h * 0.34), 7, -1):
         f = font(px)
-        if any(draw.textlength(w, font=f) > box_w for w in words) and px > 11:
+        if any(draw.textlength(w, font=f) > box_w for w in words) and px > 9:  # un mot coupé se lit mal : plutôt plus petit
             continue
         lines = _wrap(draw, text, f, box_w)
         lh = int(px * 1.12)

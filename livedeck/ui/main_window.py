@@ -7,26 +7,34 @@ import json
 import os
 import time
 
-from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QObject, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
-from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
-                               QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon,
-                               QTabBar, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+                               QSizePolicy, QSplitter, QSystemTrayIcon, QTabBar, QVBoxLayout, QWidget)
 
 from .. import __version__, presets
+from ..actions import to_take
 from ..companion_import import import_companion
-from ..model import DECK_SIZES, HOME, key, new_id, normalize_config, parse_key
+from ..integrations import integration_status, merge_integrations
+from ..model import CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config, parse_key
 from . import theme as T
 from .deck_view import DeckGrid
 from .diagnostic import DiagnosticDialog
+from .dialogs import LEGEND, FillRowDialog, ImportOptionsDialog, ShortcutsDialog
 from .inspector import Inspector
 from .library import LibraryPanel
 from .search import SearchDialog
 from .settings import SettingsDialog
-from .widgets import Seg, label
+from .widgets import Seg, label, tame_combo, typo
 
 HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic droit : options  ·  "
-        "Appuie une touche du Stream Deck pour la retrouver ici")
+        "Entrée : tester  ·  F1 : aide")
+TOAST_MS = {"error": 9000, "warn": 6000}
+MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action", "Actions envoyées")]
+INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Overlays"), ("tallies", "Tallys")]
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
 
 
@@ -60,16 +68,26 @@ def app_icon() -> QIcon:
 
 
 class StatusPill(QLabel):
+    clicked = Signal()
+
     def __init__(self, name: str):
         super().__init__()
         self.setObjectName("Pill")
         self.name = name
+        self.ok = None
+        self.setCursor(Qt.PointingHandCursor)
         self.set(None, "")
 
     def set(self, ok: bool | None, detail: str):
+        self.ok = ok
         dot = T.OK if ok else T.FAINT if ok is None else T.DANGER
         self.setText(f"<span style='color:{dot}'>●</span>&nbsp; <b>{self.name}</b>"
-                     f"&nbsp;<span style='color:{T.MUTED}'>{html.escape(detail)}</span>")
+                     + (f"&nbsp;<span style='color:{T.MUTED}'>{html.escape(detail)}</span>" if detail else ""))
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
 
 
 class Tray(QSystemTrayIcon):
@@ -119,6 +137,10 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self._tray_hint_shown = False
         self._toast_timer = QTimer(self, singleShot=True, interval=4000, timeout=self._end_toast)
+        self._entries: list[tuple[str, str]] = []  # journal du moniteur (niveau, ligne)
+        self.unread = {"error": 0, "warn": 0}
+        # disposition (largeur des colonnes) : fichier .ini à côté de la config, jamais le registre Windows
+        self._ui = QSettings(str(Path(engine.config_path).parent / "ui.ini"), QSettings.IniFormat)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -129,22 +151,39 @@ class MainWindow(QMainWindow):
         v.addWidget(self._header())
         body = QHBoxLayout()
         body.setContentsMargins(14, 14, 14, 14)
-        body.setSpacing(14)
         self.library = LibraryPanel(engine)
         self.inspector = Inspector(engine, self)
-        body.addWidget(self.library)
-        body.addLayout(self._center(), 1)
-        body.addWidget(self.inspector)
+        center = QWidget()
+        center.setLayout(self._center())
+        # colonnes redimensionnables (poignées entre les panneaux), jamais repliées
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.setHandleWidth(14)
+        self.split.setChildrenCollapsible(False)
+        for i, w in enumerate((self.library, center, self.inspector)):
+            self.split.addWidget(w)
+            self.split.setStretchFactor(i, 1 if i == 1 else 0)
+        self.split.setSizes([290, 860, 400])
+        try:
+            state = self._ui.value("splitter")
+            if state is not None:
+                self.split.restoreState(state)
+        except Exception:  # fichier abîmé : disposition par défaut
+            pass
+        self._save_ui_timer = QTimer(self, singleShot=True, interval=600, timeout=self._save_ui)
+        self.split.splitterMoved.connect(lambda *_: self._save_ui_timer.start())
+        body.addWidget(self.split, 1)
         v.addLayout(body, 1)
 
         self.library.input_activated.connect(self._input_activated)
         self.library.preset_activated.connect(self._preset_activated)
+        self.library.inputs.fill_requested.connect(lambda titles: self.open_fill_row(self.grid.sel, titles))
         self.tray = Tray(self)
         self._shortcuts()
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
         self._refresh_live()
         QTimer(self, interval=1000, timeout=self._update_pills).start()
+        QTimer.singleShot(0, self._show_migration_notes)
 
     # -- en-tête --------------------------------------------------------------
     def _header(self) -> QFrame:
@@ -167,36 +206,55 @@ class MainWindow(QMainWindow):
         self.vmix_pill = StatusPill("vMix")
         lay.addWidget(self.deck_pill, 0, Qt.AlignVCenter)
         lay.addWidget(self.vmix_pill, 0, Qt.AlignVCenter)
+        self.vmix_pill.clicked.connect(lambda: self.open_settings("general"))
+        self.deck_pill.clicked.connect(self.open_diagnostic)
+        # une pastille par intégration utilisée par au moins une touche ; clic : Réglages → Intégrations
+        self.integ_pills = {}
+        for k, name in INTEG_PILLS:
+            pill = StatusPill(name)
+            pill.clicked.connect(lambda: self.open_settings("integ"))
+            pill.hide()
+            lay.addWidget(pill, 0, Qt.AlignVCenter)
+            self.integ_pills[k] = pill
+        self.integ_all = StatusPill("Intégrations")
+        self.integ_all.clicked.connect(lambda: self.open_settings("integ"))
+        self.integ_all.hide()
+        lay.addWidget(self.integ_all, 0, Qt.AlignVCenter)
         lay.addSpacing(10)
         self.mode = Seg([("edit", "Édition"), ("live", "Live")], "edit", live_last=True)
         self.mode.buttons["edit"].setToolTip("Clic sur une touche = la sélectionner pour l'éditer")
         self.mode.buttons["live"].setToolTip("Clic sur une touche = la déclencher, comme sur le Stream Deck (F5)")
         self.mode.changed.connect(lambda m: self.set_live(m == "live"))
         lay.addWidget(self.mode, 0, Qt.AlignVCenter)
-        self.follow = QCheckBox("Suivre le Stream Deck")
+        self.follow = QCheckBox("Suivre le deck")
         self.follow.setChecked(True)
-        self.follow.setToolTip("Appuyer sur une touche physique la sélectionne dans l'éditeur")
+        self.follow.setToolTip("Suivre le Stream Deck : appuyer sur une touche physique la sélectionne dans "
+                               "l'éditeur")
         lay.addWidget(self.follow)
         lay.addSpacing(6)
-        imp = QPushButton("Importer")
+        imp = QPushButton("Fichier")
+        imp.setToolTip("Importer, exporter, diagnostic des Stream Decks, aide")
         menu = QMenu(imp)
+        menu.addSection("Importer")
         menu.addAction("Config Bitfocus Companion…", self.import_companion)
         menu.addAction("Configuration LiveDeck (.json)…", self.load_config_file)
+        menu.addAction("Une page (.json)…", self.import_page)
+        menu.addSection("Exporter")
+        menu.addAction("La configuration…", self.export_config)
+        menu.addAction("La page affichée…", self.export_page)
         menu.addSeparator()
-        menu.addAction("Exporter la configuration…", self.export_config)
+        menu.addAction("Diagnostic Stream Deck…", self.open_diagnostic).setToolTip(
+            "Vérifier les Stream Decks : écrans, chaque touche, performances")
+        menu.addAction("Raccourcis et légende   F1", self.open_help)
         menu.addAction("Ouvrir le dossier des données", lambda: hasattr(os, "startfile") and os.startfile(HOME))
+        menu.setToolTipsVisible(True)
         imp.setMenu(menu)
         lay.addWidget(imp)
-        diag = QPushButton("Diagnostic")
-        diag.setObjectName("Ghost")
-        diag.setToolTip("Vérifier les Stream Decks : écrans, chaque touche, performances")
-        diag.clicked.connect(self.open_diagnostic)
-        lay.addWidget(diag)
         self.mon_btn = QPushButton("Moniteur")
         self.mon_btn.setObjectName("Ghost")
         self.mon_btn.setCheckable(True)
         self.mon_btn.setToolTip("Journal des actions envoyées et des erreurs")
-        self.mon_btn.toggled.connect(lambda on: self.monitor.setVisible(on))
+        self.mon_btn.toggled.connect(self._toggle_monitor)
         lay.addWidget(self.mon_btn)
         gear = QPushButton("Réglages")
         gear.setObjectName("Ghost")
@@ -217,6 +275,11 @@ class MainWindow(QMainWindow):
         self.tabs.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tabs.customContextMenuRequested.connect(lambda pos: self._page_menu().exec(self.tabs.mapToGlobal(pos)))
         row.addWidget(self.tabs, 1)
+        legend = QPushButton("?")
+        legend.setObjectName("Ghost")
+        legend.setToolTip(LEGEND + "<br><br>Clic : raccourcis clavier et légende (F1)")
+        legend.clicked.connect(self.open_help)
+        row.addWidget(legend)
         find = QPushButton("Rechercher")
         find.setObjectName("Ghost")
         find.setToolTip("Trouver une touche sur toutes les pages (Ctrl+F)")
@@ -240,26 +303,73 @@ class MainWindow(QMainWindow):
         self.grid.inputs_dropped.connect(self._drop_inputs)
         self.grid.preset_dropped.connect(self._drop_preset)
         self.grid.context.connect(self._cell_menu)
+        self.grid.test_key.connect(lambda k: self.engine.trigger(self.page_id, k))
         center.addWidget(self.grid, 1)
-        self.hint = label(HINT, "Hint")
+        self.hint = label(HINT, "Hint", True)
         self.hint.setAlignment(Qt.AlignCenter)
+        self.hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.hint.installEventFilter(self)
         center.addWidget(self.hint)
+        center.addWidget(self._monitor())
+        return center
+
+    def _monitor(self) -> QWidget:
+        """Journal : filtre par niveau, copier, effacer, ouvrir le fichier journal."""
+        self.monitor_box = QWidget()
+        lay = QVBoxLayout(self.monitor_box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.mon_filter = tame_combo(QComboBox(), 14)
+        self.mon_filter.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        for v, text in MONITOR_FILTERS:
+            self.mon_filter.addItem(text, v)
+        self.mon_filter.currentIndexChanged.connect(lambda _: self._render_monitor())
+        row.addWidget(self.mon_filter)
+        row.addStretch()
+        for text, tip, fn in (("Copier", "Copier le journal affiché", self._copy_monitor),
+                              ("Effacer", "Vider le journal", self._clear_monitor),
+                              ("Fichier journal", "Ouvrir livedeck.log (détails techniques)", self._open_log)):
+            b = QPushButton(text)
+            b.setObjectName("Ghost")
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        lay.addLayout(row)
         self.monitor = QPlainTextEdit()
         self.monitor.setObjectName("Monitor")
         self.monitor.setReadOnly(True)
         self.monitor.setMaximumBlockCount(400)
         self.monitor.setFixedHeight(150)
-        self.monitor.hide()
-        center.addWidget(self.monitor)
-        return center
+        lay.addWidget(self.monitor)
+        self.monitor_box.hide()
+        return self.monitor_box
 
     def _shortcuts(self):
         for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo), ("Ctrl+Y", self.redo),
                         (QKeySequence.Copy, self.copy), (QKeySequence.Paste, self.paste),
                         (QKeySequence.Cut, self.cut), ("Ctrl+D", self.duplicate_selected),
                         (QKeySequence.Delete, self.delete_selected), ("F5", lambda: self.set_live(not self.grid.live)),
-                        (Qt.Key_Escape, lambda: self.grid.select(None)), (QKeySequence.Find, self.open_search)):
+                        (Qt.Key_Escape, lambda: self.grid.select(None)), (QKeySequence.Find, self.open_search),
+                        ("Ctrl+PgDown", lambda: self._goto_page("next")), ("Ctrl+PgUp", lambda: self._goto_page("prev")),
+                        ("F1", self.open_help), ("F2", self._edit_label)):
             QShortcut(QKeySequence(seq), self, activated=fn)
+
+    def _edit_label(self):
+        ed = getattr(self.inspector, "label_edit", None)
+        try:
+            if ed is not None and ed.isVisible():
+                ed.setFocus()
+                ed.selectAll()
+        except RuntimeError:  # champ détruit par une reconstruction
+            pass
+
+    def eventFilter(self, obj, e):
+        if obj is self.hint and e.type() == QEvent.MouseButtonPress and self._toast_timer.isActive():
+            self.mon_btn.setChecked(True)  # clic sur un message : ouvrir le moniteur
+            return True
+        return super().eventFilter(obj, e)
 
     # -- événements moteur ----------------------------------------------------
     def _on_event(self, kind: str, payload):
@@ -302,22 +412,69 @@ class MainWindow(QMainWindow):
 
     def _log(self, level: str, msg: str):
         mark = {"error": "✕", "warn": "!", "action": "▶"}.get(level, "·")
-        self.monitor.appendPlainText(f"{time.strftime('%H:%M:%S')}  {mark} {msg}")
-        if level == "error":
-            self.toast(msg, error=True)
+        line = f"{time.strftime('%H:%M:%S')}  {mark} {msg}"
+        self._entries.append((level, line))
+        del self._entries[:-400]
+        if self._shown(level):
+            self.monitor.appendPlainText(line)
+        if level in ("error", "warn"):
+            if not self.monitor_box.isVisible():
+                self.unread[level] += 1
+                self._update_badge()
+            self.toast(msg, level=level)
 
-    def toast(self, msg: str, error: bool = False):
+    def _shown(self, level: str) -> bool:
+        f = self.mon_filter.currentData()
+        return f == "all" or (f == "problems" and level in ("error", "warn")) or (f == "action" and level == "action")
+
+    def _render_monitor(self):
+        self.monitor.setPlainText("\n".join(line for lv, line in self._entries if self._shown(lv)))
+        self.monitor.verticalScrollBar().setValue(self.monitor.verticalScrollBar().maximum())
+
+    def _clear_monitor(self):
+        self._entries.clear()
+        self.monitor.clear()
+
+    def _copy_monitor(self):
+        QApplication.clipboard().setText(self.monitor.toPlainText())
+        self.toast("Journal copié")
+
+    def _open_log(self):
+        path = HOME / "livedeck.log"
+        if hasattr(os, "startfile") and path.exists():
+            os.startfile(path)
+
+    def _toggle_monitor(self, on: bool):
+        self.monitor_box.setVisible(on)
+        if on:
+            self.unread = {"error": 0, "warn": 0}
+            self._update_badge()
+
+    def _update_badge(self):
+        """Badge « Moniteur ● 3 » : erreurs (rouge) ou alertes (orange) arrivées moniteur fermé."""
+        n = self.unread["error"] + self.unread["warn"]
+        self.mon_btn.setText(f"Moniteur  ● {n}" if n else "Moniteur")
+        color = T.DANGER if self.unread["error"] else T.WARN
+        self.mon_btn.setStyleSheet(f"QPushButton#Ghost{{color:{color}}}" if n else "")
+        self.mon_btn.setToolTip(f"{self.unread['error']} erreur(s), {self.unread['warn']} alerte(s) non lue(s)  ·  "
+                                "journal des actions envoyées et des erreurs" if n
+                                else "Journal des actions envoyées et des erreurs")
+
+    def toast(self, msg: str, error: bool = False, level: str = ""):
+        level = level or ("error" if error else "info")
         self.hint.setObjectName("Toast")
-        self.hint.setStyleSheet(f"color:{T.DANGER}" if error else "")
+        self.hint.setStyleSheet({"error": f"color:{T.DANGER}", "warn": f"color:{T.WARN}"}.get(level, ""))
         self.hint.setText(msg)
+        self.hint.setToolTip("Clic : ouvrir le moniteur" if level in ("error", "warn") else "")
         self.hint.style().unpolish(self.hint)
         self.hint.style().polish(self.hint)
-        self._toast_timer.start()
+        self._toast_timer.start(TOAST_MS.get(level, 4000))
 
     def _end_toast(self):
         self.hint.setObjectName("Hint")
         self.hint.setStyleSheet("")
-        self.hint.setText(HINT_LIVE if self.grid.live else HINT)
+        self.hint.setToolTip("")
+        self.hint.setText(typo(HINT_LIVE if self.grid.live else HINT))
         self.hint.style().unpolish(self.hint)
         self.hint.style().polish(self.hint)
 
@@ -325,27 +482,50 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tray"):
             self.tray.sync()
         st, vm = self.engine.vmix.state, self.engine.vmix
+        wide = self.width() >= 1500  # fenêtre étroite : pastilles réduites au nom, détail en info-bulle
         if st.connected:
             lat = vm.latency_ms
             detail = f"v{st.version}" + ("" if lat is None else f"  ·  {lat:.0f} ms" if lat >= 1 else "  ·  < 1 ms")
-            self.vmix_pill.set(True, detail)
-            self.vmix_pill.setToolTip(f"{st.inputs and len(st.inputs)} inputs · temps aller-retour moyen d'une commande")
+            self.vmix_pill.set(True, detail if wide else "")
+            self.vmix_pill.setToolTip(f"vMix {detail}  ·  {st.inputs and len(st.inputs)} inputs  ·  temps aller-retour "
+                                      "moyen d'une commande\nClic : Réglages")
         else:
-            self.vmix_pill.set(False, f"déconnecté  ·  {self.engine.cfg['vmix']['host']}")
-            self.vmix_pill.setToolTip("LiveDeck réessaie toutes les 2 secondes")
+            detail = f"déconnecté  ·  {self.engine.cfg['vmix']['host']}"
+            self.vmix_pill.set(False, detail if wide else "")
+            self.vmix_pill.setToolTip(f"vMix {detail}\nLiveDeck réessaie toutes les 2 secondes  ·  Clic : Réglages")
         dm = self.engine.decks
         info = dm.info() if dm else []
         if dm is None:
-            self.deck_pill.set(None, "désactivé")
+            detail, ok, tip = "désactivé", None, "Stream Decks désactivés"
         elif dm.error:
-            self.deck_pill.set(False, "indisponible")
-            self.deck_pill.setToolTip(dm.error)
+            detail, ok, tip = "indisponible", False, dm.error
         else:
-            self.deck_pill.set(bool(info), f"{len(info)} connecté{'s' if len(info) > 1 else ''}" if info
-                               else "aucun détecté")
-            self.deck_pill.setToolTip("\n".join(f"{d['model']} · {d['serial']}" for d in info)
-                                      or "Ferme Companion et le logiciel Elgato pour libérer les decks")
+            detail = f"{len(info)} connecté{'s' if len(info) > 1 else ''}" if info else "aucun détecté"
+            ok, tip = bool(info), ("\n".join(f"{d['model']} · {d['serial']}" for d in info)
+                                   or "Ferme Companion et le logiciel Elgato pour libérer les decks")
+        self.deck_pill.set(ok, detail if wide else ("" if ok else detail))
+        self.deck_pill.setToolTip(f"Stream Deck : {detail}\n{tip}\nClic : diagnostic des Stream Decks")
+        # intégrations utilisées par une touche : une pastille chacune, ou une seule si la fenêtre est étroite
+        e = self.engine
+        services = {"intercom": e.intercom, "orchestream": e.orchestream, "tallies": e.tallies}
+        used = [(k, name, ok, text) for k, name, ok, text in integration_status(e) if services[k].wanted]
+        for k, pill in self.integ_pills.items():
+            row = next((u for u in used if u[0] == k), None)
+            pill.setVisible(bool(row) and wide)
+            if row:
+                pill.set(row[2], "")
+                pill.setToolTip(f"{row[1]} : {row[3]}\nClic : Réglages → Intégrations")
+        oks = [u[2] for u in used]
+        self.integ_all.setVisible(bool(used) and not wide)
+        self.integ_all.set(False if False in oks else None if None in oks else True, "")
+        self.integ_all.setToolTip("\n".join(f"{name} : {text}" for _, name, _, text in used)
+                                  + "\nClic : Réglages → Intégrations")
+        self.library.presets.refresh()  # bus et overlays découverts en direct
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, "integ_all"):
+            self._update_pills()
     # -- pages ----------------------------------------------------------------
     def _rebuild_tabs(self):
         on_deck = {d["page"] for d in (self.engine.decks.info() if self.engine.decks else [])}
@@ -383,6 +563,11 @@ class MainWindow(QMainWindow):
         for name, (c, r) in DECK_SIZES.items():
             size.addAction(name, lambda c=c, r=r: self.engine.update_page(self.page_id, cols=c, rows=r))
         m.addAction("Dupliquer la page", self.duplicate_page)
+        takes = [k for k, b in self.engine.page(self.page_id)["buttons"].items() if to_take(b)]
+        if takes:
+            m.addAction(f"Convertir les Preview / Program en Take ({len(takes)})", lambda: self.convert_to_take(takes))
+        m.addAction("Exporter la page…", self.export_page)
+        m.addAction("Importer une page…", self.import_page)
         m.addAction("Déplacer à gauche", lambda: self.engine.move_page(self.page_id, -1))
         m.addAction("Déplacer à droite", lambda: self.engine.move_page(self.page_id, 1))
         m.addSeparator()
@@ -479,7 +664,11 @@ class MainWindow(QMainWindow):
             self.inspector.load(self.page_id, k, force=True)
 
     def _drop_inputs(self, k: str, titles: list[str]):
-        mode = self.library.inputs.drop_mode()
+        self.fill_row(k, titles, self.library.inputs.drop_mode())
+
+    def fill_row(self, k: str, titles: list[str], mode: str, keep: bool = True) -> None:
+        """Pose les inputs de gauche à droite à partir de k, dans le style choisi (une seule étape « annuler »).
+        keep : un seul input glissé sur une touche vMix existante ne change que son input."""
         page = self.engine.page(self.page_id)
         r0, c0 = parse_key(k)
         placed = []
@@ -502,7 +691,7 @@ class MainWindow(QMainWindow):
                 placed.append(t)
                 c += 1
 
-        if len(titles) == 1 and mode != "pair":
+        if keep and len(titles) == 1 and mode != "pair":
             self.engine.assign_input(self.page_id, k, titles[0], mode)
             placed = titles
         else:
@@ -517,19 +706,25 @@ class MainWindow(QMainWindow):
         m = QMenu(self)
         if self.grid.live:
             if b:
-                m.addAction("▶  Tester", lambda: (self.engine.press(self.page_id, k, True),
-                                                 self.engine.press(self.page_id, k, False)))
+                m.addAction("▶  Tester", lambda: self.engine.trigger(self.page_id, k))
                 m.exec(pos)
             return
         if b:
-            m.addAction("▶  Tester", lambda: (self.engine.press(self.page_id, k, True),
-                                             self.engine.press(self.page_id, k, False)))
+            m.addAction("▶  Tester", lambda: self.engine.trigger(self.page_id, k))
             m.addSeparator()
             m.addAction("Copier", self.copy)
             m.addAction("Couper", self.cut)
         paste = m.addAction("Coller", self.paste)
         paste.setEnabled(self.clipboard is not None)
+        m.addSeparator()
+        if b and to_take(b):
+            m.addAction("Convertir en Take", lambda: self.convert_to_take([k]))
+        row = self._row_takes(k)
+        if len(row) > 1:
+            m.addAction(f"Convertir la rangée en Take ({len(row)} touches)", lambda: self.convert_to_take(row))
+        m.addAction("Remplir la rangée à partir d'ici…", lambda: self.open_fill_row(k))
         if b:
+            m.addSeparator()
             m.addAction("Dupliquer", self.duplicate_selected)
             send = m.addMenu("Envoyer vers la page")
             for p in self.engine.pages:
@@ -539,6 +734,39 @@ class MainWindow(QMainWindow):
             m.addSeparator()
             m.addAction("Effacer", self.delete_selected)
         m.exec(pos)
+
+    def _row_takes(self, k: str) -> list[str]:
+        """Touches Preview / Program de la rangée de k, convertibles en Take."""
+        r, _ = parse_key(k)
+        return [kk for kk, b in self.engine.page(self.page_id)["buttons"].items()
+                if parse_key(kk)[0] == r and to_take(b)]
+
+    def convert_to_take(self, keys: list[str]) -> None:
+        if not self._editable():
+            return
+        pid = self.page_id
+
+        def apply(cfg):
+            p = next(p for p in cfg["pages"] if p["id"] == pid)
+            for kk in keys:
+                nb = to_take(p["buttons"].get(kk) or {})
+                if nb:
+                    p["buttons"][kk] = nb
+        self.engine.mutate(apply)
+        self.inspector.load(self.page_id, self.grid.sel, force=True)
+        self.toast(f"{len(keys)} touche(s) converties en Take : 1er appui preview, 2e appui antenne  ·  "
+                   "Ctrl+Z pour annuler")
+
+    def open_fill_row(self, k: str | None, titles: list[str] | None = None) -> None:
+        if not self._editable():
+            return
+        k = k or self.engine.first_free(self.page_id) or "0,0"
+        r, c = parse_key(k)
+        dlg = FillRowDialog(self.engine, self, titles or self.library.inputs.selected_titles(),
+                            self.library.inputs.drop_mode(),
+                            f"À partir de la rangée {r + 1}, colonne {c + 1} de « {self.engine.page(self.page_id)['name']} ».")
+        if dlg.exec() and dlg.titles():
+            self.fill_row(k, dlg.titles(), dlg.style.currentData(), keep=False)
 
     def _send_to(self, k: str, pid: str):
         dst = self.engine.send_to_page(self.page_id, k, pid)
@@ -609,8 +837,13 @@ class MainWindow(QMainWindow):
                                               "Companion (*.companionconfig *.json);;Tous (*.*)")
         if not path:
             return
+        dlg = ImportOptionsDialog(self, path)
+        if dlg.exec():
+            self.import_companion_file(path, **dlg.options())
+
+    def import_companion_file(self, path: str, preview_then: str = "none", integrations: bool = False):
         try:
-            cfg, report = import_companion(path)
+            cfg, report = import_companion(path, preview_then=preview_then, integrations=integrations)
         except Exception as e:
             QMessageBox.warning(self, "Import impossible", f"Ce fichier n'a pas pu être lu :\n{e}")
             return
@@ -627,10 +860,16 @@ class MainWindow(QMainWindow):
             self.engine.replace_config(cfg)
             self.engine.set_vmix(cfg["vmix"]["host"], cfg["vmix"]["port"])
         elif box.clickedButton() == add:
+            self.engine.backup("avant-import")
+            merged = []
+
             def apply(c):
                 c["pages"].extend(cfg["pages"])
                 c["decks"].update(cfg["decks"])
+                merged[:] = merge_integrations(c, cfg)  # réglages trouvés par la conversion (sinon touches inertes)
             self.engine.mutate(apply)
+            if merged:
+                report.append("Intégrations reprises : " + " ; ".join(merged))
             if self.engine.decks:
                 self.engine.decks.reassign_pages()
         else:
@@ -650,6 +889,47 @@ class MainWindow(QMainWindow):
                 json.dump(self.engine.cfg, f, ensure_ascii=False, indent=2)
             self.toast(f"Configuration exportée : {path}")
 
+    def export_page(self):
+        p = self.engine.page(self.page_id)
+        path, _ = QFileDialog.getSaveFileName(self, "Exporter la page", f"{p['name']}.json", "JSON (*.json)")
+        if path:
+            self.write_page(path, self.page_id)
+            self.toast(f"Page « {p['name']} » exportée : {path}")
+
+    def write_page(self, path: str, page_id: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"livedeck_page": CONFIG_VERSION, "page": self.engine.page(page_id)}, f, ensure_ascii=False,
+                      indent=2)
+
+    def import_page(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Importer une page", "", "JSON (*.json)")
+        if path:
+            self.read_page(path)
+
+    def read_page(self, path: str) -> str | None:
+        """Ajoute une page exportée (nouveaux identifiants : on peut importer deux fois la même page)."""
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            p = data.get("page", data) if isinstance(data, dict) else None
+            if not isinstance(p, dict) or not isinstance(p.get("buttons"), dict):
+                raise ValueError("ce fichier ne contient pas de page LiveDeck")
+            p = copy.deepcopy(p)
+            p["id"] = new_id()
+            p["name"] = str(p.get("name") or "Page importée")
+            if p["name"] in {q["name"] for q in self.engine.pages}:
+                p["name"] += " (importée)"
+            p["cols"], p["rows"] = int(p.get("cols") or 8), int(p.get("rows") or 4)
+            p["buttons"] = {k: normalize_button({**b, "id": new_id()}) for k, b in p["buttons"].items()
+                            if isinstance(b, dict) and self.engine.in_grid(p, k)}
+        except (OSError, ValueError, TypeError) as e:
+            QMessageBox.warning(self, "Import impossible", f"Ce fichier n'a pas pu être lu :\n{e}")
+            return None
+        self.engine.mutate(lambda cfg: cfg["pages"].append(p))
+        self._goto_page(p["id"])
+        self.toast(f"Page « {p['name']} » ajoutée ({len(p['buttons'])} touches)  ·  Ctrl+Z pour annuler")
+        return p["id"]
+
     def load_config_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Charger", "", "JSON (*.json)")
         if not path:
@@ -666,9 +946,27 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
 
-    def open_settings(self):
-        SettingsDialog(self.engine, self).exec()
+    def open_settings(self, tab: str = "general"):
+        SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general").exec()
         self._update_pills()
+
+    def open_help(self):
+        ShortcutsDialog(self).exec()
+
+    def _show_migration_notes(self):
+        """Notes laissées par la mise à jour d'une ancienne configuration : affichées une fois (Moniteur)."""
+        notes = self.engine.cfg.pop("_migration_notes", None)
+        if notes:
+            for line in notes:
+                self.engine.log("info", f"Mise à jour de la configuration : {line}")
+            self.toast(f"Configuration mise à jour ({len(notes)} changement(s)) : détails dans le Moniteur")
+
+    def _save_ui(self):
+        try:
+            self._ui.setValue("splitter", self.split.saveState())
+            self._ui.sync()
+        except Exception:
+            pass
 
     def open_diagnostic(self):
         DiagnosticDialog(self.engine, self).exec()
@@ -692,6 +990,7 @@ class MainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, e):
+        self._save_ui()
         keep = (not self._quitting and self.engine.cfg["options"].get("close_to_tray", True)
                 and self.tray.isVisible())
         if keep:
@@ -702,8 +1001,10 @@ class MainWindow(QMainWindow):
                 self.tray.showMessage("LiveDeck reste actif", "Les Stream Decks continuent de fonctionner. "
                                       "Clic droit sur l'icône → Quitter pour fermer LiveDeck.", self.tray.icon(), 4000)
             return
-        self.engine.listeners.remove(self._listener)
-        self.engine.stop()
-        self.tray.hide()
-        super().closeEvent(e)
-        QApplication.quit()
+        try:
+            self.engine.listeners.remove(self._listener)
+            self.engine.stop()  # relâche micros et raccourcis maintenus, puis sauvegarde
+        finally:
+            self.tray.hide()
+            super().closeEvent(e)
+            QApplication.quit()

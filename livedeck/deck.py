@@ -1,6 +1,7 @@
 """Stream Decks : détection à chaud, affichage des pages, appuis."""
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -10,12 +11,14 @@ from .model import key
 from .render import render
 
 LIB_DIR = Path(__file__).resolve().parent / "lib"
+log = logging.getLogger("livedeck")
 
 
 class DeckHandle:
-    def __init__(self, deck, serial: str, model: str, rows: int, cols: int, size: int):
+    def __init__(self, deck, serial: str, model: str, rows: int, cols: int, size: int, visual: bool = True):
         self.deck, self.serial, self.model = deck, serial, model
         self.rows, self.cols, self.size = rows, cols, size
+        self.visual = visual  # False : Stream Deck Pedal (touches sans écran)
         self.page_id: str | None = None
         self.cache: dict[int, tuple] = {}
 
@@ -32,6 +35,8 @@ class DeckManager:
         self.diag_handler = None  # pendant le diagnostic : fn(serial, index, appui) au lieu des actions
         self.stats = {"images": 0}
         self.image_ms: float | None = None  # temps moyen pour dessiner et envoyer une touche
+        self._bad: set[tuple] = set()  # touches dont le rendu a échoué (journal sans répétition)
+        self._last_page: dict[str, str] = {}  # page affichée par deck : retrouvée après un faux contact USB
 
     # -- démarrage ------------------------------------------------------------
     def start(self) -> None:
@@ -41,7 +46,7 @@ class DeckManager:
             from StreamDeck.DeviceManager import DeviceManager
             self._manager = DeviceManager()
         except Exception as e:  # hidapi absente, etc.
-            self.error = f"Stream Deck indisponible : {e}. Lancez setup.bat pour installer hidapi."
+            self.error = f"Stream Deck indisponible : {e}. Lance setup.bat pour installer hidapi."
             self.engine.log("error", self.error)
             self.engine.emit("decks")
             return
@@ -67,11 +72,17 @@ class DeckManager:
         tick = 0
         while not self._stop.is_set():
             if tick % 20 == 0:  # recherche de nouveaux decks toutes les 2 s
-                self._scan()
+                try:
+                    self._scan()
+                except Exception:  # le thread ne doit jamais mourir : plus de branchement à chaud sinon
+                    log.exception("Stream Deck : détection")
             tick += 1
             if self._wake.wait(0.1):
                 self._wake.clear()
-                self.refresh()
+                try:
+                    self.refresh()
+                except Exception:
+                    log.exception("Stream Deck : affichage")
 
     def _scan(self) -> None:
         try:
@@ -79,57 +90,76 @@ class DeckManager:
         except Exception as e:
             self.error = str(e)
             return
-        changed = False
+        changed, gone = False, []
         with self._lock:
             for path, h in list(self.handles.items()):
-                if not h.deck.connected():
+                try:
+                    alive = h.deck.connected()
+                except Exception:
+                    alive = False
+                if not alive:
                     self.engine.log("warn", f"Stream Deck {h.model} débranché")
                     try:
                         h.deck.close()
                     except Exception:
                         pass
                     del self.handles[path]
+                    gone.append(h.serial)
                     changed = True
             for d in found:
-                if d.id() in self.handles or not d.is_visual():
+                if d.id() in self.handles:
                     continue
                 try:
                     d.open()
                     d.reset()
                     rows, cols = d.key_layout()
+                    visual = d.is_visual()
                     h = DeckHandle(d, d.get_serial_number(), d.deck_type(), rows, cols,
-                                   d.key_image_format()["size"][0])
+                                   d.key_image_format()["size"][0] if visual else 0, visual)
                 except Exception as e:
                     self.engine.log("error", f"Ouverture du Stream Deck impossible : {e}")
                     continue
                 self.handles[d.id()] = h
-                h.page_id = self._initial_page(h)
+                self._show(h, self._initial_page(h))
                 self.apply_settings(h.serial)
                 d.set_key_callback(self._on_key)
                 self.engine.log("info", f"Stream Deck {h.model} connecté ({h.serial})")
                 changed = True
+        for serial in gone:  # touches maintenues sur un deck disparu : on les relâche (micro, raccourcis)
+            self.engine.release_all(deck=serial)
         if changed:
             self.error = ""
             self.engine.emit("decks")
             self.refresh(force=True)
 
-    def _initial_page(self, h: DeckHandle) -> str | None:
+    def _initial_page(self, h: DeckHandle, last: bool = True) -> str | None:
+        """Page d'un deck qui (re)apparaît : celle où il était (faux contact USB), sinon sa page de
+        démarrage, sinon la première page à sa taille."""
         pages = self.engine.pages
-        wanted = self.engine.cfg["decks"].get(h.serial, {}).get("page")
+        if last and self.engine.page(self._last_page.get(h.serial)):
+            return self._last_page[h.serial]
+        wanted = (self.engine.cfg["decks"].get(h.serial) or {}).get("page")
         if self.engine.page(wanted):
             return wanted
         same = [p for p in pages if (p["cols"], p["rows"]) == (h.cols, h.rows)]
         return (same or pages)[0]["id"]
 
+    def _show(self, h: DeckHandle, page_id: str | None) -> None:
+        h.page_id = page_id
+        if page_id:
+            self._last_page[h.serial] = page_id
+        h.cache.clear()
+
     def reassign_pages(self) -> None:
+        """Après un import ou un remplacement de configuration : chaque deck reprend sa page de démarrage."""
         with self._lock:
             for h in self.handles.values():
-                h.page_id = self._initial_page(h)
-                h.cache.clear()
+                self._show(h, self._initial_page(h, last=False))
         self.request_refresh()
 
-    def apply_settings(self, serial: str) -> None:
-        conf = self.engine.cfg["decks"].get(serial, {})
+    def apply_settings(self, serial: str, page_changed: bool = False) -> None:
+        """Luminosité ; la page ne change que si la page de démarrage vient d'être modifiée."""
+        conf = self.engine.cfg["decks"].get(serial) or {}
         with self._lock:
             for h in self.handles.values():
                 if h.serial == serial:
@@ -138,9 +168,8 @@ class DeckManager:
                             h.deck.set_brightness(int(conf.get("brightness", 80)))
                     except Exception:
                         pass
-                    if conf.get("page") and self.engine.page(conf["page"]):
-                        h.page_id = conf["page"]
-                        h.cache.clear()
+                    if page_changed and conf.get("page") and self.engine.page(conf["page"]):
+                        self._show(h, conf["page"])
         self.request_refresh()
 
     # -- pages ----------------------------------------------------------------
@@ -150,14 +179,15 @@ class DeckManager:
             for h in self.handles.values():
                 if h.serial != serial:
                     continue
-                idx = next((i for i, p in enumerate(pages) if p["id"] == h.page_id), 0)
-                if target == "next":
-                    h.page_id = pages[(idx + 1) % len(pages)]["id"]
-                elif target == "prev":
-                    h.page_id = pages[(idx - 1) % len(pages)]["id"]
+                if target in ("next", "prev"):
+                    # on ne parcourt que les pages à la taille de ce deck (toutes si aucune ne l'est)
+                    ring = [p for p in pages if (p["cols"], p["rows"]) == (h.cols, h.rows)] or pages
+                    idx = next((i for i, p in enumerate(ring) if p["id"] == h.page_id), None)
+                    if idx is None:
+                        idx = -1 if target == "next" else 0
+                    self._show(h, ring[(idx + (1 if target == "next" else -1)) % len(ring)]["id"])
                 elif self.engine.page(target):
-                    h.page_id = target
-                h.cache.clear()
+                    self._show(h, target)
         self.engine.emit("decks")
         self.request_refresh()
 
@@ -165,7 +195,7 @@ class DeckManager:
         """Allume le deck en couleur avec son nom pendant 2 s, pour le reconnaître."""
         from StreamDeck.ImageHelpers import PILHelper
         with self._lock:
-            handles = [h for h in self.handles.values() if h.serial == serial]
+            handles = [h for h in self.handles.values() if h.serial == serial and h.visual]
         for h in handles:
             v = {"bg": "#2dd4bf", "fg": "#04211d", "label": ""}
             try:
@@ -177,7 +207,9 @@ class DeckManager:
             except Exception:
                 pass
             h.cache.clear()
-        threading.Timer(2.0, self.request_refresh).start()
+        t = threading.Timer(2.0, self.request_refresh)
+        t.daemon = True
+        t.start()
 
     # -- diagnostic -----------------------------------------------------------
     def _count_image(self, t0: float) -> None:
@@ -191,7 +223,7 @@ class DeckManager:
         with self._lock:
             handles = [h for h in self.handles.values() if h.serial == serial]
         for h in handles:
-            if index >= h.rows * h.cols:
+            if index >= h.rows * h.cols or not h.visual:
                 continue
             try:
                 t0 = time.perf_counter()
@@ -214,9 +246,9 @@ class DeckManager:
                         pass
 
     def restore(self) -> None:
-        """Après le diagnostic : luminosité et pages d'origine."""
+        """Après le diagnostic : luminosité et affichage ; chaque deck reste sur la page où il était."""
         with self._lock:
-            serials = [h.serial for h in self.handles.values()]
+            serials = {h.serial for h in self.handles.values()}
             for h in self.handles.values():
                 h.cache.clear()
         for s in serials:
@@ -225,21 +257,33 @@ class DeckManager:
 
     def info(self) -> list[dict]:
         with self._lock:
-            return [{"serial": h.serial, "model": h.model, "cols": h.cols, "rows": h.rows, "page": h.page_id}
-                    for h in self.handles.values()]
+            return [{"serial": h.serial, "model": h.model, "cols": h.cols, "rows": h.rows, "page": h.page_id,
+                     "visual": h.visual} for h in self.handles.values()]
 
     # -- affichage / appuis ---------------------------------------------------
     def _on_key(self, deck, index: int, state: bool) -> None:
-        h = self.handles.get(deck.id())
-        if not h:
-            return
-        if self.diag_handler:
-            self.diag_handler(h.serial, index, state)
-            return
-        if not h.page_id:
-            return
-        r, c = divmod(index, h.cols)
-        self.engine.press(h.page_id, key(r, c), state, deck=h.serial)
+        """Appelé par le thread de lecture du deck : une exception ici le tuerait (deck muet)."""
+        try:
+            h = self.handles.get(deck.id())
+            if not h:
+                return
+            if index >= h.rows * h.cols:  # hors grille : touches tactiles du Neo = page précédente / suivante
+                if state and not self.diag_handler:
+                    self.goto(h.serial, "prev" if index == h.rows * h.cols else "next")
+                return
+            if self.diag_handler:
+                self.diag_handler(h.serial, index, state)
+                return
+            if not h.page_id:
+                return
+            r, c = divmod(index, h.cols)
+            self.engine.press(h.page_id, key(r, c), state, deck=h.serial)
+        except Exception as e:
+            log.exception("Stream Deck : touche")
+            try:
+                self.engine.log("error", f"Touche {index} : {e}")
+            except Exception:
+                pass
 
     def refresh(self, force: bool = False) -> None:
         from StreamDeck.ImageHelpers import PILHelper
@@ -248,12 +292,21 @@ class DeckManager:
         for h in handles:
             page = self.engine.page(h.page_id)
             if page is None:
-                h.page_id = self._initial_page(h)
+                self._show(h, self._initial_page(h))
                 page = self.engine.page(h.page_id)
+            if not h.visual:
+                continue
             for idx in range(h.rows * h.cols):
                 r, c = divmod(idx, h.cols)
                 b = page["buttons"].get(key(r, c)) if page and r < page["rows"] and c < page["cols"] else None
-                v = self.engine.visual(b)
+                try:
+                    v = self.engine.visual(b)
+                    self._bad.discard((h.serial, idx))
+                except Exception:  # un bouton défaillant ne bloque pas les autres
+                    if (h.serial, idx) not in self._bad:  # journalisé une fois, pas à chaque rafraîchissement
+                        self._bad.add((h.serial, idx))
+                        log.exception("Stream Deck : rendu de la touche %s", idx)
+                    v = {"bg": "#3a0d0d", "fg": "#ffffff", "label": "ERREUR"}
                 sig = tuple(sorted(v.items())) if v else None
                 if not force and h.cache.get(idx, ()) == sig:
                     continue

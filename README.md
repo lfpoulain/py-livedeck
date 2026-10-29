@@ -34,27 +34,30 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 
 | | |
 |---|---|
-| 🎬 **Take** | Une touche au lieu de deux : 1er appui en preview, 2e appui à l'antenne avec la transition choisie. |
+| 🎬 **Take** | Une touche au lieu de deux : 1er appui en preview (vert), 2e appui à l'antenne (rouge) avec la transition choisie, même en appuyant très vite. |
 | 🚦 **Retours automatiques** | Rouge à l'antenne, vert en preview, jaune en overlay, rouge quand le son est coupé… sans rien configurer. |
 | ⚡ **Réactif** | État vMix poussé en direct (TALLY / ACTS), seules les touches qui changent sont redessinées. La latence s'affiche dans l'en-tête. |
 | ⏱️ **Appui long et sécurité** | Une deuxième action en appui long, ou une touche à maintenir ½ s pour FTB et l'arrêt du stream. |
 | ⌨️ **Clavier et HTTP** | Raccourcis enregistrés en appuyant sur les touches (maintenus ou non), requêtes HTTP en collant une commande `curl`. |
-| 🎙️ **Intégrations maison** | Talkback **py-intercom**, overlays **orchestream** (Twizz, Sondage, Speedizz) et **Tally32**, avec leur état en direct. |
+| 📡 **OSC, TCP / UDP, API JSON** | Pilote QLab, Reaper, une X32, un projecteur ou une caméra VISCA, et affiche la valeur d'une API JSON sur une touche. |
+| 🔤 **Texte dynamique** | Titre à l'antenne, temps restant d'une vidéo, texte d'un titre, heure… mis à jour en direct sur les touches. |
+| 🎙️ **Intégrations maison** | Talkback **py-intercom**, overlays **orchestream** et **Tally32**, avec leur état en direct, un bouton Tester et des messages d'erreur clairs. |
+| 🛟 **Sûr en direct** | Un talkback se coupe toujours au relâché, même si la touche change entre-temps ; tout est relâché au débranchement ou à la fermeture. Sauvegardes quotidiennes. |
 | 🔒 **Mode Live** | L'édition se verrouille pendant le direct, seul ▶ Tester reste actif. |
-| 🔎 **Recherche (Ctrl+F)** | Retrouve une touche sur toutes les pages par son texte, son input ou son action. |
+| 🔎 **Recherche (Ctrl+F)** | Retrouve une touche sur toutes les pages ; la touche vide propose toutes les actions, avec recherche et catégories. |
 | 🩺 **Diagnostic** | Vérifie en une minute les écrans, chaque touche et les performances de tes Stream Decks. |
 | 🔌 **Plug & play** | Détection à chaud des Stream Decks, reconnexion automatique à vMix, inputs retrouvés par leur nom. |
-| 📥 **Import Companion** | Ta config `.companionconfig` est convertie en un clic, intégrations comprises. |
+| 📥 **Import Companion** | Ta config `.companionconfig` est convertie en un clic, variables et intégrations comprises. |
 | 🖥️ **Discret** | Réduit près de l'horloge, démarrage automatique avec Windows, une seule instance. |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/etapes.png" alt="Étapes"><p align="center"><sub>Étapes d'une touche, appui court / long</sub></p></td>
+<td width="50%"><img src="docs/images/etapes.png" alt="Étapes"><p align="center"><sub>Étapes d'une touche, prochain appui</sub></p></td>
 <td width="50%"><img src="docs/images/integrations.png" alt="Intégrations"><p align="center"><sub>Intégrations py-intercom, orchestream, Tally32</sub></p></td>
 </tr>
 <tr>
 <td width="50%"><img src="docs/images/diagnostic.png" alt="Diagnostic"><p align="center"><sub>Diagnostic des Stream Decks</sub></p></td>
-<td width="50%"><img src="docs/images/recherche.png" alt="Recherche"><p align="center"><sub>Recherche Ctrl+F</sub></p></td>
+<td width="50%"><img src="docs/images/touche-vide.png" alt="Touche vide"><p align="center"><sub>Toutes les actions, avec recherche</sub></p></td>
 </tr>
 </table>
 
@@ -86,7 +89,7 @@ bibliothèque USB des Stream Decks), puis sur **`LiveDeck.bat`**.
 > [!IMPORTANT]
 > **Ferme Companion et le logiciel Elgato Stream Deck avant de lancer LiveDeck** : un seul logiciel à la fois peut piloter un Stream Deck.
 
-Au premier démarrage, clique **Importer → Config Bitfocus Companion…** pour reprendre ta configuration.
+Au premier démarrage, clique **Fichier → Config Bitfocus Companion…** pour reprendre ta configuration.
 Côté vMix, rien à configurer : LiveDeck utilise l'API TCP (port 8099), active par défaut.
 
 ## Documentation
@@ -110,6 +113,8 @@ py-livedeck/
 │   ├── deck.py             # Stream Decks : détection à chaud, rendu, appuis
 │   ├── actions.py          # catalogue des actions
 │   ├── feedback.py         # retours d'état automatiques
+│   ├── vars.py             # texte dynamique $(vmix:…)
+│   ├── netsend.py          # TCP / UDP / OSC
 │   ├── integrations.py     # py-intercom, orchestream, Tally32
 │   ├── companion_import.py # import Bitfocus Companion
 │   └── ui/                 # interface PySide6
@@ -128,7 +133,8 @@ py-livedeck/
 python tools/fake_vmix.py 8099
 ```
 
-Ce script simule vMix sur le port 8099 (inputs, preview / program, overlays, son, enregistrement) : tu peux
+Ce script simule vMix sur le port 8099 (inputs, Mix 1 à 4, overlays, son, titres, vidéos, enregistrement ; un 2e
+argument, ex. `0.08`, ajoute un délai de réponse) : tu peux
 utiliser l'app sans vMix, en mode **Live**.
 
 ```bash
@@ -136,5 +142,6 @@ python tests/test_core.py
 ```
 
 Ce script lance les tests de bout en bout : import Companion, vMix, Take, appui long, Stream Deck simulé,
-édition, mode Live, recherche, diagnostic, py-intercom, orchestream et Tally32. Ils fonctionnent aussi avec `pytest`.
+édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream et Tally32.
+Ils fonctionnent aussi avec `pytest`.
 À chaque push sur `main`, GitHub Actions les relance, et publie l'exe quand la version change.

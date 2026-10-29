@@ -1,17 +1,29 @@
 """Catalogue des actions : champs à éditer, exécution et résumé lisible."""
 from __future__ import annotations
 
+import copy
 import time
 
-from . import hotkeys, webreq
-from .integrations import INTERCOM_BUSES, ORCH_OVERLAYS
+from . import hotkeys, netsend, webreq
+from .integrations import UNREACHABLE, bus_label, overlay_label
+from .webreq import error_text
 
-TRANSITIONS = ["Cut", "Fade", "Merge", "Wipe", "Zoom", "Slide", "Fly", "CrossZoom", "FlyRotate", "Cube",
-               "CubeZoom", "VerticalWipe", "VerticalSlide", "Stinger1", "Stinger2", "Stinger3", "Stinger4",
-               "Transition1", "Transition2", "Transition3", "Transition4", "FadeToBlack"]
+# Fonctions de transition de l'API vMix (FadeToBlack n'en est pas une : c'est un interrupteur, voir PRODUCTION)
+TRANSITIONS = ["Cut", "Fade", "Zoom", "Wipe", "Slide", "Fly", "CrossZoom", "FlyRotate", "Cube", "CubeZoom",
+               "VerticalWipe", "VerticalSlide", "Merge", "WipeReverse", "SlideReverse", "VerticalWipeReverse",
+               "VerticalSlideReverse", "Stinger1", "Stinger2", "Stinger3", "Stinger4",
+               "Transition1", "Transition2", "Transition3", "Transition4"]
+TRANSITION_CHOICES = [(t, f"Bouton transition {t[-1]} (réglé dans vMix)" if t.startswith("Transition")
+                       else f"Stinger {t[-1]}" if t.startswith("Stinger")
+                       else t.replace("Reverse", " inversé")) for t in TRANSITIONS]
+THEN_CHOICES = [("none", "Rien (il reste en preview)")] + TRANSITION_CHOICES
 
 CATEGORIES = {"Vidéo": "#fbbf24", "Audio": "#2dd4bf", "Production": "#fb7185", "Intégrations": "#f472b6",
-              "vMix avancé": "#60a5fa", "Clavier": "#a78bfa", "Web": "#38bdf8", "Deck": "#a3e635"}
+              "vMix avancé": "#60a5fa", "Clavier": "#a78bfa", "Web": "#38bdf8", "Réseau": "#34d399", "Deck": "#a3e635",
+              "Avancé": "#94a3b8"}
+# action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
+INTEGRATION_OF = {"intercom.ptt": "intercom", "orchestream.overlay": "orchestream", "tally.reconnect": "tallies",
+                  "intercom": "intercom", "orchestream": "orchestream", "tally": "tallies"}
 
 PRODUCTION = [("recording", "Enregistrement"), ("streaming", "Stream"), ("external", "Sortie externe"),
               ("multicorder", "MultiCorder"), ("fadetoblack", "Fondu au noir (FTB)"), ("snapshot", "Capture d'image")]
@@ -26,9 +38,10 @@ PRODUCTION_FUNCS = {
 TOGGLE_MODES = [("toggle", "Démarrer / arrêter"), ("start", "Démarrer"), ("stop", "Arrêter")]
 AUDIO_MODES = [("toggle", "Couper / rétablir"), ("off", "Couper"), ("on", "Rétablir")]
 
-PTT_MODES = [("hold", "Maintenu (parler tant que la touche est enfoncée)"), ("toggle", "Basculer"),
+PTT_MODES = [("hold", "Maintenu (push-to-talk)"), ("toggle", "Basculer"),
              ("on", "Ouvrir le micro"), ("off", "Fermer le micro"), ("alloff", "Couper tous les bus")]
 SHOW_MODES = [("toggle", "Basculer (afficher / masquer)"), ("show", "Afficher"), ("hide", "Masquer")]
+NET_PROTOS = [("tcp", "TCP"), ("udp", "UDP")]
 
 OVERLAY_MODES = [("toggle", "Basculer (afficher / masquer)"), ("in", "Afficher"), ("out", "Masquer"),
                  ("off", "Couper sans transition"), ("preview", "Envoyer en preview")]
@@ -58,20 +71,26 @@ def F(key, label, kind, default, options=None, placeholder=""):
 
 ACTIONS: dict[str, dict] = {
     "vmix.preview": {"label": "Preview", "cat": "Vidéo", "color": "#003300",
-                     "help": "Envoie l'input en preview.",
-                     "fields": [F("input", "Input", "input", ""), F("mix", "Mix", "mix", 1)]},
+                     "help": "Envoie l'input en preview (touche verte ; rouge s'il est à l'antenne). Option : "
+                             "un 2e appui alors qu'il est déjà en preview l'envoie à l'antenne avec la "
+                             "transition choisie.",
+                     "fields": [F("input", "Input", "input", ""), F("mix", "Mix", "mix", 1),
+                                F("then", "2e appui (déjà en preview)", "choice", "none", THEN_CHOICES),
+                                F("duration", "Durée (ms, 0 = réglage vMix)", "int", 0)]},
     "vmix.program": {"label": "Program (cut direct)", "cat": "Vidéo", "color": "#330000",
                      "help": "Envoie l'input directement à l'antenne.",
                      "fields": [F("input", "Input", "input", ""), F("mix", "Mix", "mix", 1)]},
     "vmix.transition": {"label": "Transition", "cat": "Vidéo", "color": "#ff8000",
                         "help": "Passe la preview à l'antenne avec l'effet choisi (ou l'input indiqué).",
-                        "fields": [F("effect", "Effet", "choice", "Cut", [(t, t) for t in TRANSITIONS]),
+                        "fields": [F("effect", "Effet", "choice", "Cut", TRANSITION_CHOICES),
                                    F("duration", "Durée (ms, 0 = réglage vMix)", "int", 0),
                                    F("input", "Input (optionnel)", "input", ""), F("mix", "Mix", "mix", 1)]},
     "vmix.take": {"label": "Take (preview puis antenne)", "cat": "Vidéo", "color": "#2b1d00",
-                  "help": "1er appui : l'input passe en preview. 2e appui : la transition l'envoie à l'antenne.",
+                  "help": "1er appui : l'input passe en preview (touche verte = prêt à prendre). 2e appui : "
+                          "il passe à l'antenne avec la transition choisie (touche rouge = à l'antenne). "
+                          "S'il est déjà à l'antenne, rien ne se passe.",
                   "fields": [F("input", "Input", "input", ""),
-                             F("effect", "Transition", "choice", "Cut", [(t, t) for t in TRANSITIONS]),
+                             F("effect", "Transition", "choice", "Cut", TRANSITION_CHOICES),
                              F("duration", "Durée (ms, 0 = réglage vMix)", "int", 0), F("mix", "Mix", "mix", 1)]},
     "vmix.overlay": {"label": "Overlay / PIP", "cat": "Vidéo", "color": "#333300",
                      "help": "Affiche ou masque un input sur un canal d'overlay.",
@@ -89,14 +108,18 @@ ACTIONS: dict[str, dict] = {
                       "fields": [F("function", "Fonction", "function", ""),
                                  F("params", "Paramètres", "text", "", placeholder="Input=Titre&Value=Bonjour")]},
     "intercom.ptt": {"label": "Intercom (py-intercom)", "cat": "Intégrations", "color": "#0b1d3a",
-                     "help": "Parle sur un bus de py-intercom. La touche s'allume quand le micro est ouvert, "
-                             "se grise quand le client est désarmé.",
-                     "fields": [F("bus", "Bus", "choice", "regie", INTERCOM_BUSES),
-                                F("mode", "Mode", "choice", "hold", PTT_MODES)]},
+                     "help": "Parle sur un bus de py-intercom (Maintenu : tant que la touche est enfoncée). "
+                             "La touche s'allume quand le micro est ouvert et affiche HORS LIGNE, DÉSARMÉ ou "
+                             "BUS ABSENT sinon. Raccourci de secours : touches simulées si py-intercom ne "
+                             "répond pas (modes Maintenu et Basculer).",
+                     "fields": [F("bus", "Bus", "intercom_bus", "regie"),
+                                F("mode", "Mode", "choice", "hold", PTT_MODES),
+                                F("fallback_keys", "Raccourci de secours (si py-intercom ne répond pas)",
+                                  "hotkey", "")]},
     "orchestream.overlay": {"label": "Overlay orchestream", "cat": "Intégrations", "color": "#333300",
                             "help": "Affiche ou masque un overlay web d'orchestream. L'état suit en direct les "
                                     "changements faits ailleurs (régie web, autre opérateur).",
-                            "fields": [F("overlay", "Overlay", "choice", "twizz", ORCH_OVERLAYS),
+                            "fields": [F("overlay", "Overlay", "orch_overlay", "twizz"),
                                        F("mode", "Mode", "choice", "toggle", SHOW_MODES)]},
     "tally.reconnect": {"label": "Tallys : reconnecter", "cat": "Intégrations", "color": "#000000",
                         "help": "Demande aux Tally32 de se reconnecter à vMix. Le retour d'état montre en "
@@ -105,7 +128,7 @@ ACTIONS: dict[str, dict] = {
     "hotkey": {"label": "Raccourci clavier", "cat": "Clavier", "color": "#000033",
                "help": "Simule une combinaison de touches sur ce PC.",
                "fields": [F("keys", "Touches", "hotkey", ""),
-                          F("hold", "Maintenir tant que le bouton est enfoncé", "bool", False)]},
+                          F("hold", "Maintenir tant que la touche est enfoncée", "bool", False)]},
     "http": {"label": "Requête HTTP / curl", "cat": "Web", "color": "#172554",
              "help": "Appelle une URL (API, webhook, overlay web…).",
              "fields": [F("method", "Méthode", "choice", "POST",
@@ -114,6 +137,21 @@ ACTIONS: dict[str, dict] = {
                         F("body", "Corps", "multiline", ""),
                         F("content_type", "Content-Type", "text", "application/json"),
                         F("headers", "En-têtes (un par ligne)", "multiline", "", placeholder="Authorization: Bearer …")]},
+    "net.send": {"label": "Commande TCP / UDP", "cat": "Réseau", "color": "#052e2b",
+                 "help": "Envoie une trame à un appareil (mélangeur, caméra, automate…). Échappements : "
+                         "\\r \\n \\t \\xNN (ex. « PWR ON\\r »), ou coche Hexadécimal (« 81 01 04 00 02 FF »).",
+                 "fields": [F("proto", "Protocole", "choice", "tcp", NET_PROTOS),
+                            F("host", "Machine (IP ou nom)", "text", "", placeholder="192.168.1.50"),
+                            F("port", "Port", "port", 9000),
+                            F("payload", "Données", "text", "", placeholder="PWR ON\\r"),
+                            F("hex", "Données en hexadécimal", "bool", False)]},
+    "osc": {"label": "Message OSC", "cat": "Réseau", "color": "#052e2b",
+            "help": "Envoie un message OSC en UDP (QLab, Reaper, consoles X32, TouchDesigner…). Arguments "
+                    "séparés par des espaces : 1, 0.5, true, \"texte\" ; préfixes i: f: s: pour forcer le type.",
+            "fields": [F("host", "Machine (IP ou nom)", "text", "127.0.0.1", placeholder="127.0.0.1"),
+                       F("port", "Port", "port", 8000),
+                       F("address", "Adresse OSC", "text", "", placeholder="/go"),
+                       F("args", "Arguments", "text", "", placeholder="1 0.5 \"texte\"")]},
     "page": {"label": "Changer de page", "cat": "Deck", "color": "#262626",
              "help": "Affiche une autre page sur ce Stream Deck.",
              "fields": [F("page", "Page", "page", "next")]},
@@ -140,9 +178,46 @@ def new_action(type_: str, **values) -> dict:
     return a
 
 
+def is_momentary(a: dict) -> bool:
+    """Action « maintenue » : elle commence à l'appui et doit être relâchée (phase « up »)."""
+    t = a.get("type")
+    return ((t == "intercom.ptt" and a.get("mode", "hold") == "hold")
+            or (t == "hotkey" and bool(a.get("hold")) and bool(a.get("keys"))))
+
+
+def momentary(acts) -> list[dict]:
+    return [a for a in acts or [] if is_momentary(a)]
+
+
 def _mix(a) -> int | None:
     m = int(a.get("mix") or 1)
     return m - 1 if m > 1 else None
+
+
+def _input(engine, a: dict):
+    """(réf, numéro) de l'input d'une action vMix, ou None (avec un message clair) s'il manque ou si vMix,
+    lu et à jour, ne le connaît pas : on n'envoie jamais une commande que vMix refuserait."""
+    ref = str(a.get("input") or "").strip()
+    label = ACTIONS.get(a.get("type"), {}).get("label", "vMix")
+    if not ref:
+        engine.log("warn", f"{label} : aucun input choisi")
+        return None
+    st = engine.vmix.state
+    n = st.number(ref)
+    if n is None and st.connected and st.inputs:
+        engine.log("error", f"{label} : input « {ref} » introuvable dans vMix")
+        return None
+    return ref, n
+
+
+def _transition(vm, effect: str, ref: str | None, n: int | None, a: dict, mix: int) -> None:
+    """Transition vers l'input indiqué (sinon la preview), puis état « à l'antenne » affiché sans attendre."""
+    effect = effect or "Cut"
+    dur = int(a.get("duration") or 0)
+    if vm.function(effect, Input=vm.input_param(ref) if ref else None, Duration=dur or None, Mix=_mix(a)):
+        target = n if ref else vm.state.preview(mix)
+        # seul le program est anticipé : l'échange preview / program dépend des réglages de vMix
+        vm.expect(mix, ttl=1.0 + vm.transition_ms(effect, dur) / 1000, active=target)
 
 
 def execute(engine, a: dict, phase: str, ctx: dict) -> None:
@@ -151,45 +226,87 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
         if t == "hotkey" and a.get("hold") and a.get("keys"):
             hotkeys.release(a["keys"])
         elif t == "intercom.ptt" and a.get("mode", "hold") == "hold":
-            engine.intercom.command(a.get("bus", "regie"), "off")
+            _ptt_release(engine, a)
         return
     vm = engine.vmix
+    st = vm.state
+    mix = int(a.get("mix") or 1)
+    if t in ("vmix.preview", "vmix.program", "vmix.take", "vmix.audio") or (
+            t == "vmix.overlay" and a.get("mode", "toggle") != "off"):
+        got = _input(engine, a)
+        if not got:
+            return
+        ref, n = got
     if t == "vmix.preview":
-        vm.function("PreviewInput", Input=vm.input_param(a.get("input")), Mix=_mix(a))
+        then = a.get("then") or "none"
+        if then != "none" and n is not None and st.preview(mix) == n and st.program(mix) != n:
+            _transition(vm, then, ref, n, a, mix)  # option « 2e appui : à l'antenne »
+        elif vm.function("PreviewInput", Input=vm.input_param(ref), Mix=_mix(a)):
+            vm.expect(mix, preview=n)
     elif t == "vmix.program":
-        vm.function("CutDirect", Input=vm.input_param(a.get("input")), Mix=_mix(a))
+        if vm.function("CutDirect", Input=vm.input_param(ref), Mix=_mix(a)):
+            vm.expect(mix, active=n)
     elif t == "vmix.transition":
-        dur = int(a.get("duration") or 0)
-        vm.function(a.get("effect") or "Cut", Input=vm.input_param(a["input"]) if a.get("input") else None,
-                    Duration=dur or None, Mix=_mix(a))
+        ref = str(a.get("input") or "").strip() or None
+        n = st.number(ref) if ref else None
+        if ref and n is None and st.connected and st.inputs:
+            engine.log("error", f"Transition : input « {ref} » introuvable dans vMix")
+            return
+        _transition(vm, a.get("effect"), ref, n, a, mix)
     elif t == "vmix.take":
-        mix = int(a.get("mix") or 1)
-        n = vm.state.number(a.get("input"))
-        if n is not None and vm.state.preview(mix) == n:
-            dur = int(a.get("duration") or 0)
-            vm.function(a.get("effect") or "Cut", Duration=dur or None, Mix=_mix(a))
-        else:
-            vm.function("PreviewInput", Input=vm.input_param(a.get("input")), Mix=_mix(a))
+        # Take : 1er appui = preview, 2e appui = antenne. La décision lit l'état « optimiste » (vmix.expect) :
+        # un 2e appui très rapide, avant la réponse de vMix, prend bien l'input.
+        if n is None:  # inputs vMix pas encore lus : on ne peut que le mettre en preview
+            if st.connected:
+                engine.log("warn", f"Take : état de « {ref} » inconnu, envoyé en preview seulement")
+            vm.function("PreviewInput", Input=vm.input_param(ref), Mix=_mix(a))
+        elif st.program(mix) == n:
+            engine.log("info", f"Take : « {ref} » est déjà à l'antenne")
+        elif st.preview(mix) == n:
+            _transition(vm, a.get("effect"), ref, n, a, mix)
+        elif vm.function("PreviewInput", Input=vm.input_param(ref), Mix=_mix(a)):
+            vm.expect(mix, preview=n)
     elif t == "vmix.overlay":
-        n, mode = int(a.get("overlay") or 1), a.get("mode", "toggle")
-        name = {"toggle": f"OverlayInput{n}", "in": f"OverlayInput{n}In", "out": f"OverlayInput{n}Out",
-                "off": f"OverlayInput{n}Off", "preview": f"PreviewOverlayInput{n}"}[mode]
-        vm.function(name, Input=None if mode == "off" else vm.input_param(a.get("input")))
+        o, mode = int(a.get("overlay") or 1), a.get("mode", "toggle")
+        name = {"toggle": f"OverlayInput{o}", "in": f"OverlayInput{o}In", "out": f"OverlayInput{o}Out",
+                "off": f"OverlayInput{o}Off", "preview": f"PreviewOverlayInput{o}"}.get(mode, f"OverlayInput{o}")
+        vm.function(name, Input=None if mode == "off" else vm.input_param(ref))
     elif t == "vmix.audio":
-        name = {"toggle": "Audio", "off": "AudioOff", "on": "AudioOn"}[a.get("mode", "toggle")]
-        vm.function(name, Input=vm.input_param(a.get("input")))
+        name = {"toggle": "Audio", "off": "AudioOff", "on": "AudioOn"}.get(a.get("mode", "toggle"), "Audio")
+        vm.function(name, Input=vm.input_param(ref))
     elif t == "vmix.production":
-        funcs = PRODUCTION_FUNCS.get(a.get("what"), PRODUCTION_FUNCS["recording"])
-        vm.function(funcs[{"toggle": 0, "start": 1, "stop": 2}.get(a.get("mode"), 0)])
+        what, mode = a.get("what"), a.get("mode", "toggle")
+        if what == "fadetoblack" and mode in ("start", "stop"):
+            # FadeToBlack est un interrupteur dans vMix : Démarrer / Arrêter n'envoient que si l'état change
+            if not st.connected:
+                engine.log("warn", "FTB : état de vMix inconnu, rien n'est envoyé")
+                return
+            if bool(st.flags.get("fadetoblack")) == (mode == "start"):
+                engine.log("info", "FTB : déjà " + ("au noir" if mode == "start" else "à l'image"))
+                return
+        funcs = PRODUCTION_FUNCS.get(what, PRODUCTION_FUNCS["recording"])
+        vm.function(funcs[{"toggle": 0, "start": 1, "stop": 2}.get(mode, 0)])
     elif t == "vmix.function":
         params = (a.get("params") or "").strip().lstrip("&?")
         vm.raw(f"{a.get('function', '').strip()}&{params}" if params else a.get("function", ""))
     elif t == "intercom.ptt":
-        mode = a.get("mode", "hold")
-        if mode == "alloff":
-            engine.intercom.command("all", "off")
+        _ptt_press(engine, a)
+    elif t == "net.send":
+        proto, host = (a.get("proto") or "tcp").upper(), a.get("host") or ""
+        data = netsend.decode_payload(a.get("payload", ""), bool(a.get("hex")))
+        try:
+            netsend.send(proto, host, a.get("port", 0), data)
+        except OSError as e:
+            engine.log("error", f"{proto} {host or '?'}:{a.get('port')} : {error_text(e, host)}")
         else:
-            engine.intercom.command(a.get("bus", "regie"), {"hold": "on"}.get(mode, mode))
+            engine.log("info", f"{proto} {host}:{a.get('port')} ← {len(data)} octet(s)")
+    elif t == "osc":
+        host = a.get("host") or ""
+        msg = netsend.osc_message(a.get("address", ""), netsend.parse_osc_args(a.get("args", "")))
+        try:
+            netsend.send("udp", host, a.get("port", 0), msg)
+        except OSError as e:
+            engine.log("error", f"OSC {host or '?'}:{a.get('port')} : {error_text(e, host)}")
     elif t == "orchestream.overlay":
         engine.orchestream.command(a.get("overlay", "twizz"), a.get("mode", "toggle"))
     elif t == "tally.reconnect":
@@ -208,11 +325,111 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
         time.sleep(max(0, int(a.get("ms") or 0)) / 1000)
 
 
+def _ptt_press(engine, a: dict) -> None:
+    """Intercom : commande HTTP ; si py-intercom ne répond pas et qu'un raccourci de secours est réglé, on
+    simule ce raccourci (maintenu jusqu'au relâché en mode Maintenu, appui bref en mode Basculer)."""
+    ic = engine.intercom
+    mode, bus = a.get("mode", "hold"), a.get("bus") or "regie"
+    if mode == "alloff":
+        ic.command("all", "off")
+        return
+    keys = (a.get("fallback_keys") or "").strip() if mode in ("hold", "toggle") else ""
+    cmd = {"hold": "on"}.get(mode, mode)
+    if not keys:
+        ic.command(bus, cmd)
+        return
+    # déjà connu injoignable : le raccourci part tout de suite, sans attendre un délai réseau
+    tried = ic.reachable is not False
+    if tried:
+        if ic.command(bus, cmd, quick=True, report=False):
+            return
+        kind, level, msg = ic.last
+        if kind not in UNREACHABLE:  # client désarmé, bus absent… : le raccourci n'y changerait rien
+            if msg:
+                engine.log(level or "error", msg)
+            return
+    if mode == "hold":
+        hotkeys.press(keys)
+        ic.fallback_held.add((bus, keys))
+        if tried:  # un client lent a pu recevoir le « on » quand même : le relâché enverra aussi « off »
+            ic.fallback_tried.add((bus, keys))
+    else:
+        hotkeys.tap(keys)
+    engine.log("warn", f"py-intercom ne répond pas : raccourci de secours « {keys} » utilisé ({bus_label(bus)})")
+
+
+def _ptt_release(engine, a: dict) -> None:
+    ic = engine.intercom
+    bus, keys = a.get("bus") or "regie", (a.get("fallback_keys") or "").strip()
+    if keys and (bus, keys) in ic.fallback_held:
+        ic.fallback_held.discard((bus, keys))
+        hotkeys.release(keys)
+        if (bus, keys) in ic.fallback_tried:  # « on » peut-être appliqué en retard : on le referme aussi
+            ic.fallback_tried.discard((bus, keys))
+            ic.command(bus, "off", quick=True, report=False)  # en cas d'échec, surveillé par _reconcile
+        return
+    if ic.bus(bus).get("mode") == "always_on":  # bus toujours ouvert : rien à refermer
+        return
+    ic.command(bus, "off")
+
+
+def next_press(engine, b: dict) -> str:
+    """Ce que fera le prochain appui, d'après l'état en direct (inspecteur, mode Live). "" si rien à dire."""
+    if not b:
+        return ""
+    if b.get("mode") == "toggle":
+        return ("désactiver (actions « À la désactivation »)" if engine.toggles.get(b.get("id"))
+                else "activer (actions « À l'activation »)")
+    acts = b.get("actions") or []
+    a = acts[0] if acts else {}
+    t = a.get("type")
+    if t not in ("vmix.take", "vmix.preview"):
+        return ""
+    ref, mix = str(a.get("input") or "").strip(), int(a.get("mix") or 1)
+    st = engine.vmix.state
+    if not ref:
+        return "aucun input choisi : rien ne part"
+    if not st.connected:
+        return "vMix hors ligne"
+    n = st.number(ref)
+    if n is None:
+        return "input introuvable dans vMix : rien ne part" if st.inputs else "état de vMix en cours de lecture…"
+    pgm, pvw = st.program(mix), st.preview(mix)
+    if t == "vmix.take":
+        if pgm == n:
+            return "rien : l'input est déjà à l'antenne"
+        if pvw == n:
+            return f"À L'ANTENNE ({dict(TRANSITION_CHOICES).get(a.get('effect'), a.get('effect') or 'Cut')})"
+        return "mettre en preview (l'appui suivant l'enverra à l'antenne)"
+    then = a.get("then") or "none"
+    if then != "none" and pvw == n and pgm != n:
+        return f"À L'ANTENNE ({dict(TRANSITION_CHOICES).get(then, then)})"
+    if pvw == n:
+        return "rien : déjà en preview" + ("" if then != "none" else " (« 2e appui » non réglé)")
+    return "mettre en preview"
+
+
+def to_take(b: dict) -> dict | None:
+    """Touche Preview / Program convertie en Take (même input, même mix), sinon None."""
+    acts = (b or {}).get("actions") or []
+    if b.get("mode") == "toggle" or not acts or acts[0].get("type") not in ("vmix.preview", "vmix.program"):
+        return None
+    old = acts[0]
+    then = old.get("then") or "none"
+    nb = copy.deepcopy(b)
+    nb["actions"][0] = new_action("vmix.take", input=old.get("input", ""), mix=old.get("mix", 1),
+                                  effect=then if then != "none" else "Cut", duration=old.get("duration", 0))
+    if (b.get("bg") or "").lower() in (ACTIONS[old["type"]]["color"], "#003300", "#330000"):
+        nb["bg"] = ACTIONS["vmix.take"]["color"]
+    return nb
+
+
 def summary(a: dict, page_names: dict | None = None) -> str:
     t = a.get("type")
     mix = f" (Mix {a['mix']})" if int(a.get("mix") or 1) > 1 else ""
     if t == "vmix.preview":
-        return f"Preview · {a.get('input') or '?'}{mix}"
+        then = a.get("then") or "none"
+        return f"Preview · {a.get('input') or '?'}{mix}" + (f" (2e appui : {then})" if then != "none" else "")
     if t == "vmix.program":
         return f"Program · {a.get('input') or '?'}{mix}"
     if t == "vmix.transition":
@@ -234,10 +451,16 @@ def summary(a: dict, page_names: dict | None = None) -> str:
         if a.get("mode") == "alloff":
             return "Intercom · couper tous les bus"
         mode = {"hold": "maintenu", "toggle": "basculer", "on": "ouvrir", "off": "fermer"}.get(a.get("mode"), "")
-        return f"Intercom · {dict(INTERCOM_BUSES).get(a.get('bus'), a.get('bus'))} ({mode})"
+        return f"Intercom · {bus_label(a.get('bus'))} ({mode})"
     if t == "orchestream.overlay":
         mode = dict(SHOW_MODES).get(a.get("mode"), "").split(" ")[0].lower()
-        return f"Orchestream · {dict(ORCH_OVERLAYS).get(a.get('overlay'), a.get('overlay'))} ({mode})"
+        return f"Orchestream · {overlay_label(a.get('overlay'))} ({mode})"
+    if t == "net.send":
+        data = a.get("payload") or ""
+        return (f"{(a.get('proto') or 'tcp').upper()} {a.get('host') or '?'}:{a.get('port')} · "
+                f"{data[:24]}{'…' if len(data) > 24 else ''}").rstrip(" ·")
+    if t == "osc":
+        return f"OSC {a.get('host') or '?'}:{a.get('port')} {a.get('address') or '?'} {a.get('args') or ''}".strip()
     if t == "tally.reconnect":
         return "Tallys · reconnecter à vMix" + ("" if a.get("target", "all") == "all" else f" ({a['target']})")
     if t == "hotkey":

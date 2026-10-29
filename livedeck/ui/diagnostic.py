@@ -61,6 +61,8 @@ class DiagnosticDialog(QDialog):
         self._timer = QTimer(self, interval=90, timeout=self._step)
         self.key_event.connect(self._on_key)
         if self.dm:
+            # les relâchés n'iront plus au moteur pendant le diagnostic : on relâche tout avant
+            self.engine.release_all(latched=False)
             self.dm.diag_handler = lambda serial, idx, state: self.key_event.emit(serial, idx, state)
             for d in self.decks:
                 for i in range(d["rows"] * d["cols"]):

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import getpass
 import logging
+import logging.handlers
 import os
 import sys
+import threading
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QPalette
@@ -31,13 +33,33 @@ def _already_running(name: str) -> bool:
     return True
 
 
-def main() -> None:
-    args = sys.argv[1:]
+def _install_logging() -> None:
+    """Journal tournant (2 Mo × 3) et erreurs des threads journalisées : avec pythonw ou l'exe,
+    il n'y a pas de console, une exception non rattrapée serait sinon invisible."""
     HOME.mkdir(parents=True, exist_ok=True)
-    handlers = [logging.FileHandler(HOME / "livedeck.log", encoding="utf-8")]
+    handlers = [logging.handlers.RotatingFileHandler(HOME / "livedeck.log", maxBytes=2_000_000, backupCount=3,
+                                                     encoding="utf-8")]
     if sys.stderr:  # absent avec pythonw et l'exe
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
+    log = logging.getLogger("livedeck")
+
+    def on_error(exc_type, exc, tb):
+        if not issubclass(exc_type, KeyboardInterrupt):
+            log.critical("Erreur non rattrapée", exc_info=(exc_type, exc, tb))
+
+    def on_thread_error(a):
+        if a.exc_type is not SystemExit:
+            log.critical("Erreur non rattrapée dans le thread %s", getattr(a.thread, "name", "?"),
+                         exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+
+    sys.excepthook = on_error
+    threading.excepthook = on_thread_error
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    _install_logging()
     if sys.platform == "win32":  # icône propre dans la barre des tâches
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LiveDeck")

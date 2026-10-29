@@ -39,6 +39,11 @@ QLabel#Muted {{ color: {MUTED}; }}
 QLabel#Hint {{ color: {MUTED}; font-size: 12px; }}
 QLabel#Toast {{ color: {ACCENT}; font-size: 12px; font-weight: 600; }}
 QLabel#Chip {{ background: {RAISED}; border-radius: 9px; padding: 2px 9px; color: {MUTED}; font-size: 11px; font-weight: 600; }}
+QPushButton#Chip {{ background: {RAISED}; border: 1px solid {BORDER}; border-radius: 10px; padding: 3px 10px; color: {MUTED}; font-size: 11px; font-weight: 600; }}
+QPushButton#Chip:hover {{ color: {TEXT}; }}
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:hover {{ background: {PANEL2}; }}
+QLabel#Pill:hover {{ border-color: #384053; }}
 QLabel#Pill {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 13px; padding: 4px 12px; font-size: 12px; }}
 
 QPushButton {{ background: {RAISED}; border: 1px solid {BORDER}; border-radius: 8px; padding: 7px 14px; font-weight: 600; }}

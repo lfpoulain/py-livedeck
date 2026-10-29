@@ -1,19 +1,40 @@
 """Réglages : général (vMix, démarrage), Stream Decks, intégrations (py-intercom, orchestream, Tally32)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit,
-                               QPlainTextEdit, QPushButton, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+import copy
+import html
+import threading
+
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from .. import autostart
 from ..health import parse_targets
-from ..integrations import ORCH_OVERLAYS
+from ..integrations import (integration_status, overlay_label, overlay_list, probe_intercom, probe_orchestream,
+                            probe_tally)
 from . import theme as T
 from .widgets import Seg, label
 
 
 def _dot(ok: bool | None) -> str:
     return f"<span style='color:{T.OK if ok else T.FAINT if ok is None else T.DANGER}'>●</span>&nbsp; "
+
+
+class _Probe(QObject):
+    """Résultat d'un test lancé dans un thread, renvoyé au thread de l'interface."""
+    done = Signal(str, object, str)  # intégration, état (True / None / False), message
+
+
+def parse_overlays(text: str) -> list[dict]:
+    """« twizz = Twizz » (ou juste « twizz »), un overlay par ligne ou séparés par des virgules."""
+    out = []
+    for name, lab in parse_targets(text.replace(",", "\n")):
+        name = name.strip()
+        if name and name not in {o["name"] for o in out}:
+            out.append({"name": name, "label": lab.strip() if lab.strip() != name else overlay_label(name)})
+    return out
 
 
 def _page() -> tuple[QWidget, QVBoxLayout]:
@@ -24,22 +45,36 @@ def _page() -> tuple[QWidget, QVBoxLayout]:
     return w, v
 
 
+def _scroll(page: QWidget) -> QScrollArea:
+    """Onglet dans une zone qui défile en hauteur : rien ne se chevauche dans une petite fenêtre."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    area.setWidget(page)
+    return area
+
+
 class SettingsDialog(QDialog):
-    def __init__(self, engine, parent=None):
+    def __init__(self, engine, parent=None, tab: str = "general"):
         super().__init__(parent)
         self.engine = engine
         self.setWindowTitle("Réglages")
         self.setMinimumSize(680, 560)
+        self.resize(700, 660)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 20)
         lay.setSpacing(12)
         tabs = Seg([("general", "Général"), ("decks", "Stream Decks"), ("integ", "Intégrations")], "general")
         lay.addWidget(tabs)
         stack = QStackedWidget()
-        stack.addWidget(self._general())
-        stack.addWidget(self._decks())
-        stack.addWidget(self._integrations())
+        for page in (self._general(), self._decks(), self._integrations()):
+            stack.addWidget(_scroll(page))
         tabs.changed.connect(lambda v: stack.setCurrentIndex(["general", "decks", "integ"].index(v)))
+        if tab in ("decks", "integ"):
+            tabs.set(tab)
+            stack.setCurrentIndex(["general", "decks", "integ"].index(tab))
+        self.tabs, self.stack = tabs, stack
         lay.addWidget(stack, 1)
 
         btns = QHBoxLayout()
@@ -52,9 +87,19 @@ class SettingsDialog(QDialog):
         btns.addWidget(ok_btn)
         btns.addWidget(cancel)
         lay.addLayout(btns)
+        self._probe = _Probe(self)
+        self._probe.done.connect(self._probe_done)
+        # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
+        for svc in (engine.intercom, engine.orchestream, engine.tallies):
+            svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
         self._refresh_status()
+
+    def done(self, r):
+        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies):
+            svc.set_forced(False)
+        super().done(r)
 
     # -- général ---------------------------------------------------------------
     def _general(self) -> QWidget:
@@ -126,9 +171,11 @@ class SettingsDialog(QDialog):
                                                    if d else f"<b>{s}</b><br><span style='color:{T.FAINT}'>débranché</span>")),
                            i, 0)
             page = QComboBox()
+            page.setToolTip("Page affichée au démarrage. Changer de page en direct ne modifie pas ce réglage.")
+            page.addItem("(automatique : 1re page à sa taille)", None)
             for p in e.pages:
                 page.addItem(f"{p['name']}  ({p['cols']}×{p['rows']})", p["id"])
-            page.setCurrentIndex(max(0, page.findData(conf.get("page") or (d or {}).get("page"))))
+            page.setCurrentIndex(max(0, page.findData(conf.get("page"))))
             grid.addWidget(page, i, 1)
             bright = QSlider(Qt.Horizontal)
             bright.setRange(5, 100)
@@ -150,12 +197,34 @@ class SettingsDialog(QDialog):
         return w
 
     # -- intégrations ----------------------------------------------------------
+    def _test_row(self, v: QVBoxLayout, key: str) -> QLabel:
+        """Ligne d'état en direct + bouton « Tester » (qui essaie les valeurs saisies, pas encore enregistrées)."""
+        row = QHBoxLayout()
+        status = label("", "Hint", True)
+        status.setTextFormat(Qt.RichText)
+        row.addWidget(status, 1)
+        btn = QPushButton("Tester")
+        btn.setObjectName("Small")
+        btn.setToolTip("Vérifie tout de suite la connexion avec les valeurs ci-dessus")
+        btn.clicked.connect(lambda: self._test(key))
+        row.addWidget(btn, 0, Qt.AlignTop)
+        v.addLayout(row)
+        result = label("", "Hint", True)
+        result.setTextFormat(Qt.RichText)
+        result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        result.hide()
+        v.addWidget(result)
+        self._tests[key] = (btn, result)
+        return status
+
     def _integrations(self) -> QWidget:
         integ = self.engine.cfg["integrations"]
         w, v = _page()
+        self._tests: dict = {}
         v.addWidget(label("PY-INTERCOM  ·  TALKBACK", "H2"))
         row = QHBoxLayout()
         self.ic_host = QLineEdit(integ["intercom"].get("host", "127.0.0.1"))
+        self.ic_host.setPlaceholderText("127.0.0.1 (même PC)")
         self.ic_port = QSpinBox()
         self.ic_port.setRange(1, 65535)
         self.ic_port.setValue(int(integ["intercom"].get("port", 5080)))
@@ -164,30 +233,79 @@ class SettingsDialog(QDialog):
         row.addWidget(label("Port", "Muted"))
         row.addWidget(self.ic_port)
         v.addLayout(row)
-        self.ic_status = label("", "Hint", True)
-        v.addWidget(self.ic_status)
+        self.ic_status = self._test_row(v, "intercom")
+        v.addWidget(label("Dans py-intercom, zone Parler : coche « Contrôle HTTP » (même port) ; si LiveDeck tourne "
+                          "sur un autre PC, coche aussi « Depuis le réseau ».", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("ORCHESTREAM  ·  OVERLAYS WEB", "H2"))
         self.orch_url = QLineEdit(integ["orchestream"].get("url", ""))
-        self.orch_url.setPlaceholderText("http://orchestream.diy.yt")
+        self.orch_url.setPlaceholderText("http://serveur:3333")
         v.addWidget(self.orch_url)
-        self.orch_status = label("", "Hint", True)
-        v.addWidget(self.orch_status)
+        row = QHBoxLayout()
+        row.addWidget(label("Overlays", "Muted"))
+        self.orch_overlays = QLineEdit(", ".join(n if lab == overlay_label(n) else f"{n} = {lab}"
+                                                 for n, lab in overlay_list(integ.get("orchestream"))))
+        self.orch_overlays.setPlaceholderText("twizz, poll = Sondage, speedizz")
+        self.orch_overlays.setToolTip("Noms des overlays d'orchestream (route /api/overlay/<nom>/show), séparés par "
+                                      "des virgules ; « nom = Libellé » pour un nom affiché. Un overlay vu dans le "
+                                      "flux en direct est aussi proposé automatiquement.")
+        row.addWidget(self.orch_overlays, 1)
+        v.addLayout(row)
+        self.orch_status = self._test_row(v, "orchestream")
 
         v.addSpacing(6)
         v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
         self.tallies = QPlainTextEdit("\n".join(f"{d.get('name')} = {d.get('host')}" for d in integ.get("tallies", [])))
         self.tallies.setObjectName("Field")
-        self.tallies.setPlaceholderText("Reporter = 10.0.0.163\nAnimateur = 10.0.0.197")
-        self.tallies.setFixedHeight(80)
+        self.tallies.setPlaceholderText("Caméra 1 = 192.168.1.51\nCaméra 2 = 192.168.1.52")
+        self.tallies.setFixedHeight(72)
         v.addWidget(self.tallies)
-        self.tally_status = label("", "Hint", True)
-        v.addWidget(self.tally_status)
-        v.addWidget(label("Chaque intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
-                          "Intégrations).", "Hint", True))
+        self.tally_status = self._test_row(v, "tallies")
+        v.addWidget(label("Une intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
+                          "Intégrations) ; pendant que cette fenêtre est ouverte, elles sont toutes surveillées.",
+                          "Hint", True))
         v.addStretch()
         return w
+
+    def _test(self, key: str) -> None:
+        btn, result = self._tests[key]
+        btn.setEnabled(False)
+        result.show()
+        result.setText(_dot(None) + "Test en cours…")
+        if key == "intercom":
+            host, port = self.ic_host.text().strip() or "127.0.0.1", self.ic_port.value()
+
+            def run():
+                return probe_intercom(host, port)
+        elif key == "orchestream":
+            url = self.orch_url.text()
+
+            def run():
+                return probe_orchestream(url)
+        else:
+            devices = parse_targets(self.tallies.toPlainText())
+
+            def run():
+                if not devices:
+                    return None, _dot(None) + "Aucun tally renseigné (une ligne « Nom = IP » par tally)."
+                res = [(name, *probe_tally(host)) for name, host in devices]
+                oks = [ok for _, ok, _ in res]
+                ok = False if False in oks else None if None in oks else True
+                return ok, "<br>".join(_dot(o) + html.escape(f"{n} : {m}") for n, o, m in res)
+
+        def worker():
+            try:
+                ok, msg = run()
+            except Exception as e:  # le test ne doit jamais faire tomber la fenêtre
+                ok, msg = False, f"Erreur inattendue : {e}"
+            self._probe.done.emit(key, ok, msg)
+        threading.Thread(target=worker, name=f"test-{key}", daemon=True).start()
+
+    def _probe_done(self, key: str, ok, msg: str) -> None:
+        btn, result = self._tests[key]
+        btn.setEnabled(True)
+        result.setText(msg if key == "tallies" else _dot(ok) + html.escape(msg))  # tallys : déjà mis en forme
 
     def _refresh_status(self):
         e = self.engine
@@ -196,72 +314,51 @@ class SettingsDialog(QDialog):
         self.vmix_status.setText(_dot(True) + f"Connecté à vMix {st.version}{lat}" if st.connected else
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
-        ic = e.intercom
-        if not ic.wanted:
-            text = _dot(None) + "Aucune touche ne l'utilise."
-        elif ic.reachable is None:
-            text = _dot(None) + "Connexion…"
-        elif not ic.reachable:
-            text = _dot(False) + (f"Injoignable sur {ic.base}. Lance le client py-intercom et active son API "
-                                  "(réglage du port dans le client).")
-        else:
-            buses = "  ·  ".join(f"{k} {'🎙 ouvert' if b.get('active') else 'fermé'} ({b.get('mode')})"
-                                 for k, b in ic.buses.items())
-            text = _dot(ic.online) + f"{ic.state_text or ('En ligne' if ic.online else 'Désarmé')}  ·  {buses}"
-        self.ic_status.setText(text)
-        orch = e.orchestream
-        if not orch.wanted:
-            text = _dot(None) + "Aucune touche ne l'utilise."
-        elif not orch.url:
-            text = _dot(False) + "Adresse à renseigner."
-        else:
-            names = dict(ORCH_OVERLAYS)
-            states = "  ·  ".join(f"{names[k]} {'affiché' if v else 'masqué' if v is False else 'inconnu'}"
-                                  for k, v in orch.overlays.items())
-            text = _dot(orch.connected) + (f"Flux en direct connecté  ·  {states}" if orch.connected
-                                           else "Flux en direct injoignable, nouvel essai en cours…")
-        self.orch_status.setText(text)
-        ta = e.tallies
-        if not ta.devices:
-            text = _dot(None) + "Aucun tally renseigné."
-        elif not ta.wanted:
-            text = _dot(None) + "Aucune touche ne les utilise."
-        else:
-            parts = []
-            for d in ta.devices:
-                s = ta.status.get(d["host"])
-                if s is None:
-                    parts.append(_dot(None) + d["name"])
-                elif not s.get("reachable"):
-                    parts.append(_dot(False) + f"{d['name']} injoignable")
-                else:
-                    tally = "PGM" if s.get("live") else "PVW" if s.get("preview") else ""
-                    parts.append(_dot(bool(s.get("connected"))) + f"{d['name']} "
-                                 + ("connecté à vMix" if s.get("connected") else "sans vMix")
-                                 + (f" · {tally}" if tally else ""))
-            text = "&nbsp;&nbsp;&nbsp;".join(parts)
-        self.tally_status.setText(text)
+        labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status}
+        for key, _, ok, text in integration_status(e):
+            labels[key].setText(_dot(ok) + html.escape(text))
 
     def _save(self):
+        """Une seule étape « annuler » ; le moteur applique ensuite vMix, luminosité et intégrations.
+        Les decks restent sur leur page actuelle, sauf si leur page de démarrage vient de changer."""
         e = self.engine
         host, port = self.host.text().strip() or "127.0.0.1", self.port.value()
-        if (host, port) != (e.cfg["vmix"]["host"], e.cfg["vmix"]["port"]):
-            e.set_vmix(host, port)
-        opts = e.cfg["options"]
-        opts["health_interval"] = self.interval.value()
-        opts["start_live"] = self.start_live.isChecked()
-        opts["close_to_tray"] = self.close_tray.isChecked()
-        e.health.interval = self.interval.value()
         if self.autostart.isChecked() != autostart.is_enabled():
             try:
                 autostart.set_enabled(self.autostart.isChecked())
             except OSError as ex:
                 e.log("error", f"Démarrage automatique impossible à régler : {ex}")
-        for serial, page, bright in self.deck_rows:
-            e.set_deck_settings(serial, page=page.currentData(), brightness=bright.value())
-        integ = e.cfg["integrations"]
-        integ["intercom"] = {"host": self.ic_host.text().strip() or "127.0.0.1", "port": self.ic_port.value()}
-        integ["orchestream"] = {"url": self.orch_url.text().strip()}
-        integ["tallies"] = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
-        e.changed()
+        decks = {serial: (page.currentData(), bright.value()) for serial, page, bright in self.deck_rows}
+        moved = [s for s, (pg, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
+        tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
+        overlays = parse_overlays(self.orch_overlays.text())
+        if [(o["name"], o["label"]) for o in overlays] == overlay_list(e.cfg["integrations"].get("orchestream")) \
+                and "overlays" not in (e.cfg["integrations"].get("orchestream") or {}):
+            overlays = None  # liste par défaut inchangée : on ne l'écrit pas dans la configuration
+
+        def apply(cfg):
+            cfg["vmix"] = {"host": host, "port": int(port)}
+            cfg["options"].update(health_interval=self.interval.value(), start_live=self.start_live.isChecked(),
+                                  close_to_tray=self.close_tray.isChecked())
+            for serial, (pg, bright) in decks.items():
+                conf = cfg["decks"].setdefault(serial, {})
+                conf["brightness"] = bright
+                if pg:
+                    conf["page"] = pg
+                else:
+                    conf.pop("page", None)
+            integ = cfg["integrations"]
+            integ["intercom"] = {**(integ.get("intercom") or {}), "host": self.ic_host.text().strip() or "127.0.0.1",
+                                 "port": self.ic_port.value()}
+            integ["orchestream"] = {**(integ.get("orchestream") or {}), "url": self.orch_url.text().strip()}
+            if overlays is not None:
+                integ["orchestream"]["overlays"] = overlays
+            integ["tallies"] = tallies
+        trial = copy.deepcopy(e.cfg)
+        apply(trial)
+        if trial != e.cfg:  # rien de modifié : pas d'étape « annuler » inutile
+            e.mutate(apply)
+        if e.decks:
+            for serial in moved:
+                e.decks.apply_settings(serial, page_changed=True)
         self.accept()

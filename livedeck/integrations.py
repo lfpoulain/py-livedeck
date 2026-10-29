@@ -1,26 +1,73 @@
 """Intégrations maison : py-intercom (talkback), orchestream (overlays web), Tally32 (tallys ESP32).
 
-Chaque client tourne dans son propre thread et ne travaille que si une touche l'utilise.
+Chaque client tourne dans son propre thread et ne travaille que si une touche l'utilise (ou pendant que la
+fenêtre Réglages est ouverte). Les appels vers ces services ne passent jamais par un proxy quand l'adresse
+est locale (127.0.0.1, réseau privé).
 """
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import re
+import socket
 import threading
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from .webreq import DIRECT, error_kind, open_url
+
+# Valeurs de repli tant que le service n'a pas répondu : la liste réelle vient de /status (py-intercom),
+# des réglages et du flux en direct (orchestream).
 INTERCOM_BUSES = [("regie", "Régie"), ("plateau", "Plateau"), ("vmix", "vMix")]
 ORCH_OVERLAYS = [("twizz", "Twizz"), ("poll", "Sondage"), ("speedizz", "Speedizz")]
+_BUS_IDS = {"0": "regie", "1": "plateau", "2": "vmix"}  # l'API accepte aussi les numéros de bus
+BUS_MODES = {"ptt": "maintenu", "toggle": "bascule", "always_on": "toujours actif"}
+INTERCOM_MIN = "version 2.0.x du 29/10/2026 ou plus récente"
+# py-intercom n'a pas été atteint (ou ce n'est pas lui qui répond) : le raccourci de secours a un sens
+UNREACHABLE = {"refused", "timeout", "dns", "reset", "network", "notapi", "proxy", "forbidden"}
 
 
-def _http(method: str, url: str, timeout: float = 1.5) -> tuple[int, dict | None]:
-    """Requête sans en-tête Origin (py-intercom refuse les navigateurs). Lève OSError si injoignable."""
+def bus_label(key) -> str:
+    key = _BUS_IDS.get(str(key), str(key or ""))
+    return dict(INTERCOM_BUSES).get(key.lower(), key.capitalize() if key else "?")
+
+
+def overlay_label(name, labels: dict | None = None) -> str:
+    return (labels or {}).get(name) or dict(ORCH_OVERLAYS).get(name) or str(name or "?").capitalize()
+
+
+def overlay_list(orch_cfg: dict | None) -> list[tuple[str, str]]:
+    """Overlays réglés (Réglages → Intégrations), sinon ceux d'orchestream par défaut."""
+    items = (orch_cfg or {}).get("overlays")
+    if not isinstance(items, list):
+        return list(ORCH_OVERLAYS)
+    out: list[tuple[str, str]] = []
+    for it in items:
+        name, label = (it.get("name"), it.get("label")) if isinstance(it, dict) else (it, "")
+        name = str(name or "").strip()
+        if name and name not in {n for n, _ in out}:
+            out.append((name, str(label or "").strip() or overlay_label(name)))
+    return out
+
+
+def add_overlay(integ: dict, name: str) -> None:
+    """Ajoute un overlay à la liste réglée (import, migration) s'il n'y est pas déjà."""
+    orch = integ.setdefault("orchestream", {})
+    items = overlay_list(orch)
+    if name not in {n for n, _ in items}:
+        items.append((name, overlay_label(name)))
+    orch["overlays"] = [{"name": n, "label": label} for n, label in items]
+
+
+def _http(method: str, url: str, timeout: float = 1.5, direct: bool | None = None) -> tuple[int, dict | None]:
+    """Requête sans en-tête Origin (py-intercom refuse les navigateurs). Lève OSError si injoignable.
+    direct : toujours sans proxy (py-intercom, tallys) ; sinon sans proxy seulement pour une adresse locale."""
     req = urllib.request.Request(url, data=b"" if method == "POST" else None, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with (DIRECT.open(req, timeout=timeout) if direct else open_url(req, timeout)) as resp:
             status, raw = resp.status, resp.read(65536)
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read(65536)
@@ -30,15 +77,121 @@ def _http(method: str, url: str, timeout: float = 1.5) -> tuple[int, dict | None
         return status, None
 
 
+def _hostport(url: str) -> tuple[str, str]:
+    """(hôte, « hôte:port ») d'une URL, pour les messages."""
+    rest = url.split("://", 1)[-1].split("/", 1)[0]
+    host = rest.rsplit(":", 1)[0] if rest.count(":") == 1 else rest
+    return host.strip("[]"), rest
+
+
+def _is_proxy_reply(status: int, data) -> bool:
+    """Réponse 407 / 502 / 504 qui n'est pas du JSON : elle vient d'un proxy, pas de l'appareil."""
+    return status in (407, 502, 504) and not isinstance(data, dict)
+
+
+def _net_text(kind: str, who: str, where: str) -> str:
+    return {"timeout": f"{who} ne répond pas à temps sur {where} : vérifie l'adresse IP, le pare-feu et que "
+                       "l'appareil est allumé",
+            "dns": f"{who} : adresse « {where} » introuvable (nom d'hôte inconnu)",
+            "reset": f"{who} : connexion coupée par {where}",
+            "proxy": f"{who} : la requête vers {where} est interceptée par un proxy (vérifie HTTP_PROXY ou "
+                     "le proxy de Windows)"}.get(kind, f"{who} injoignable sur {where}")
+
+
+def explain_intercom(host: str, port, status: int | None = None, data=None, exc: BaseException | None = None,
+                     bus: str | None = None, buses: dict | None = None) -> tuple[str, str]:
+    """(nature, message en français) d'une réponse ou d'une erreur de py-intercom.
+    Natures : ok, refused, timeout, dns, reset, network, proxy, forbidden, notapi, offline, absent,
+    always_on, busy, http."""
+    where = f"{host}:{port}"
+    if exc is not None:
+        kind = error_kind(exc, host)
+        if kind == "refused":
+            r = getattr(exc, "reason", exc)
+            if isinstance(r, (TimeoutError, socket.timeout)) or "timed out" in str(r):  # en local : fermé ou bloqué
+                return kind, (f"py-intercom ne répond pas à temps sur {where} : client fermé, ou occupé ? Vérifie "
+                              f"qu'il est lancé ({INTERCOM_MIN}) avec « Contrôle HTTP » coché dans la zone Parler (et "
+                              "« Depuis le réseau » si LiveDeck tourne sur un autre PC)")
+            return kind, (f"py-intercom ne répond pas sur {where} : lance le client ({INTERCOM_MIN}) et coche "
+                          "« Contrôle HTTP » dans la zone Parler ; si LiveDeck tourne sur un autre PC, coche "
+                          "aussi « Depuis le réseau »")
+        if kind == "timeout":
+            return kind, (f"py-intercom ne répond pas à temps sur {where} : vérifie l'adresse IP, le pare-feu "
+                          "du PC intercom et que « Depuis le réseau » est coché dans le client")
+        return kind, _net_text(kind, "py-intercom", where)
+    if _is_proxy_reply(status or 0, data):
+        return "proxy", _net_text("proxy", "py-intercom", where) + f" (HTTP {status})"
+    data = data if isinstance(data, dict) else {}
+    err = str(data.get("error") or "")
+    if status == 403:
+        return "forbidden", (f"py-intercom a refusé la requête (403, en-tête de navigateur) : un proxy ou un "
+                             f"antivirus modifie-t-il les requêtes vers {where} ?")
+    if status == 409:
+        if "online" in data and not data.get("online"):
+            state = f" (état : {data['state']})" if data.get("state") else ""
+            return "offline", (f"py-intercom désarmé : le client n'est pas en ligne{state}. Connecte-le au "
+                               "serveur intercom")
+        return "always_on", f"py-intercom : bus {bus_label(bus)} en mode « Toujours actif » dans le client"
+    if status == 404:
+        if "proposé" in err:
+            avail = ", ".join(bus_label(k) for k in buses or {}) or "aucun"
+            return "absent", (f"py-intercom : le bus {bus_label(bus)} n'est pas proposé par le serveur intercom "
+                              f"(disponibles : {avail})")
+        if bus is not None and "bus inconnu" in err:
+            return "absent", f"py-intercom : bus « {bus} » inconnu ({err})"
+        return "notapi", (f"{where} répond, mais ce n'est pas l'API de py-intercom (autre programme sur ce port, "
+                          f"ou client trop ancien : il faut la {INTERCOM_MIN})")
+    if status == 503:
+        return "busy", "py-intercom occupé (503) : réessaie"
+    if status and 200 <= status < 300:
+        if "buses" in data:  # py-intercom renvoie toujours son état
+            return "ok", ""
+        return "notapi", (f"{where} répond, mais ce n'est pas l'API de py-intercom (autre programme sur ce "
+                          "port ?)")
+    return "http", f"py-intercom {status} : {err or 'réponse inattendue'}"
+
+
+def probe_intercom(host: str, port, timeout: float = 3.0) -> tuple[bool | None, str]:
+    """Test ponctuel (bouton « Tester ») : (True en ligne / None joignable mais désarmé / False, message)."""
+    host = (host or "127.0.0.1").strip()
+    try:
+        status, data = _http("GET", f"http://{host}:{int(port)}/status", timeout=timeout, direct=True)
+    except OSError as e:
+        return False, explain_intercom(host, port, exc=e)[1]
+    if status == 200 and isinstance(data, dict) and "buses" in data:
+        buses = "  ·  ".join(f"{bus_label(k)} ({BUS_MODES.get(v.get('mode'), v.get('mode'))}"
+                             f"{', ouvert' if v.get('active') else ''})"
+                             for k, v in (data.get("buses") or {}).items() if isinstance(v, dict))
+        if data.get("online"):
+            return True, f"py-intercom en ligne ({data.get('state') or 'OK'})  ·  bus : {buses or 'aucun'}"
+        return None, (f"py-intercom répond, mais le client n'est pas en ligne (état : {data.get('state') or '?'}) : "
+                      "connecte-le au serveur intercom")
+    return False, explain_intercom(host, port, status, data)[1]
+
+
 class _Service:
     def __init__(self, on_change, log):
         self._on_change, self._log = on_change, log
         self.wanted = False  # une touche utilise ce service
+        self.forced = False  # surveillance demandée sans touche (fenêtre Réglages ouverte)
         self._stop = threading.Event()
         self._wake = threading.Event()
 
+    @property
+    def active(self) -> bool:
+        return self.wanted or self.forced
+
     def start(self) -> None:
-        threading.Thread(target=self._run, name=type(self).__name__, daemon=True).start()
+        threading.Thread(target=self._guarded, name=type(self).__name__, daemon=True).start()
+
+    def _guarded(self) -> None:
+        """Relance la boucle après une erreur imprévue au lieu de laisser mourir le thread."""
+        while not self._stop.is_set():
+            try:
+                self._run()
+            except Exception:
+                logging.getLogger("livedeck").exception(type(self).__name__)
+                self._stop.wait(2)
 
     def stop(self) -> None:
         self._stop.set()
@@ -47,6 +200,11 @@ class _Service:
     def set_wanted(self, wanted: bool) -> None:
         if wanted != self.wanted:
             self.wanted = wanted
+            self._wake.set()
+
+    def set_forced(self, forced: bool) -> None:
+        if forced != self.forced:
+            self.forced = forced
             self._wake.set()
 
     def _sleep(self, s: float) -> None:
@@ -69,16 +227,23 @@ class Intercom(_Service):
         self.reachable: bool | None = None
         self.online = False
         self.state_text = ""
+        self.error = ""  # pourquoi py-intercom est injoignable (message lisible)
+        self.last: tuple[str, str, str] = ("", "", "")  # dernière commande : (nature, niveau, message)
         self.buses: dict[str, dict] = {}
+        self.fallback_held: set[tuple[str, str]] = set()  # (bus, touches) tenus par le raccourci de secours
+        self.fallback_tried: set[tuple[str, str]] = set()  # … dont le « on » HTTP a été tenté (client lent ?)
         self._lock = threading.Lock()
+        self._off_due: dict[str, tuple] = {}  # bus refermé par LiveDeck -> (envoi, échéance, renvois)
 
     @property
     def base(self) -> str:
         return f"http://{self.host}:{self.port}"
 
     def configure(self, host: str, port: int) -> None:
-        self.host, self.port = host or "127.0.0.1", int(port or 5080)
-        self.reachable = None
+        host, port = (host or "127.0.0.1").strip(), int(port or 5080)
+        if (host, port) != (self.host, self.port):
+            self.host, self.port = host, port
+            self.reachable, self.error, self.buses = None, "", {}
         self._wake.set()
 
     def _apply(self, data: dict | None) -> None:
@@ -87,115 +252,262 @@ class Intercom(_Service):
         sig = (self.reachable, self.online, self.state_text, json.dumps(self.buses, sort_keys=True))
         self.online = bool(data.get("online"))
         self.state_text = data.get("state", "")
-        self.buses = {k.lower(): v for k, v in (data.get("buses") or {}).items()}
+        self.buses = {k.lower(): v for k, v in (data.get("buses") or {}).items() if isinstance(v, dict)}
         if sig != (True, self.online, self.state_text, json.dumps(self.buses, sort_keys=True)):
             self._on_change()
 
-    def _set_reachable(self, ok: bool) -> None:
+    def _set_reachable(self, ok: bool, why: str = "") -> None:
+        self.error = "" if ok else why
         if ok != self.reachable:
             if self.reachable is not None or not ok:
-                self._log("info" if ok else "warn", f"py-intercom {'joignable' if ok else 'injoignable'} ({self.base})")
+                self._log("info" if ok else "warn", f"py-intercom joignable ({self.base})" if ok
+                          else (why or f"py-intercom injoignable ({self.base})"))
             self.reachable = ok
             self._on_change()
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            if not self.wanted:
+            if not self.active and not self._off_due:
                 self._sleep(5)
                 continue
+            t0 = time.monotonic()
             try:
-                status, data = _http("GET", f"{self.base}/status", timeout=1)
-                self._set_reachable(True)
-                self._apply(data)
-            except OSError:
-                self._set_reachable(False)
+                status, data = _http("GET", f"{self.base}/status", timeout=1, direct=True)
+            except OSError as e:
+                self._set_reachable(False, explain_intercom(self.host, self.port, exc=e)[1])
+            else:
+                if status == 200 and isinstance(data, dict) and "buses" in data:
+                    self._set_reachable(True)
+                    self._apply(data)
+                    self._reconcile(t0)
+                else:
+                    self._set_reachable(False, explain_intercom(self.host, self.port, status, data)[1])
             self._sleep(0.35 if self.reachable else 2)
 
-    def command(self, bus: str, cmd: str) -> None:
-        url = f"{self.base}/ptt/{bus}/{cmd}"
-        with self._lock:  # un « off » ne doit jamais doubler un « on »
-            for attempt in range(3):
+    def _reconcile(self, t0: float) -> None:
+        """État voulu : un bus que LiveDeck a refermé ne doit pas rester ouvert (« off » perdu, client
+        redémarré, « on » appliqué en retard…). On regarde la 1re lecture de /status après notre « off » :
+        bus encore actif -> « off » renvoyé (2 fois au plus, une seule alerte). Bus en mode bascule dans le
+        client, ou vu fermé : on arrête de surveiller (l'opérateur a pu le rouvrir lui-même depuis le client)."""
+        now = time.monotonic()
+        for bus, (sent, deadline, tries) in list(self._off_due.items()):
+            if now > deadline:
+                self._off_due.pop(bus, None)
+                continue
+            if sent >= t0:  # cet état a été lu avant notre « off » : on attend le suivant
+                continue
+            buses = list(self.buses.values()) if bus == "all" else [self.bus(bus)]
+            if tries >= 2 or not any(b.get("active") and b.get("mode") not in ("always_on", "toggle") for b in buses):
+                self._off_due.pop(bus, None)
+                continue
+            if not tries:
+                self._log("warn", f"py-intercom : bus {bus_label(bus)} encore ouvert, LiveDeck renvoie « off »")
+            with self._lock:
                 try:
-                    status, data = _http("POST", url, timeout=1.5)
+                    _http("POST", f"{self.base}/ptt/{bus}/off", timeout=1, direct=True)
                 except OSError:
-                    self._set_reachable(False)
-                    self._log("error", f"py-intercom injoignable : vérifie que le client tourne et que "
-                                       f"son API est active ({self.base})")
-                    return
-                self._set_reachable(True)
-                if status == 503 and attempt < 2:
+                    pass
+                if bus in self._off_due:
+                    self._off_due[bus] = (time.monotonic(), deadline, tries + 1)
+
+    def command(self, bus: str, cmd: str, quick: bool = False, report: bool = True) -> bool:
+        """Envoie une commande PTT. Un « off » est réessayé (le micro ne doit pas rester ouvert), puis
+        surveillé par _reconcile. quick : une seule tentative courte (arrêt, raccourci de secours prêt).
+        report : journalise l'échec (sinon il reste lisible dans self.last). Renvoie True si c'est fait."""
+        bus = "all" if str(bus).lower() == "all" else _BUS_IDS.get(str(bus), str(bus or "regie").lower())
+        url = f"{self.base}/ptt/{bus}/{cmd}"
+        off = cmd == "off"
+        was = self.reachable
+        status, data = 0, None
+        with self._lock:  # un « off » ne doit jamais doubler un « on »
+            if not off:
+                self._off_due.pop(bus, None)
+                self._off_due.pop("all", None)
+            for attempt in range(4):
+                try:
+                    status, data = _http("POST", url, timeout=0.5 if quick else (1 if off else 1.5), direct=True)
+                except OSError as e:
+                    if off and not quick and attempt < 3:
+                        time.sleep((0.1, 0.3, 0.6)[attempt])
+                        continue
+                    kind, msg = explain_intercom(self.host, self.port, exc=e)
+                    self._set_reachable(False, msg)
+                    if off:  # à renvoyer dès que le client répond de nouveau
+                        self._off_due[bus] = (time.monotonic(), time.monotonic() + 60, 0)
+                        self._wake.set()
+                    # déjà signalé injoignable à l'appui : le relâché ne fait pas une 2e alerte
+                    self._finish(kind, "warn" if off and was is False else "error", msg, report)
+                    return False
+                if status == 503 and attempt < 2 and not quick:
                     time.sleep(0.05)
                     continue
                 break
-        self._apply(data)
-        if status == 409:
-            self._log("warn", f"py-intercom : {(data or {}).get('error', 'commande refusée')}")
-        elif status >= 400:
-            self._log("error", f"py-intercom {status} : {(data or {}).get('error', url)}")
+            if off and status in (200, 503):
+                self._off_due[bus] = (time.monotonic(), time.monotonic() + (3 if status == 200 else 10), 0)
+        kind, msg = explain_intercom(self.host, self.port, status, data, bus=bus, buses=self.buses)
+        if kind in UNREACHABLE:
+            self._set_reachable(False, msg)
+        else:
+            self._set_reachable(True)
+            self._apply(data)
         self._wake.set()
+        if kind == "ok" or (kind == "always_on" and off):  # bus toujours ouvert : rien à refermer
+            self.last = (kind, "", "")
+            return True
+        if kind in ("offline", "absent") and off:  # désarmé ou bus absent : aucun micro ouvert, rien à signaler
+            self.last = (kind, "", msg)
+            return False
+        self._finish(kind, "info" if kind == "always_on" else "error", msg, report)
+        return False
+
+    def _finish(self, kind: str, level: str, msg: str, report: bool) -> None:
+        self.last = (kind, level, msg)
+        if report and msg:
+            self._log(level, msg)
 
     def bus(self, name: str) -> dict:
-        key = {"0": "regie", "1": "plateau", "2": "vmix"}.get(str(name), str(name).lower())
-        return self.buses.get(key, {})
+        return self.buses.get(_BUS_IDS.get(str(name), str(name).lower()), {})
+
+    def bus_choices(self) -> list[tuple[str, str]]:
+        """Bus proposés par ce serveur (lus sur /status), sinon la liste habituelle."""
+        if self.buses:
+            return [(k, bus_label(k)) for k in self.buses]
+        return list(INTERCOM_BUSES)
+
+    def unavailable(self, bus: str) -> str:
+        """Pourquoi on ne peut pas parler sur ce bus (texte court affiché sur la touche), sinon ""."""
+        if self.reachable is False:
+            return "HORS LIGNE"
+        if self.reachable and not self.online:
+            return "DÉSARMÉ"
+        if self.reachable and self.buses and not self.bus(bus):
+            return "BUS ABSENT"
+        return ""
 
 
 # --- orchestream ----------------------------------------------------------------------------
 
 
+def normalize_url(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    if url and not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return url
+
+
+def explain_orchestream(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
+    host, where = _hostport(url)
+    if exc is not None:
+        kind = error_kind(exc, host)
+        if kind == "refused":
+            return f"orchestream ne répond pas sur {where} : le serveur est-il lancé, l'adresse et le port sont-ils bons ?"
+        return _net_text(kind, "orchestream", where)
+    if _is_proxy_reply(status or 0, data):
+        return _net_text("proxy", "orchestream", where) + f" (HTTP {status})"
+    if status == 404:
+        return f"{where} répond, mais sans l'API d'orchestream (/api/overlay/…) : vérifie l'adresse"
+    msg = ((data or {}).get("error") or (data or {}).get("message")) if isinstance(data, dict) else ""
+    return f"orchestream : {msg or f'erreur {status}'}"
+
+
+def probe_orchestream(url: str, timeout: float = 4.0) -> tuple[bool | None, str]:
+    """Test ponctuel : ouvre le flux en direct /api/overlay/events puis le referme."""
+    url = normalize_url(url)
+    if not url:
+        return None, "Adresse à renseigner (ex. http://serveur:3333)."
+    try:
+        with open_url(urllib.request.Request(f"{url}/api/overlay/events"), timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            if resp.status == 200 and "event-stream" in ctype:
+                return True, f"orchestream joignable : flux en direct ouvert ({url})"
+            return False, f"{url} répond ({resp.status}, {ctype or 'sans type'}), mais ce n'est pas le flux d'orchestream"
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read(4096).decode("utf-8", "replace") or "null")
+        except ValueError:
+            body = None
+        return False, explain_orchestream(url, e.code, body)
+    except OSError as e:
+        return False, explain_orchestream(url, exc=e)
+
+
 class Orchestream(_Service):
-    """Overlays web d'orchestream : commandes show/hide et état suivi en direct par le flux SSE."""
+    """Overlays web d'orchestream : commandes show/hide et état suivi en direct par le flux SSE.
+    orchestream ne garde pas l'état de Twizz / Sondage : il reste « inconnu » jusqu'au premier changement."""
 
     def __init__(self, on_change, log):
         super().__init__(on_change, log)
         self.url = ""
         self.connected = False
+        self.error = ""
+        self.labels: dict[str, str] = dict(ORCH_OVERLAYS)
+        self.learned: list[str] = []  # overlays vus dans le flux en direct mais absents des réglages
         self.overlays: dict[str, bool | None] = {k: None for k, _ in ORCH_OVERLAYS}
 
-    def configure(self, url: str) -> None:
-        url = (url or "").strip().rstrip("/")
-        if url and not url.startswith(("http://", "https://")):
-            url = "http://" + url
+    def configure(self, url: str, overlays: list[tuple[str, str]] | None = None) -> None:
+        url = normalize_url(url)
+        if overlays is not None:
+            self.labels = dict(overlays)
+            self.overlays = {k: v for k, v in self.overlays.items() if k in self.labels or k in self.learned}
+            for name in self.labels:
+                self.overlays.setdefault(name, None)
         if url != self.url:
             self.url = url
-            self.overlays = {k: None for k, _ in ORCH_OVERLAYS}
+            self.error = ""
+            self.learned = []
+            self.overlays = {k: None for k in self.labels}
             self._wake.set()
+
+    def names(self) -> list[tuple[str, str]]:
+        """Overlays réglés, puis ceux appris en direct (événements « <nom>:overlay:toggle »)."""
+        out = list(self.labels.items())
+        out += [(k, overlay_label(k)) for k in list(self.learned) if k not in self.labels]
+        return out
 
     def _set(self, name: str, visible) -> None:
         visible = None if visible is None else bool(visible)
-        if self.overlays.get(name) != visible:
+        if name not in self.overlays or self.overlays.get(name) != visible:
             self.overlays[name] = visible
             self._on_change()
 
-    def _set_connected(self, ok: bool) -> None:
+    def _set_connected(self, ok: bool, why: str = "") -> None:
+        if ok:
+            self.error = ""
+        elif why and why != self.error:
+            self.error = why
+            self._log("warn", why)
         if ok != self.connected:
             self.connected = ok
-            self._log("info" if ok else "warn", f"orchestream {'connecté' if ok else 'déconnecté'} ({self.url})")
+            if ok or not why:
+                self._log("info" if ok else "warn", f"orchestream {'connecté' if ok else 'déconnecté'} ({self.url})")
             self._on_change()
 
     def _handle(self, event: str, data) -> None:
-        m = re.fullmatch(r"(twizz|poll|speedizz):overlay:toggle", event)
+        m = re.fullmatch(r"([\w-]+):overlay:toggle", event)
         if m and isinstance(data, dict):
+            if m.group(1) not in self.labels and m.group(1) not in self.learned:
+                self.learned.append(m.group(1))
             self._set(m.group(1), data.get("isVisible"))
         elif event == "speedizz:snapshot":
-            self._set("speedizz", bool(data and data.get("isVisible")))
+            self._set("speedizz", bool(isinstance(data, dict) and data.get("isVisible")))
         elif event == "speedizz:session:finished":
             self._set("speedizz", False)
 
     def _run(self) -> None:
         delay = 2
         while not self._stop.is_set():
-            if not (self.wanted and self.url):
+            if not (self.active and self.url):
                 self._set_connected(False)
                 self._sleep(5)
                 continue
-            url = self.url
+            url, why = self.url, ""
             try:
-                with urllib.request.urlopen(f"{url}/api/overlay/events", timeout=45) as resp:
+                with open_url(urllib.request.Request(f"{url}/api/overlay/events"), 45) as resp:
                     self._set_connected(True)
                     delay = 2
                     event, data = "", []
                     for raw in resp:
-                        if self._stop.is_set() or url != self.url or not self.wanted:
+                        if self._stop.is_set() or url != self.url or not self.active:
                             break
                         line = raw.decode("utf-8", "replace").rstrip("\r\n")
                         if line.startswith("event:"):
@@ -208,30 +520,62 @@ class Orchestream(_Service):
                             except ValueError:
                                 pass
                             event, data = "", []
-            except OSError:
-                pass
-            self._set_connected(False)
+            except urllib.error.HTTPError as e:
+                why = explain_orchestream(url, e.code)
+            except OSError as e:
+                why = explain_orchestream(url, exc=e)
+            self._set_connected(False, why)
             self._sleep(delay)
             delay = min(delay * 2, 15)
 
-    def command(self, name: str, mode: str) -> None:
+    def command(self, name: str, mode: str) -> bool:
         if not self.url:
             self._log("error", "orchestream : adresse non réglée (Réglages → Intégrations)")
-            return
+            return False
         show = (not self.overlays.get(name)) if mode == "toggle" else mode == "show"
+        url = f"{self.url}/api/overlay/{name}/{'show' if show else 'hide'}"
         try:
-            status, data = _http("POST", f"{self.url}/api/overlay/{name}/{'show' if show else 'hide'}", timeout=4)
+            status, data = _http("POST", url, timeout=4)
         except OSError as e:
-            self._log("error", f"orchestream injoignable : {e}")
-            return
+            self._log("error", explain_orchestream(self.url, exc=e))
+            return False
         if 200 <= status < 300:
-            self._set(name, (data or {}).get("isVisible", show))
+            self._set(name, data.get("isVisible", show) if isinstance(data, dict) else show)
+            return True
+        if status == 404 and isinstance(data, dict) and (data.get("message") or data.get("error")):
+            msg = data.get("message") or data.get("error")  # refus métier (ex. aucune partie Speedizz)
+        elif status == 404:
+            msg = f"overlay « {name} » inconnu d'orchestream (pas de route /api/overlay/{name})"
         else:
-            msg = (data or {}).get("error") or (data or {}).get("message") or f"erreur {status}"
-            self._log("error", f"orchestream · {dict(ORCH_OVERLAYS).get(name, name)} : {msg}")
+            msg = explain_orchestream(self.url, status, data).removeprefix("orchestream : ")
+        self._log("error", f"orchestream · {overlay_label(name, self.labels)} : {msg}")
+        return False
 
 
 # --- Tally32 --------------------------------------------------------------------------------
+
+
+def _tally_url(host: str, path: str) -> str:
+    return f"{host if host.startswith('http') else 'http://' + host}{path}"
+
+
+def probe_tally(host: str, timeout: float = 3.0) -> tuple[bool | None, str]:
+    """Test ponctuel d'un Tally32 (GET /status) : (connecté à vMix / None sans vMix / False injoignable)."""
+    url = _tally_url(host, "/status")
+    h, where = _hostport(url)
+    try:
+        status, data = _http("GET", url, timeout=timeout, direct=True)
+    except OSError as e:
+        kind = error_kind(e, h)
+        return False, ("connexion refusée : ce n'est pas un Tally32 ?" if kind == "refused"
+                       else _net_text(kind, "tally", where))
+    if status != 200 or not isinstance(data, dict):
+        if _is_proxy_reply(status, data):
+            return False, _net_text("proxy", "tally", where)
+        return False, f"{where} répond ({status}) mais pas comme un Tally32 (GET /status)"
+    if data.get("connected"):
+        return True, f"connecté à vMix ({data.get('vmix_host') or '?'}, input {data.get('vmix_input') or '?'})"
+    return None, f"joignable, mais pas connecté à vMix ({data.get('vmix_host') or 'vMix non réglé'})"
 
 
 class Tallies(_Service):
@@ -249,35 +593,51 @@ class Tallies(_Service):
         self._wake.set()
 
     def _url(self, host: str, path: str) -> str:
-        return f"{host if host.startswith('http') else 'http://' + host}{path}"
+        return _tally_url(host, path)
 
     def _poll(self, host: str) -> None:
         try:
-            status, data = _http("GET", self._url(host, "/status"), timeout=1.5)
-            new = {"reachable": True, **(data or {})} if status == 200 else {"reachable": False}
-        except OSError:
-            new = {"reachable": False}
+            status, data = _http("GET", self._url(host, "/status"), timeout=1.5, direct=True)
+            ok = status == 200 and isinstance(data, dict)
+            new = {"reachable": True, **data} if ok else {"reachable": False, "error": f"HTTP {status}"}
+        except OSError as e:
+            new = {"reachable": False, "error": error_kind(e, _hostport(host)[0])}
         if new != self.status.get(host):
             self.status[host] = new
             self._on_change()
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            if self.wanted:
+            if self.active:
                 for d in list(self.devices):
-                    self._pool.submit(self._poll, d["host"])
-            self._sleep(3 if self.wanted else 5)
+                    try:
+                        self._pool.submit(self._poll, d["host"])
+                    except RuntimeError:  # arrêt en cours : le pool est déjà fermé
+                        return
+            self._sleep(3 if self.active else 5)
 
     def targets(self, target: str) -> list[dict]:
         return [d for d in self.devices if target in ("", "all") or d.get("name") == target]
 
     def reconnect(self, target: str) -> None:
-        for d in self.targets(target):
+        devs = self.targets(target)
+        if not devs:
+            self._log("error", "Tallys : aucun tally renseigné (Réglages → Intégrations)" if not self.devices
+                      else f"Tallys : « {target} » n'est plus dans la liste (Réglages → Intégrations)")
+        for d in devs:
+            name = d.get("name") or d["host"]
             try:
-                _http("POST", self._url(d["host"], "/vmix/reconnect"), timeout=2)
-            except OSError:
-                self._log("warn", f"Tally {d.get('name') or d['host']} injoignable")
-        threading.Timer(1.5, self._wake.set).start()  # relire l'état après la reconnexion
+                status, _ = _http("POST", self._url(d["host"], "/vmix/reconnect"), timeout=2, direct=True)
+            except OSError as e:
+                self._log("error", f"Tally {name} injoignable : {_net_text(error_kind(e, _hostport(d['host'])[0]), 'tally', d['host'])}")
+                continue
+            if status == 404:
+                self._log("error", f"Tally {name} : firmware sans /vmix/reconnect (mets le Tally32 à jour)")
+            elif not 200 <= status < 300:
+                self._log("error", f"Tally {name} : reconnexion refusée (HTTP {status})")
+        t = threading.Timer(1.5, self._wake.set)  # relire l'état après la reconnexion
+        t.daemon = True
+        t.start()
 
     def summary(self, target: str) -> tuple[bool | None, list[str]]:
         """(tous connectés à vMix ?, noms des tallys en défaut). None tant que rien n'est connu."""
@@ -289,14 +649,98 @@ class Tallies(_Service):
         return not down, down
 
 
+# --- état lisible (Réglages, voyants) -----------------------------------------------------------------
+
+
+def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
+    """[(clé, nom, état, texte)] des trois intégrations. état : True OK, False en défaut, None inactif ou
+    pas encore connu. Une intégration n'est surveillée que si une touche l'utilise (ou si forcée)."""
+    out = []
+    ic = engine.intercom
+    if not ic.active:
+        out.append(("intercom", "py-intercom", None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."))
+    elif ic.reachable is None:
+        out.append(("intercom", "py-intercom", None, f"Connexion à {ic.base}…"))
+    elif not ic.reachable:
+        out.append(("intercom", "py-intercom", False, ic.error or f"Injoignable sur {ic.base}."))
+    else:
+        buses = "  ·  ".join(f"{bus_label(k)} {'ouvert' if b.get('active') else 'fermé'}"
+                             f" ({BUS_MODES.get(b.get('mode'), b.get('mode'))})" for k, b in ic.buses.items())
+        state = ic.state_text or ("En ligne" if ic.online else "Désarmé")
+        out.append(("intercom", "py-intercom", ic.online,
+                    f"{state}  ·  {buses or 'aucun bus proposé'}" if ic.online else
+                    f"{state} : le client n'est pas en ligne, connecte-le au serveur intercom."))
+    orch = engine.orchestream
+    if not orch.url:
+        out.append(("orchestream", "orchestream", None, "Adresse à renseigner pour l'utiliser."))
+    elif not orch.active:
+        out.append(("orchestream", "orchestream", None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."))
+    elif orch.connected:
+        states = "  ·  ".join(f"{label} {'affiché' if orch.overlays.get(k) else 'masqué' if orch.overlays.get(k) is False else 'inconnu'}"
+                              for k, label in orch.names())
+        out.append(("orchestream", "orchestream", True, f"Flux en direct connecté  ·  {states}"))
+    else:
+        out.append(("orchestream", "orchestream", False, orch.error or "Flux en direct injoignable, nouvel essai en cours…"))
+    ta = engine.tallies
+    if not ta.devices:
+        out.append(("tallies", "Tally32", None, "Aucun tally renseigné."))
+    elif not ta.active:
+        out.append(("tallies", "Tally32", None, "Aucune touche ne les utilise (« Tester » pour vérifier)."))
+    else:
+        parts, oks = [], []
+        for d in ta.devices:
+            s = ta.status.get(d["host"])
+            name = d.get("name") or d["host"]
+            if s is None:
+                parts.append(f"{name} …")
+                oks.append(None)
+            elif not s.get("reachable"):
+                parts.append(f"{name} injoignable")
+                oks.append(False)
+            else:
+                tally = "PGM" if s.get("live") else "PVW" if s.get("preview") else ""
+                parts.append(f"{name} " + ("connecté à vMix" if s.get("connected") else "sans vMix")
+                             + (f" ({tally})" if tally else ""))
+                oks.append(bool(s.get("connected")))
+        ok = False if False in oks else None if None in oks else True
+        out.append(("tallies", "Tally32", ok, "  ·  ".join(parts)))
+    return out
+
+
 # --- migration d'une config Companion -------------------------------------------------------------
 
-_ORCH = re.compile(r"^(https?://[^/]+)/api/overlay/(twizz|poll|speedizz)/(show|hide)/?$")
+_ORCH = re.compile(r"^(https?://[^/]+)/api/overlay/([\w-]+)/(show|hide)/?$")
 _TALLY = re.compile(r"^https?://([^/]+)/vmix/reconnect/?$")
 
 
+def merge_integrations(dst: dict, src: dict) -> list[str]:
+    """« Ajouter les pages » d'un import : reprend les réglages d'intégrations que la conversion a trouvés
+    (adresse orchestream si aucune, overlays manquants, tallys absents) sans toucher aux réglages actuels."""
+    di, si = dst.setdefault("integrations", {}), src.get("integrations") or {}
+    notes = []
+    s_orch, d_orch = si.get("orchestream") or {}, di.setdefault("orchestream", {})
+    if s_orch.get("url") and not d_orch.get("url"):
+        d_orch["url"] = s_orch["url"]
+        notes.append(f"orchestream : adresse {s_orch['url']}")
+    if isinstance(s_orch.get("overlays"), list):
+        have = {n for n, _ in overlay_list(d_orch)}
+        new = [(n, lb) for n, lb in overlay_list(s_orch) if n not in have]
+        if new:
+            d_orch["overlays"] = [{"name": n, "label": lb} for n, lb in overlay_list(d_orch) + new]
+            notes.append("overlays : " + ", ".join(lb for _, lb in new))
+    devices = di.setdefault("tallies", [])
+    hosts = {d.get("host") for d in devices}
+    added = [d for d in si.get("tallies") or [] if d.get("host") and d["host"] not in hosts]
+    devices.extend(copy.deepcopy(added))
+    if added:
+        notes.append(f"{len(added)} Tally32 ajouté(s)")
+    return notes
+
+
 def migrate(cfg: dict) -> list[str]:
-    """Remplace les bricolages hérités de Companion par les intégrations natives."""
+    """Remplace les bricolages hérités de Companion par les intégrations natives (sur demande à l'import).
+    Une touche Intercom en raccourci clavier garde ce raccourci « de secours » : il sert si py-intercom ne
+    répond pas (API HTTP désactivée, ancienne version), on peut donc toujours parler."""
     from .actions import new_action
     from .health import parse_targets
     from .vmix import norm
@@ -304,6 +748,7 @@ def migrate(cfg: dict) -> list[str]:
     integ = cfg.setdefault("integrations", {})
     notes: list[str] = []
     counts = {"orch": 0, "tally": 0, "intercom": 0}
+    converted: list[str] = []
     for page in cfg.get("pages", []):
         for b in page["buttons"].values():
             acts, off = b.get("actions") or [], b.get("actions_off") or []
@@ -315,6 +760,7 @@ def migrate(cfg: dict) -> list[str]:
                 orch = integ.setdefault("orchestream", {})
                 if not orch.get("url"):
                     orch["url"] = on_m[0].group(1)
+                add_overlay(integ, on_m[0].group(2))
                 b["mode"], b["actions_off"] = "press", []
                 b["actions"] = [new_action("orchestream.overlay", overlay=on_m[0].group(2), mode="toggle")]
                 b["feedbacks"] = [f for f in b.get("feedbacks", []) if f.get("cond", {}).get("type") != "toggle"]
@@ -335,14 +781,17 @@ def migrate(cfg: dict) -> list[str]:
                 b["feedbacks"] = [f for f in b.get("feedbacks", []) if f.get("cond", {}).get("type") != "health"]
                 counts["tally"] += 1
                 continue
-            # 3. raccourci maintenu « Intercom <bus> » -> API py-intercom
+            # 3. raccourci maintenu « Intercom <bus> » -> API py-intercom (raccourci gardé en secours)
             label = norm(b.get("label", ""))
             bus = next((k for k, _ in INTERCOM_BUSES if k in label), None)
             if ("intercom" in label and bus and len(acts) == 1 and acts[0].get("type") == "hotkey"
                     and acts[0].get("hold")):
-                b["actions"] = [new_action("intercom.ptt", bus=bus, mode="hold")]
+                keys = acts[0].get("keys", "")
+                b["actions"] = [new_action("intercom.ptt", bus=bus, mode="hold", fallback_keys=keys)]
                 b["feedbacks"] = [f for f in b.get("feedbacks", []) if f.get("cond", {}).get("type") != "pressed"]
                 counts["intercom"] += 1
+                converted.append(f"« {(b.get('label') or '').replace(chr(10), ' ')} » ({page.get('name')}) : "
+                                 f"{keys or '?'} → bus {bus_label(bus)}")
     if counts["orch"]:
         notes.append(f"{counts['orch']} interrupteur(s) d'overlay orchestream reliés au flux en direct "
                      "(l'état suit les changements faits ailleurs).")
@@ -350,6 +799,7 @@ def migrate(cfg: dict) -> list[str]:
         notes.append(f"Bouton de vérification des tallys converti : {len(integ.get('tallies', []))} Tally32 "
                      "surveillé(s) directement (GET /status), reconnexion native.")
     if counts["intercom"]:
-        notes.append(f"{counts['intercom']} touche(s) Intercom passée(s) de raccourcis clavier à l'API de "
-                     "py-intercom (talkback maintenu, voyant d'état).")
+        notes.append(f"{counts['intercom']} touche(s) Intercom passée(s) à l'API de py-intercom (talkback maintenu, "
+                     "voyant d'état). Leur raccourci clavier reste en secours si py-intercom ne répond pas : "
+                     + " ; ".join(converted[:6]) + (" …" if len(converted) > 6 else ""))
     return notes

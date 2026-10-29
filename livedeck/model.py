@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
+
+log = logging.getLogger("livedeck")
 
 APP_DIR = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("LIVEDECK_HOME") or Path(os.environ.get("APPDATA") or Path.home()) / "LiveDeck")
@@ -33,7 +37,21 @@ DECK_SIZES = {
     "Stream Deck MK.2 / Original (5×3)": (5, 3),
     "Stream Deck + / Neo (4×2)": (4, 2),
     "Stream Deck Mini (3×2)": (3, 2),
+    "Stream Deck + XL (9×4)": (9, 4),
+    "Stream Deck Studio (16×2)": (16, 2),
+    "Stream Deck Pedal (3 pédales)": (3, 1),
 }
+
+
+def deck_size(model: str) -> tuple[int, int]:
+    """Grille (colonnes, rangées) d'après le nom d'un modèle (Companion, python-elgato-streamdeck…)."""
+    low = (model or "").lower().replace("plus", "+")
+    for test, size in ((lambda m: "+ xl" in m or "+xl" in m, (9, 4)), (lambda m: "studio" in m, (16, 2)),
+                       (lambda m: "pedal" in m, (3, 1)), (lambda m: "xl" in m, (8, 4)),
+                       (lambda m: "mini" in m, (3, 2)), (lambda m: "neo" in m or "+" in m, (4, 2))):
+        if test(low):
+            return size
+    return (5, 3)
 
 
 def new_id() -> str:
@@ -82,9 +100,27 @@ def new_page(name: str, cols: int = 8, rows: int = 4) -> dict:
     return {"id": new_id(), "name": name, "cols": cols, "rows": rows, "buttons": {}}
 
 
+CONFIG_VERSION = 3  # 2 : intégrations natives ; 3 : FadeToBlack n'est plus une transition
+
+
+def _migrate_v3(cfg: dict) -> None:
+    """FadeToBlack (interrupteur vMix) n'est plus proposé comme transition : une touche « Transition
+    FadeToBlack » devient « Rec / Stream / FTB » (fondu au noir, basculer) ; un Take passe en Cut."""
+    for p in cfg["pages"]:
+        for b in p["buttons"].values():
+            for lst in ("actions", "actions_off", "long_actions"):
+                for i, a in enumerate(b.get(lst) or []):
+                    if a.get("effect") != "FadeToBlack":
+                        continue
+                    if a.get("type") == "vmix.transition":
+                        b[lst][i] = {"type": "vmix.production", "what": "fadetoblack", "mode": "toggle"}
+                    else:
+                        a["effect"] = "Cut"
+
+
 def default_config() -> dict:
     return {
-        "version": 2,
+        "version": CONFIG_VERSION,
         "vmix": {"host": "127.0.0.1", "port": 8099},
         "pages": [new_page("Régie")],
         "decks": {},  # serial -> {"page": page_id, "brightness": 80}
@@ -120,18 +156,112 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
             cfg = json.load(f)
     except FileNotFoundError:
         return default_config()
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("pages", []), list):
+        raise ValueError("ce n'est pas une configuration LiveDeck")
     old = cfg.get("version", 1)
     cfg = normalize_config(cfg)
     if old < 2:  # v1 : bricolages hérités de Companion -> intégrations natives
         from .integrations import migrate
-        migrate(cfg)
+        notes = migrate(cfg)  # les raccourcis Intercom remplacés restent en secours (fallback_keys)
+        if notes:  # clé « _ » : jamais écrite sur disque, à montrer une fois par l'interface
+            cfg["_migration_notes"] = notes
         cfg["version"] = 2
+    if old < 3:
+        _migrate_v3(cfg)
+        cfg["version"] = 3
     return cfg
 
 
-def save_config(cfg: dict, path: Path = CONFIG_PATH) -> None:
+def open_config(path: Path = CONFIG_PATH, retries: int = 5) -> tuple[dict, str]:
+    """Comme load_config, mais un fichier abîmé n'empêche pas de démarrer : il est mis de côté
+    (config.json.corrupt-<date>) et LiveDeck repart d'une configuration vierge. Renvoie (cfg, alerte).
+    Un fichier momentanément verrouillé (antivirus, OneDrive, éditeur) n'est PAS abîmé : on réessaie, puis on
+    démarre sans jamais écrire (cfg["_readonly"]) pour ne pas remplacer la vraie configuration."""
+    for attempt in range(retries):
+        try:
+            return load_config(path), ""
+        except OSError as e:  # verrouillé, droits… : le contenu n'est pas en cause
+            if attempt < retries - 1:
+                time.sleep(0.2)
+                continue
+            cfg = default_config()
+            cfg["_readonly"] = True
+            msg = (f"Configuration impossible à lire ({e}) : LiveDeck démarre avec une configuration vierge et "
+                   f"n'enregistrera RIEN, pour ne pas écraser « {Path(path).name} ». Ferme ce qui bloque le fichier "
+                   "(OneDrive, antivirus, éditeur) puis relance LiveDeck.")
+            log.error(msg)
+            return cfg, msg
+        except Exception as e:  # JSON invalide, encodage, structure inattendue…
+            bad = Path(path).with_name(f"{Path(path).name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+            cfg = default_config()
+            try:
+                os.replace(path, bad)
+                where = f"copie mise de côté dans « {bad.name} »"
+            except OSError:  # impossible de la mettre de côté : on ne l'écrasera pas non plus
+                cfg["_readonly"] = True
+                where = f"« {Path(path).name} » n'a pas pu être mis de côté, LiveDeck n'enregistrera rien"
+            msg = (f"Configuration illisible ({e}) : {where}, LiveDeck démarre avec une configuration vierge. "
+                   f"Les sauvegardes automatiques sont dans « {BACKUP_DIR_NAME} ».")
+            log.error(msg)
+            return cfg, msg
+    raise AssertionError("inaccessible")
+
+
+BACKUP_DIR_NAME = "backups"
+BACKUP_KEEP = 20
+
+
+def backup_config(path: Path = CONFIG_PATH, tag: str = "") -> Path | None:
+    """Copie datée de config.json dans backups/ (on garde les BACKUP_KEEP plus récentes)."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    folder = path.parent / BACKUP_DIR_NAME
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        dst = folder / f"config-{time.strftime('%Y%m%d-%H%M%S')}{'-' + tag if tag else ''}.json"
+        shutil.copy2(path, dst)
+        for old in sorted(folder.glob("config-*.json"))[:-BACKUP_KEEP]:
+            old.unlink(missing_ok=True)
+        return dst
+    except OSError as e:
+        log.warning("Sauvegarde de secours impossible : %s", e)
+        return None
+
+
+def has_backup_today(path: Path = CONFIG_PATH) -> bool:
+    return any((Path(path).parent / BACKUP_DIR_NAME).glob(f"config-{time.strftime('%Y%m%d')}-*.json"))
+
+
+def save_config_text(text: str, path: Path = CONFIG_PATH) -> None:
+    """Écriture atomique : fichier temporaire puis os.replace (réessayé si l'antivirus ou OneDrive bloque)."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.1)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def config_text(cfg: dict) -> str:
+    return json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")}, ensure_ascii=False, indent=2)
+
+
+def save_config(cfg: dict, path: Path = CONFIG_PATH) -> None:
+    save_config_text(config_text(cfg), path)

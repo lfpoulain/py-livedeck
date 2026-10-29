@@ -1,14 +1,16 @@
 """Le Stream Deck à l'écran : miroir en direct, sélection, glisser-déposer."""
 from __future__ import annotations
 
+import html
 import json
 import time
 
-from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetricsF, QImage, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap)
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QToolTip, QWidget
 
+from ..actions import INTEGRATION_OF, next_press, summary
 from ..model import key, parse_key
 from ..render import render
 from . import theme as T
@@ -18,7 +20,8 @@ MIME_INPUTS = "application/x-livedeck-inputs"
 MIME_PRESET = "application/x-livedeck-preset"
 
 MODEL_NAMES = {(8, 4): "STREAM DECK XL", (5, 3): "STREAM DECK MK.2", (4, 2): "STREAM DECK +",
-               (3, 2): "STREAM DECK MINI"}
+               (3, 2): "STREAM DECK MINI", (9, 4): "STREAM DECK + XL", (16, 2): "STREAM DECK STUDIO",
+               (3, 1): "STREAM DECK PEDAL"}
 GAP = 0.16  # écart entre touches, en fraction de touche
 
 
@@ -36,6 +39,7 @@ class DeckGrid(QWidget):
     inputs_dropped = Signal(str, list)
     preset_dropped = Signal(str, str)
     context = Signal(str, QPoint)
+    test_key = Signal(str)  # Entrée sur la touche sélectionnée
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -133,7 +137,8 @@ class DeckGrid(QWidget):
         self._paint_body(p, body, cell, page)
 
         dpr = self.devicePixelRatioF()
-        px = int(cell * dpr)
+        px = max(int(cell * dpr), 72)  # rendu à la taille du vrai deck, puis réduit : même mise en page
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
         radius = cell * 0.13
         for r in range(rows):
             for c in range(cols):
@@ -289,6 +294,53 @@ class DeckGrid(QWidget):
         p.setBrush(QColor(45, 212, 191, 30))
         p.drawRoundedRect(rect.adjusted(-3, -3, 3, 3), radius + 3, radius + 3)
 
+    # -- info-bulles ---------------------------------------------------------
+    def tooltip_text(self, k: str) -> str:
+        """Ce que fait la touche, ce que fera le prochain appui et ce qui cloche (input introuvable…)."""
+        page = self.page
+        b = page["buttons"].get(k) if page else None
+        r, c = parse_key(k)
+        if not b:
+            return f"Rangée {r + 1}, colonne {c + 1} : vide" + ("" if self.live else "  ·  clic pour choisir une action")
+        e = self.engine
+        names = e.page_names()
+        title = (b.get("label") or "").replace("\n", " ").strip() or "Sans texte"
+        lines = [f"<b>{html.escape(title)}</b>"]
+        acts = b.get("actions") or []
+        if b.get("mode") == "toggle":
+            lines.append(f"<span style='color:{T.MUTED}'>Interrupteur</span>")
+        lines += [f"▸ {html.escape(summary(a, names))}" for a in acts[:5]]
+        if len(acts) > 5:
+            lines.append(f"▸ … {len(acts) - 5} autres étapes")
+        if b.get("long_actions"):
+            lines.append(f"Appui long : {html.escape(summary(b['long_actions'][0], names))}")
+        if b.get("confirm"):
+            lines.append("Sécurité : maintenir ½ s")
+        nxt = next_press(e, b)
+        if nxt:
+            lines.append(f"<span style='color:{T.ACCENT}'>Prochain appui : {html.escape(nxt)}</span>")
+        for m in e.unresolved_inputs(b):
+            lines.append(f"<span style='color:{T.WARN}'>● Input « {html.escape(m)} » introuvable dans vMix</span>")
+        for a in acts:
+            if INTEGRATION_OF.get(a.get("type")) == "intercom" and a.get("mode") != "alloff":
+                why = e.intercom.unavailable(a.get("bus") or "regie")
+                if why:
+                    lines.append(f"<span style='color:{T.DANGER}'>py-intercom : {why}"
+                                 + (f" ({html.escape(e.intercom.error)})" if e.intercom.error else "") + "</span>")
+                break
+        return "<br>".join(lines)
+
+    def event(self, e):
+        if e.type() == QEvent.ToolTip:
+            k = self.key_at(QPointF(e.pos()))
+            if k and self.page:
+                QToolTip.showText(e.globalPos(), self.tooltip_text(k), self)
+            else:
+                QToolTip.hideText()
+                e.ignore()
+            return True
+        return super().event(e)
+
     # -- souris ---------------------------------------------------------------
     def mousePressEvent(self, e):
         k = self.key_at(e.position())
@@ -391,6 +443,9 @@ class DeckGrid(QWidget):
             r, c = parse_key(self.sel) if self.sel else (0, -1)
             dr, dc = moves[e.key()]
             self.select(key(max(0, min(page["rows"] - 1, r + dr)), max(0, min(page["cols"] - 1, c + dc))))
+            return
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter) and self.sel and not e.isAutoRepeat():
+            self.test_key.emit(self.sel)
             return
         super().keyPressEvent(e)
 

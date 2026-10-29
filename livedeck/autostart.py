@@ -47,7 +47,10 @@ def set_enabled(on: bool) -> None:
 
 
 def resync() -> None:
-    """Si l'exe a été déplacé ou mis à jour, la clé pointe encore vers l'ancien chemin : on la corrige."""
+    """Si l'exe a été déplacé ou mis à jour, la clé pointe encore vers l'ancien chemin : on la corrige.
+    Seulement pour l'exe : un lancement depuis les sources ne doit pas détourner l'entrée de l'exe."""
+    if not getattr(sys, "frozen", False):
+        return
     cur = _current()
     if cur is not None and cur != command():
         set_enabled(True)

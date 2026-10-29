@@ -6,19 +6,17 @@ import json
 from PySide6.QtCore import QMimeData, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QLineEdit, QListWidget, QListWidgetItem,
-                               QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
+                               QMenu, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
 from .. import presets
 from ..actions import CATEGORIES
 from . import theme as T
 from .deck_view import MIME_INPUTS, MIME_PRESET
-from .widgets import Seg, label
+from .dialogs import ROW_STYLES
+from .widgets import Seg, label, tame_combo, widen_popup
 
 ROLE = Qt.UserRole
-CREATE_MODES = [("take", "Take (preview puis antenne)"), ("program", "Program (cut direct)"), ("preview", "Preview"),
-                ("pair", "Preview + Program (2 rangées)"), ("overlay1", "Overlay 1"),
-                ("overlay2", "Overlay 2 (PIP)"), ("overlay3", "Overlay 3"), ("overlay4", "Overlay 4"),
-                ("audio", "Couper le son")]
+CREATE_MODES = ROW_STYLES
 
 
 def _row_bg(p: QPainter, option, r: QRectF):
@@ -106,6 +104,7 @@ class _InputList(QListWidget):
 
 class InputsPage(QWidget):
     activated = Signal(str)
+    fill_requested = Signal(list)  # « Remplir la rangée » avec les inputs sélectionnés
 
     def __init__(self, engine):
         super().__init__()
@@ -114,9 +113,11 @@ class InputsPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
-        self.mode = QComboBox()
+        self.mode = tame_combo(QComboBox(), 12)
         for v, text in CREATE_MODES:
             self.mode.addItem(f"Créer : {text}", v)
+            self.mode.setItemData(self.mode.count() - 1, text, Qt.ToolTipRole)
+        widen_popup(self.mode)
         self.mode.setToolTip("Type de touche créée en glissant ou en double-cliquant un input")
         lay.addWidget(self.mode)
         self.search = QLineEdit()
@@ -132,13 +133,27 @@ class InputsPage(QWidget):
         self.list.setMouseTracking(True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.itemDoubleClicked.connect(lambda it: self.activated.emit(it.data(ROLE)))
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._menu)
         lay.addWidget(self.list, 1)
         self.placeholder = label("vMix n'est pas connecté.\nVérifie l'adresse dans les réglages\n"
                                  "(API TCP, port 8099).", "Hint", True)
         self.placeholder.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.placeholder, 1)
         lay.addWidget(label("Glisse un ou plusieurs inputs sur le deck. Double-clic : l'assigner à la touche "
-                            "sélectionnée, puis passer à la suivante.", "Hint", True))
+                            "sélectionnée, puis passer à la suivante. Clic droit : remplir une rangée.", "Hint", True))
+
+    def selected_titles(self) -> list[str]:
+        """Inputs sélectionnés, dans l'ordre de vMix."""
+        return [self.list.item(r).data(ROLE) for r in range(self.list.count()) if self.list.item(r).isSelected()]
+
+    def _menu(self, pos):
+        titles = self.selected_titles()
+        m = QMenu(self)
+        act = m.addAction(f"Remplir la rangée avec {len(titles)} input{'s' if len(titles) > 1 else ''}…"
+                          if titles else "Remplir la rangée…", lambda: self.fill_requested.emit(titles))
+        act.setToolTip("À partir de la touche sélectionnée sur le deck")
+        m.exec(self.list.viewport().mapToGlobal(pos))
 
     def drop_mode(self) -> str:
         return self.mode.currentData()
@@ -226,6 +241,11 @@ class PresetsPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher : intercom, http, page…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        lay.addWidget(self.search)
         self.list = _PresetList()
         self.list.setItemDelegate(_PresetDelegate(self.list))
         self.list.setDragEnabled(True)
@@ -258,6 +278,25 @@ class PresetsPage(QWidget):
                     it.setData(role, v)
                 it.setToolTip(desc)
                 self.list.addItem(it)
+        self._filter(self.search.text())
+
+    def _filter(self, text: str) -> None:
+        """Filtre sur nom, description et catégorie ; un en-tête disparaît si plus rien ne le suit."""
+        words = [w for w in text.lower().split() if w]
+        head, shown = None, 0
+        for row in range(self.list.count()):
+            it = self.list.item(row)
+            if it.data(ROLE + 2) == "head":
+                if head is not None:
+                    head.setHidden(shown == 0)
+                head, shown = it, 0
+                continue
+            hay = f"{head.data(ROLE + 4) if head else ''} {it.data(ROLE)} {it.data(ROLE + 4)} {it.data(ROLE + 5)}".lower()
+            ok = all(w in hay for w in words)
+            it.setHidden(not ok)
+            shown += ok
+        if head is not None:
+            head.setHidden(shown == 0)
 
 
 class LibraryPanel(QFrame):
@@ -267,7 +306,8 @@ class LibraryPanel(QFrame):
     def __init__(self, engine):
         super().__init__()
         self.setObjectName("Side")
-        self.setFixedWidth(290)
+        self.setMinimumWidth(250)
+        self.setMaximumWidth(520)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(12)

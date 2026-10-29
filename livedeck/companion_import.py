@@ -1,15 +1,14 @@
 """Import d'un export Bitfocus Companion (.companionconfig) vers LiveDeck."""
 from __future__ import annotations
 
+import copy
 import json
 import re
 
 from . import feedback
 from .actions import new_action
-from .model import default_config, key, new_button, new_page, normalize_config
+from .model import deck_size, default_config, key, new_button, new_page, normalize_config
 from .vmix import norm
-
-SURFACE_SIZES = {"xl": (8, 4), "mini": (3, 2), "plus": (4, 2), "neo": (4, 2), "pedal": (3, 1)}
 
 
 def _color(v, default="#000000") -> str:
@@ -27,19 +26,67 @@ def _input(v) -> str:
 
 
 def _size(model: str) -> tuple[int, int]:
-    low = (model or "").lower()
-    for k, s in SURFACE_SIZES.items():
-        if k in low:
-            return s
-    return (5, 3)
+    return deck_size(model)  # une seule table, dans model.py
+
+
+def _mix_of(o: dict) -> int:
+    """Mix Companion (0 = Master, -1 = « mix sélectionné ») -> mix LiveDeck (1 = Master)."""
+    try:
+        return max(1, int(o.get("mix") or 0) + 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+# Variables Companion (module vMix / interne) -> jetons LiveDeck (voir livedeck/vars.py)
+_INPUT_PROPS = {"name": "input_title", "title": "input_title", "short_title": "input_title",
+                "shorttitle": "input_title", "number": "input_number", "state": "input_state",
+                "remaining": "remaining", "duration": "duration", "position": "position", "volume": "volume"}
+
+
+def _var(body: str) -> str | None:
+    ns, _, var = body.partition(":")
+    var = var.strip()
+    if ns == "vmix":
+        m = re.fullmatch(r"input_(.+?)_(%s)(?:_[a-z0-9_.]+)?" % "|".join(_INPUT_PROPS), var)
+        if m:
+            return f"$(vmix:{_INPUT_PROPS[m.group(2)]}:{m.group(1)})"
+        m = re.fullmatch(r"(?:mix_(\d+)_)?(program|preview)(?:_(name|title|short_title|number))?", var)
+        if m:
+            what = "number" if (m.group(3) or "number") == "number" else "title"
+            mix = f":{m.group(1)}" if m.group(1) and m.group(1) != "1" else ""
+            return f"$(vmix:{m.group(2)}_{what}{mix})"
+        m = re.fullmatch(r"(recording|streaming|external|multicorder)_(?:duration|hhmmss|hh_mm_ss)", var)
+        if m:
+            return f"$(vmix:{m.group(1)}_duration)"
+    if ns == "internal":
+        if var in ("time_hm", "time_h_m"):
+            return "$(time:hm)"
+        if var.startswith("time"):
+            return "$(time)"
+        if var.startswith("date"):
+            return "$(date)"
+    return None
 
 
 class _Converter:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, preview_then: str = "none"):
         self.types = {cid: c.get("instance_type", "") for cid, c in (data.get("instances") or {}).items()}
         self.types["internal"] = "internal"
         self.notes: list[str] = []
         self.where = ""
+        self.preview_then = preview_then or "none"
+        self.counts = {"preview": 0, "selected_mix": 0, "vars": 0}
+
+    def label(self, text: str) -> str:
+        """Libellé : les variables Companion connues deviennent des textes dynamiques LiveDeck."""
+        def sub(m):
+            new = _var(m.group(1))
+            if new is None:
+                self.note(f"variable « {m.group(0)} » non reprise (affichée telle quelle)")
+                return m.group(0)
+            self.counts["vars"] += 1
+            return new
+        return re.sub(r"\$\(([A-Za-z0-9_-]+:[^)]*)\)", sub, text)
 
     def note(self, msg: str) -> None:
         self.notes.append(f"{self.where} : {msg}")
@@ -94,13 +141,19 @@ class _Converter:
         return str(o.get("keyPress") or o.get("keyRelease") or o.get("key") or "")
 
     def _vmix(self, d: str, o: dict) -> dict | None:
-        mix = int(o.get("mix") or 0) + 1 if not isinstance(o.get("mix"), list) else 1
+        mix = _mix_of(o) if not isinstance(o.get("mix"), list) else 1
+        if str(o.get("mix")) == "-1":
+            self.counts["selected_mix"] += 1
         if d == "programCut":
             return new_action("vmix.program", input=_input(o.get("input")), mix=mix)
         if d == "previewInput":
-            return new_action("vmix.preview", input=_input(o.get("input")), mix=mix)
+            self.counts["preview"] += 1
+            return new_action("vmix.preview", input=_input(o.get("input")), mix=mix, then=self.preview_then)
         if d == "transition":
-            return new_action("vmix.transition", effect=o.get("functionID", "Cut"), mix=mix)
+            effect = o.get("functionID") or "Cut"
+            if effect == "FadeToBlack":  # interrupteur vMix, pas une transition
+                return new_action("vmix.production", what="fadetoblack")
+            return new_action("vmix.transition", effect=effect, mix=mix)
         if d == "overlayFunctions":
             mode = {"OverlayInput": "toggle", "OverlayInputIn": "in", "OverlayInputOut": "out",
                     "OverlayInputOff": "off", "PreviewOverlayInput": "preview"}.get(o.get("type"), "toggle")
@@ -115,7 +168,9 @@ class _Converter:
             name, params = m.group(1), m.group(2)
             if name.lower() == "cut" and not params:
                 return new_action("vmix.transition", effect="Cut")
-            return new_action("vmix.function", function=name, params=params.replace(" ", "&"))
+            # « SetText Input=T Value=Bonjour le monde » : seul l'espace devant « Clé= » sépare deux paramètres
+            params = re.sub(r"\s+(?=[A-Za-z][A-Za-z0-9_]*=)", "&", params.strip())
+            return new_action("vmix.function", function=name, params=params)
         what = {"startStopRecording": "recording", "startStopStreaming": "streaming",
                 "startStopExternal": "external", "startStopMultiCorder": "multicorder"}.get(d)
         if what:
@@ -133,8 +188,7 @@ class _Converter:
             d, o, style = f.get("definitionId", ""), f.get("options") or {}, f.get("style") or {}
             if "vmix" in mod and d in ("inputLive", "inputPreview"):
                 out.append(feedback.fb("program" if d == "inputLive" else "preview", _color(o.get("bg")),
-                                       _color(o.get("fg")), input=_input(o.get("input")),
-                                       mix=int(o.get("mix") or 0) + 1))
+                                       _color(o.get("fg")), input=_input(o.get("input")), mix=_mix_of(o)))
             elif "vmix" in mod and d == "overlayStatus":
                 inp, n = _input(o.get("input")), int(o.get("overlay") or 1)
                 out.append(feedback.fb("overlay", _color(o.get("bgProgram")), _color(o.get("fg")),
@@ -161,6 +215,7 @@ class _Converter:
         sets = step.get("action_sets") or {}
         down, up = sets.get("down") or [], sets.get("up") or []
         text = re.sub(r"\s+\n", "\n", str(style.get("text") or "").replace("\r\n", "\n")).strip()
+        text = self.label(text)
         size = str(style.get("size") or "auto")
         b = new_button(label=text, bg=_color(style.get("bgcolor")), fg=_color(style.get("color"), "#ffffff"),
                        size=int(size) if size.isdigit() and size not in ("14",) else 0)
@@ -192,10 +247,17 @@ class _Converter:
                 int(c.get("overlay") or 0), c.get("where", ""))
 
 
-def import_companion(path) -> tuple[dict, list[str]]:
+def import_companion(path, preview_then: str = "none", integrations: bool = False) -> tuple[dict, list[str]]:
+    """Convertit un export Companion. Renvoie (configuration, rapport).
+
+    preview_then : « 2e appui » donné aux touches previewInput importées (« none » = preview simple,
+    comme dans Companion ; « Cut », « Fade »… = un 2e appui sur l'input déjà en preview l'envoie à l'antenne).
+    integrations : convertit aussi les bricolages Intercom (raccourcis maintenus), overlays orchestream (requêtes
+    show / hide) et tallys (reconnect + pings) vers py-intercom, orchestream et Tally32. Désactivé par défaut :
+    sans ces logiciels, les touches restent telles qu'elles étaient dans Companion."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    conv = _Converter(data)
+    conv = _Converter(data, preview_then)
     cfg = default_config()
     cfg["pages"] = []
 
@@ -238,7 +300,24 @@ def import_companion(path) -> tuple[dict, list[str]]:
     if vmix_conf:
         cfg["vmix"] = {"host": vmix_conf.get("host", "127.0.0.1"), "port": int(vmix_conf.get("tcpPort", 8099))}
     from .integrations import migrate
-    report[0:0] = migrate(cfg)
+    if integrations:
+        report[0:0] = migrate(cfg)
+    elif migrate(copy.deepcopy(cfg)):  # simple essai : on signale ce qui pourrait être converti
+        report.append("Des touches ressemblent à des intégrations py-intercom, orchestream ou Tally32 (raccourcis "
+                      "Intercom, overlays web, tallys) : elles sont gardées telles quelles. Réimporte en cochant "
+                      "« Convertir vers les intégrations natives » pour les relier directement.")
     report.insert(0, f"{total} boutons importés sur {len(cfg['pages'])} pages, {len(cfg['decks'])} Stream Deck(s) associés.")
+    n = conv.counts
+    if n["preview"] and conv.preview_then != "none":
+        report.append(f"{n['preview']} action(s) Preview : un 2e appui sur l'input déjà en preview l'envoie à "
+                      f"l'antenne ({conv.preview_then}).")
+    elif n["preview"]:
+        report.append(f"{n['preview']} action(s) Preview importées telles quelles : un 2e appui ne fait que "
+                      "renvoyer la preview. Pour qu'il passe à l'antenne, règle « 2e appui » dans l'inspecteur "
+                      "(ou utilise une touche Take).")
+    if n["selected_mix"]:
+        report.append(f"{n['selected_mix']} action(s) sur le « mix sélectionné » de Companion reprises sur le Master.")
+    if n["vars"]:
+        report.append(f"{n['vars']} variable(s) Companion converties en textes dynamiques.")
     report.extend(conv.notes)
     return normalize_config(cfg), report

@@ -2,23 +2,30 @@
 from __future__ import annotations
 
 import copy
+import html
 import json
+import threading
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
                                QWidget)
 
 from .. import feedback, presets
-from ..actions import ACTIONS, CATEGORIES, change_type, new_action, summary
+from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_action, next_press, summary,
+                       to_take)
 from ..feedback import CONDITIONS
+from ..integrations import integration_status, probe_intercom, probe_orchestream, probe_tally
 from ..model import normalize_button, parse_key
 from ..render import render
 from ..webreq import parse_curl
 from . import theme as T
 from .deck_view import pil_to_pixmap
-from .widgets import ColorRow, Seg, dot_icon, fill_types, form, label, make_field, section, short_label
+from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
+                      section, short_label, tame_combo)
+
+INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32"}
 
 
 def _card() -> tuple[QFrame, QVBoxLayout]:
@@ -30,11 +37,90 @@ def _card() -> tuple[QFrame, QVBoxLayout]:
     return f, lay
 
 
+def _dot(ok) -> str:
+    return f"<span style='color:{T.OK if ok else T.FAINT if ok is None else T.DANGER}'>●</span>&nbsp; "
+
+
+def wrap(lb: QLabel) -> QLabel:
+    """Texte qui passe à la ligne et n'impose jamais sa largeur à la colonne."""
+    lb.setWordWrap(True)
+    lb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    return lb
+
+
+class _Scroll(QScrollArea):
+    """Défilement vertical seulement : une molette inclinée ou un pavé tactile ne décale jamais la colonne."""
+
+    def wheelEvent(self, e):
+        if e.angleDelta().y() == 0 and e.angleDelta().x() != 0:
+            e.ignore()
+            return
+        super().wheelEvent(e)
+
+
+class Tile(QPushButton):
+    """Tuile « nom + description » : la description passe sur 2 lignes, au-delà elle est raccourcie (…)
+    au lieu de déborder."""
+
+    def __init__(self, name: str, sub: str):
+        super().__init__(f"{name}\n{sub}")
+        self.setObjectName("Tile")
+        self._lines = (name, sub)
+        self.setFixedHeight(self.fontMetrics().lineSpacing() * 3 + 24)
+
+    def resizeEvent(self, e):
+        fm, w = self.fontMetrics(), max(20, self.width() - 30)
+        lines, cur = [], ""
+        for word in self._lines[1].split():
+            t = f"{cur} {word}".strip()
+            if cur and not lines and fm.horizontalAdvance(t) > w:
+                lines.append(cur)
+                cur = word
+            else:
+                cur = t
+        lines.append(cur)
+        self.setText("\n".join(fm.elidedText(t, Qt.ElideRight, w) for t in (self._lines[0], *lines)))
+        super().resizeEvent(e)
+
+
+class _Probe(QObject):
+    done = Signal(str, object, str)  # intégration, état, message
+
+
+def probe(engine, key: str) -> tuple[bool | None, str]:
+    """Test immédiat d'une intégration avec les réglages enregistrés (bouton « Tester la connexion »)."""
+    integ = engine.cfg.get("integrations", {})
+    if key == "intercom":
+        ic = integ.get("intercom") or {}
+        return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
+    if key == "orchestream":
+        return probe_orchestream((integ.get("orchestream") or {}).get("url", ""))
+    devices = integ.get("tallies") or []
+    if not devices:
+        return None, "Aucun tally renseigné : Réglages → Intégrations."
+    res = [(d.get("name") or d.get("host"), *probe_tally(d.get("host", ""))) for d in devices]
+    oks = [ok for _, ok, _ in res]
+    return (False if False in oks else None if None in oks else True), "  ·  ".join(f"{n} : {m}" for n, _, m in res)
+
+
+def integration_line(engine, key: str, a: dict | None = None) -> tuple[bool | None, str]:
+    """État en direct d'une intégration, précisé pour l'action (bus, overlay) quand c'est utile."""
+    st = next(((ok, text) for k, _, ok, text in integration_status(engine) if k == key), (None, ""))
+    ok, text = st
+    a = a or {}
+    if key == "intercom" and a.get("bus") and a.get("mode") != "alloff":
+        why = engine.intercom.unavailable(a["bus"])
+        if why:
+            ok, text = False, f"{why} : {text}"
+    return ok, text
+
+
 class Inspector(QFrame):
     def __init__(self, engine, main):
         super().__init__()
         self.setObjectName("Side")
-        self.setFixedWidth(384)
+        self.setMinimumWidth(360)
+        self.setMaximumWidth(680)
         self.engine, self.main = engine, main
         self.page_id: str | None = None
         self.key: str | None = None
@@ -42,23 +128,33 @@ class Inspector(QFrame):
         self._last = None
         self.side = "actions"  # liste affichée : actions / actions_off (interrupteur)
         self.step = 0
+        self.locked = False
         self.preview: QLabel | None = None
         self.auto_desc: QLabel | None = None
         self.steps: QListWidget | None = None
+        self.next_lbl: QLabel | None = None
+        self._integ_lbls: list = []  # (QLabel, intégration, action) mis à jour en direct
+        self._pick_text, self._pick_cat = "", ""
+        self._probe = _Probe(self)
+        self._probe.done.connect(self._probe_done)
+        self._probe_lbls: dict = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.scroll = QScrollArea()
+        self.scroll = _Scroll()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.inner = QWidget()
         self.inner.setObjectName("Transparent")
+        # filet de sécurité : le contenu prend toujours la largeur de la colonne, jamais plus (pas de
+        # défilement horizontal caché qui décalerait les éléments)
+        self.inner.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.v = QVBoxLayout(self.inner)
         self.v.setContentsMargins(20, 20, 20, 10)
         self.v.setSpacing(10)
         self.scroll.setWidget(self.inner)
-        self.lock_banner = label("🔒  Mode Live : édition verrouillée  ·  F5 pour modifier", "Toast")
+        self.lock_banner = wrap(label("🔒  Mode Live : édition verrouillée  ·  F5 pour modifier", "Toast"))
         self.lock_banner.setContentsMargins(20, 14, 20, 0)
         self.lock_banner.hide()
         outer.addWidget(self.lock_banner)
@@ -69,9 +165,11 @@ class Inspector(QFrame):
         bl.setContentsMargins(20, 10, 20, 20)
         self.test_btn = QPushButton("▶  Tester")
         self.test_btn.setObjectName("Primary")
-        self.test_btn.setToolTip("Déclenche la touche comme sur le Stream Deck (maintenir = maintenu)")
-        self.test_btn.pressed.connect(lambda: self.engine.press(self.page_id, self.key, True))
-        self.test_btn.released.connect(lambda: self.engine.press(self.page_id, self.key, False))
+        self.test_btn.setToolTip("Déclenche la touche comme sur le Stream Deck (maintenir = maintenu, "
+                                 "sans la sécurité « maintenir pour déclencher »)  ·  Entrée")
+        self._test_key = None  # touche figée à l'appui : le relâché va toujours à la même
+        self.test_btn.pressed.connect(self._test_down)
+        self.test_btn.released.connect(self._test_up)
         self.clear_btn = QPushButton("Effacer")
         self.clear_btn.setObjectName("Danger")
         self.clear_btn.clicked.connect(self.main.delete_selected)
@@ -81,10 +179,14 @@ class Inspector(QFrame):
         self.rebuild()
 
     def set_locked(self, locked: bool) -> None:
-        """En Live, on ne peut plus rien modifier par erreur ; « Tester » reste disponible."""
+        """En Live, l'éditeur laisse place à une vue d'exploitation (rien ne se modifie par erreur) ;
+        « Tester » reste disponible."""
+        if locked == self.locked:
+            return
+        self.locked = locked
         self.lock_banner.setVisible(locked)
-        self.inner.setEnabled(not locked)
-        self.clear_btn.setEnabled(not locked)
+        self.clear_btn.setVisible(not locked)
+        self.rebuild()
 
     # -- chargement -----------------------------------------------------------
     @staticmethod
@@ -108,6 +210,17 @@ class Inspector(QFrame):
         else:
             self.load(self.page_id, self.key)
 
+    def _test_down(self) -> None:
+        if self.page_id and self.key:
+            self._test_key = (self.page_id, self.key)
+            self.engine.press(self.page_id, self.key, True, test=True)
+
+    def _test_up(self) -> None:
+        if self._test_key:
+            page_id, k = self._test_key
+            self._test_key = None
+            self.engine.press(page_id, k, False, test=True)
+
     def commit(self, coalesce: str | None = None, rebuild: bool = False) -> None:
         self._last = self._sig(self.b)
         self.engine.set_button(self.page_id, self.key, copy.deepcopy(self.b) if self.b else None, coalesce)
@@ -117,14 +230,26 @@ class Inspector(QFrame):
             if self.auto_desc is not None and self.b:
                 self.auto_desc.setText(self._auto_text())
             self._refresh_step_texts()
+            try:
+                self._title()
+            except (AttributeError, RuntimeError):  # en-tête pas encore construit
+                pass
         self.refresh_preview()
 
     def refresh_preview(self) -> None:
-        if self.preview is None:
-            return
+        """Rafraîchissement en direct (événements « state ») : aperçu, prochain appui, état des intégrations."""
         real = self.engine.button(self.page_id, self.key) if self.page_id and self.key else None
-        dpr = self.devicePixelRatioF()
-        self.preview.setPixmap(pil_to_pixmap(render(self.engine.visual(real), int(64 * dpr)), dpr))
+        if self.preview is not None:
+            dpr = self.devicePixelRatioF()
+            size = self.preview.width()
+            self.preview.setPixmap(pil_to_pixmap(render(self.engine.visual(real), int(size * dpr)), dpr))
+        if self.next_lbl is not None:
+            nxt = next_press(self.engine, real) if real else ""
+            self.next_lbl.setVisible(bool(nxt))
+            self.next_lbl.setText(f"Prochain appui : <b>{html.escape(nxt)}</b>")
+        for lb, key, a in self._integ_lbls:
+            ok, text = integration_line(self.engine, key, a)
+            lb.setText(_dot(ok) + f"<b>{INTEG_NAMES[key]}</b> · " + html.escape(text))
 
     # -- construction ---------------------------------------------------------
     def rebuild(self) -> None:
@@ -137,24 +262,32 @@ class Inspector(QFrame):
             elif it.layout():
                 _drop_layout(it.layout())
                 it.layout().deleteLater()
-        self.preview = self.auto_desc = self.steps = None
+        self.preview = self.auto_desc = self.steps = self.next_lbl = None
+        self._integ_lbls = []
         if not self.page_id or not self.key:
             self.bottom.hide()
             hint = label("Clique une touche du deck,\nou appuie-la directement sur le Stream Deck.", "Hint", True)
             hint.setAlignment(Qt.AlignCenter)
             self.v.addStretch()
-            self.v.addWidget(hint)
+            self.v.addWidget(wrap(hint))
             self.v.addStretch()
             return
         self.bottom.setVisible(self.b is not None)
         self._header()
-        if self.b is None:
-            self._tiles()
+        if self.locked:
+            if self.b is None:
+                self.v.addWidget(wrap(label("Touche vide. Repasse en Édition (F5) pour lui donner une action.",
+                                            "Hint")))
+            else:
+                self._live_view()
+        elif self.b is None:
+            self._picker()
         else:
             self._appearance()
             self._actions()
             self._feedbacks()
         self.v.addStretch()
+        self.refresh_preview()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(scroll))
 
     def _header(self):
@@ -163,60 +296,252 @@ class Inspector(QFrame):
         row.setSpacing(12)
         if self.b is not None:
             self.preview = QLabel()
-            self.preview.setFixedSize(64, 64)
-            row.addWidget(self.preview)
+            size = 96 if self.locked else 64
+            self.preview.setFixedSize(size, size)
+            row.addWidget(self.preview, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(6)
         r, c = parse_key(self.key)
-        title = (self.b or {}).get("label", "").split("\n")[0].strip()
-        if not title and self.b and self.b["actions"]:
-            title = summary(self.b["actions"][0])
-        h1 = label(title or ("Touche vide" if self.b is None else "Sans texte"), "H1")
-        h1.setMaximumWidth(270)
-        col.addWidget(h1)
-        chips = QHBoxLayout()
-        chips.setSpacing(6)
+        self.h1 = wrap(label("", "H1"))
+        self._title()
+        col.addWidget(self.h1)
+        chips = FlowLayout(spacing=6)
         page = self.engine.page(self.page_id)
         chips.addWidget(label(f"Rangée {r + 1} · Col. {c + 1}", "Chip"))
         if page:
             chips.addWidget(label(page["name"], "Chip"))
-        chips.addStretch()
+        if self.b and self.b.get("mode") == "toggle":
+            chips.addWidget(label("Interrupteur", "Chip"))
+        if self.b and self.b.get("confirm"):
+            chips.addWidget(label("Sécurité ½ s", "Chip"))
         col.addLayout(chips)
         row.addLayout(col, 1)
         self.v.addLayout(row)
-        self.refresh_preview()
+        if self.b is not None:
+            self.next_lbl = wrap(label("", "Toast"))
+            self.next_lbl.setTextFormat(Qt.RichText)
+            self.next_lbl.setToolTip("D'après l'état actuel de vMix : vert = en preview (prêt à prendre), "
+                                     "rouge = à l'antenne")
+            self.next_lbl.hide()
+            self.v.addWidget(self.next_lbl)
 
-    def _tiles(self):
+    def _title(self):
+        b = self.b or {}
+        full = b.get("label", "").replace("\n", " ").strip()
+        title = b.get("label", "").split("\n")[0].strip()
+        if not title and b.get("actions"):
+            title = summary(b["actions"][0])
+        self.h1.setText(title or ("Touche vide" if self.b is None else "Sans texte"))
+        self.h1.setToolTip(full or title)
+
+    # -- touche vide : tout ce qu'elle peut devenir -----------------------------------
+    def _picker(self):
         self.v.addLayout(section("Que doit faire cette touche ?"))
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        for i, pid in enumerate(presets.TILES):
-            cat, name, desc, _ = presets.PRESETS[pid]
-            b = QPushButton(f"{name}\n{desc}")
-            b.setObjectName("Tile")
-            b.setStyleSheet(f"QPushButton#Tile{{border-left:3px solid {CATEGORIES.get(cat, T.MUTED)};}}")
+        search = QLineEdit(self._pick_text)
+        search.setPlaceholderText("Rechercher : take, intercom, overlay, http…")
+        search.setClearButtonEnabled(True)
+        self.v.addWidget(search)
+        chips_box = QWidget()
+        chips = FlowLayout(chips_box, spacing=4)
+        self._chips = {}
+        groups = presets.catalog(self.engine)
+        for cat in [""] + [c for c, _ in groups]:
+            b = QPushButton(cat or "Tout")
+            b.setObjectName("Chip")
+            b.setCheckable(True)
+            b.setChecked(cat == self._pick_cat)
             b.setCursor(Qt.PointingHandCursor)
-            b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            b.setMinimumHeight(50)
-            b.setToolTip(desc)
-            b.clicked.connect(lambda _=False, p=pid: self._create(p))
-            grid.addWidget(b, i // 2, i % 2)
-        self.v.addLayout(grid)
-        self.v.addWidget(label("Ou glisse un input vMix ou un bouton de la bibliothèque sur la touche.", "Hint", True))
+            color = CATEGORIES.get(cat, T.ACCENT)
+            b.setStyleSheet(f"QPushButton#Chip:checked{{color:#0b0d10;background:{color};border-color:{color}}}")
+            b.clicked.connect(lambda _=False, c=cat: self._pick_filter(cat=c))
+            chips.addWidget(b)
+            self._chips[cat] = b
+        self.v.addWidget(chips_box)
+        self.pick_box = QWidget()
+        self.pick_lay = QVBoxLayout(self.pick_box)
+        self.pick_lay.setContentsMargins(0, 0, 0, 0)
+        self.pick_lay.setSpacing(8)
+        self.v.addWidget(self.pick_box)
+        search.textChanged.connect(lambda t: self._pick_filter(text=t))
+        self.pick_search = search
+        self._fill_picker()
+        self.v.addWidget(wrap(label("Ou glisse un input vMix ou un bouton de la bibliothèque sur la touche.",
+                                    "Hint")))
         if self.main.clipboard:
-            paste = QPushButton("Coller le bouton copié")
+            paste = QPushButton("Coller la touche copiée")
             paste.clicked.connect(self.main.paste)
             self.v.addWidget(paste)
 
+    def _pick_filter(self, text: str | None = None, cat: str | None = None):
+        if text is not None:
+            self._pick_text = text
+        if cat is not None:
+            self._pick_cat = cat
+            for c, b in self._chips.items():
+                b.setChecked(c == cat)
+        self._fill_picker()
+
+    def picker_items(self) -> list[tuple[str, list]]:
+        """Groupes affichés après filtre (catégorie choisie + recherche sur nom, description, catégorie)."""
+        words = [w for w in self._pick_text.lower().split() if w]
+        out = []
+        for cat, items in presets.catalog(self.engine):
+            if self._pick_cat and cat != self._pick_cat:
+                continue
+            keep = [it for it in items if all(w in f"{cat} {it[0]} {it[1]} {it[2]}".lower() for w in words)]
+            if keep:
+                out.append((cat, keep))
+        return out
+
+    def _fill_picker(self):
+        _drop_layout(self.pick_lay)
+        groups = self.picker_items()
+        if not groups:
+            self.pick_lay.addWidget(wrap(label("Rien ne correspond. Essaie « vmix », « web », « clavier »…",
+                                               "Hint")))
+        for cat, items in groups:
+            color = CATEGORIES.get(cat, T.MUTED)
+            head = label(cat.upper(), "H2")
+            head.setStyleSheet(f"color:{color}")
+            self.pick_lay.addWidget(head)
+            grid = QGridLayout()
+            grid.setSpacing(6)
+            for i, (pid, name, desc, setup) in enumerate(items):
+                sub = ({"intercom": "py-intercom injoignable",
+                        "always_on": "toujours ouvert dans py-intercom : rien à piloter"}.get(setup)
+                       or f"à configurer · {INTEG_NAMES.get(setup, setup)}") if setup else desc
+                b = Tile(name, sub)
+                b.setProperty("pid", pid)
+                b.setStyleSheet(f"QPushButton#Tile{{border-left:3px solid {color};"
+                                + (f"color:{T.MUTED};" if setup else "") + "}")
+                b.setCursor(Qt.PointingHandCursor)
+                b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+                b.setToolTip(f"{name} : {desc}" + (
+                    "\nCe bus est en mode « Toujours actif » dans py-intercom : change son mode dans le client "
+                    "pour le piloter d'ici." if setup == "always_on" else
+                    "\nÀ vérifier dans Réglages → Intégrations : la touche est créée quand même." if setup else ""))
+                b.clicked.connect(lambda _=False, p=pid: self._create(p))
+                grid.addWidget(b, i // 2, i % 2)
+            self.pick_lay.addLayout(grid)
+
     def _create(self, pid: str):
-        self.b = presets.make(pid, self.engine)
+        b = presets.make(pid, self.engine)
+        if not b:
+            return
+        self.b = b
         self.side, self.step = "actions", 0
         self.commit(rebuild=True)
+        if pid in presets.NEEDS_INPUT:  # Take, Program… : on demande tout de suite l'input
+            QTimer.singleShot(0, self.focus_input)
+
+    def focus_input(self, popup: bool = True):
+        """Place le curseur dans le choix de l'input (et ouvre la liste des inputs vMix) ; renvoie ce champ."""
+        combos = [c for c in self.inner.findChildren(InputCombo) if c.isVisibleTo(self.inner)]
+        if not combos:
+            return None
+        c = combos[0]
+        self.scroll.ensureWidgetVisible(c, 0, 60)
+        c.combo.setFocus()
+        c.combo.lineEdit().selectAll()
+        if popup and c.combo.count() and self.window().isVisible():
+            c.combo.showPopup()
+        return c
+
+    # -- mode Live : vue d'exploitation ------------------------------------------------
+    def _live_view(self):
+        b = self.b
+        self.v.addLayout(section("Actions"))
+        names = self.engine.page_names()
+        lists = ([("À l'activation", b["actions"]), ("À la désactivation", b["actions_off"])]
+                 if b["mode"] == "toggle" else [("Appui", b["actions"]), ("Appui long", b["long_actions"])])
+        for title, lst in lists:
+            if not lst:
+                continue
+            text = "<br>".join(f"{i + 1}.&nbsp; {html.escape(summary(a, names))}" for i, a in enumerate(lst))
+            lb = wrap(label(f"<span style='color:{T.MUTED}'>{title}</span><br>{text}"))
+            lb.setTextFormat(Qt.RichText)
+            self.v.addWidget(lb)
+        if not b["actions"] and not b["actions_off"] and not b["long_actions"]:
+            self.v.addWidget(label("Aucune action.", "Hint"))
+        missing = self.engine.unresolved_inputs(b)
+        if missing:
+            w = wrap(label("⚠  Introuvable dans vMix : " + ", ".join(f"« {m} »" for m in missing), "Hint"))
+            w.setStyleSheet(f"color:{T.WARN}")
+            self.v.addWidget(w)
+        self._integration_rows(b)
+        self.v.addLayout(section("Retour d'état"))
+        self.v.addWidget(wrap(label(self._auto_text(), "Hint")))
+
+    def _integration_rows(self, b: dict, lay=None):
+        used = []
+        for a in b["actions"] + b["actions_off"] + b["long_actions"]:
+            k = INTEGRATION_OF.get(a.get("type"))
+            if k and k not in [u for u, _ in used]:
+                used.append((k, a))
+        for f in b.get("feedbacks") or []:
+            k = INTEGRATION_OF.get((f.get("cond") or {}).get("type"))
+            if k and k not in [u for u, _ in used]:
+                used.append((k, None))
+        for k, a in used:
+            (lay or self.v).addWidget(self._integ_status(k, a))
+
+    def _integ_status(self, key: str, a: dict | None) -> QWidget:
+        """État en direct d'une intégration + « Tester la connexion » et « Réglages… »."""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        lb = wrap(label("", "Hint"))
+        lb.setTextFormat(Qt.RichText)
+        v.addWidget(lb)
+        self._integ_lbls.append((lb, key, a))
+        result = wrap(label("", "Hint"))
+        result.setTextFormat(Qt.RichText)
+        result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        result.hide()
+        v.addWidget(result)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        test = QPushButton("Tester la connexion")
+        test.setObjectName("Small")
+        test.setToolTip("Vérifie tout de suite la connexion avec les réglages enregistrés")
+        test.clicked.connect(lambda: self._run_probe(key, test, result))
+        row.addWidget(test)
+        st = QPushButton("Réglages…")
+        st.setObjectName("Ghost")
+        st.setToolTip("Réglages → Intégrations")
+        st.clicked.connect(lambda: self.main.open_settings("integ"))
+        row.addWidget(st)
+        row.addStretch()
+        v.addLayout(row)
+        return box
+
+    def _run_probe(self, key: str, btn: QPushButton, result: QLabel) -> None:
+        btn.setEnabled(False)
+        result.show()
+        result.setText(_dot(None) + "Test en cours…")
+        self._probe_lbls[key] = (btn, result)
+
+        def worker():
+            try:
+                ok, msg = probe(self.engine, key)
+            except Exception as e:  # le test ne doit jamais faire tomber l'interface
+                ok, msg = False, f"Erreur inattendue : {e}"
+            self._probe.done.emit(key, ok, msg)
+        threading.Thread(target=worker, name=f"test-{key}", daemon=True).start()
+
+    def _probe_done(self, key: str, ok, msg: str) -> None:
+        btn, result = self._probe_lbls.pop(key, (None, None))
+        try:
+            btn.setEnabled(True)
+            result.setText(_dot(ok) + html.escape(msg))
+        except (AttributeError, RuntimeError):  # inspecteur reconstruit entre-temps
+            pass
 
     # -- apparence ------------------------------------------------------------
     def _appearance(self):
         b = self.b
-        self.v.addLayout(section("Apparence"))
+        self.v.addLayout(section("Apparence", self._vars_button()))
         text = QPlainTextEdit(b["label"])
         text.setObjectName("Field")
         text.setPlaceholderText("Texte de la touche (Entrée = retour à la ligne)")
@@ -232,7 +557,7 @@ class Inspector(QFrame):
         fg.changed.connect(lambda v: self._set("fg", v))
         f.addRow(label("Texte", "Muted"), fg)
         row = QHBoxLayout()
-        size = QComboBox()
+        size = tame_combo(QComboBox())
         for v in [0, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40]:
             size.addItem("Taille auto" if v == 0 else f"{v} px", v)
         size.setCurrentIndex(max(0, size.findData(int(b.get("size") or 0))))
@@ -251,6 +576,64 @@ class Inspector(QFrame):
             row.addWidget(rm)
         f.addRow(label("Police", "Muted"), row)
         self.v.addLayout(f)
+
+    def _vars_button(self) -> QPushButton:
+        """« Variables… » : insère un texte dynamique (titre à l'antenne, temps restant, champ de titre…)."""
+        btn = QPushButton("Variables…")
+        btn.setObjectName("Ghost")
+        btn.setToolTip("Texte qui se met à jour tout seul sur la touche (titre à l'antenne, temps restant…)")
+        menu = QMenu(btn)
+        menu.aboutToShow.connect(lambda: self._fill_vars(menu))
+        btn.setMenu(menu)
+        return btn
+
+    def var_tokens(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """[(groupe, [(libellé, jeton)])] proposés par « Variables… »."""
+        st = self.engine.vmix.state
+        groups = [("vMix", [("Titre à l'antenne", "$(vmix:program_title)"),
+                            ("Titre en preview", "$(vmix:preview_title)"),
+                            ("Numéro à l'antenne", "$(vmix:program_number)"),
+                            ("Numéro en preview", "$(vmix:preview_number)"),
+                            ("Durée de l'enregistrement", "$(vmix:recording_duration)"),
+                            ("Durée du stream", "$(vmix:streaming_duration)")])]
+        refs = []
+        for a in (self.b or {}).get("actions", []) + (self.b or {}).get("long_actions", []):
+            if a.get("input") and a["input"] not in refs:
+                refs.append(a["input"])
+        for ref in refs[:3]:
+            inp = st.resolve(ref) or {}
+            items = [("Titre", f"$(vmix:input_title:{ref})"), ("Temps restant", f"$(vmix:remaining:{ref})"),
+                     ("Position", f"$(vmix:position:{ref})"), ("Durée", f"$(vmix:duration:{ref})"),
+                     ("Volume", f"$(vmix:volume:{ref})"), ("État", f"$(vmix:input_state:{ref})")]
+            items += [(f"Texte « {n} »", f"$(vmix:text:{ref}:{n})") for n in (inp.get("texts") or {})
+                      if not str(n).startswith("#")]
+            groups.append((f"Input « {ref} »", items))
+        groups.append(("Horloge", [("Heure (hh:mm:ss)", "$(time)"), ("Heure (hh:mm)", "$(time:hm)"),
+                                   ("Date", "$(date)")]))
+        return groups
+
+    def _fill_vars(self, menu: QMenu):
+        menu.clear()
+        for title, items in self.var_tokens():
+            menu.addSection(title)
+            for text, tok in items:
+                menu.addAction(text, lambda t=tok: self.insert_token(t)).setToolTip(tok)
+        st = self.engine.vmix.state
+        if st.inputs:
+            other = menu.addMenu("Un autre input…")
+            for i in st.inputs[:60]:
+                sub = other.addMenu(f"{i['number']}  {i['title']}")
+                ref = i["title"]
+                for text, tok in (("Titre", f"$(vmix:input_title:{ref})"), ("Temps restant", f"$(vmix:remaining:{ref})"),
+                                  ("Volume", f"$(vmix:volume:{ref})")):
+                    sub.addAction(text, lambda t=tok: self.insert_token(t))
+                for n in (i.get("texts") or {}):
+                    if not str(n).startswith("#"):
+                        sub.addAction(f"Texte « {n} »", lambda t=f"$(vmix:text:{ref}:{n})": self.insert_token(t))
+
+    def insert_token(self, tok: str) -> None:
+        self.label_edit.setFocus()
+        self.label_edit.insertPlainText(tok)
 
     def _pick_icon(self):
         path, _ = QFileDialog.getOpenFileName(self, "Icône", "", "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
@@ -281,17 +664,18 @@ class Inspector(QFrame):
             side.buttons["long_actions"].setText("Appui long" + (f"  ·  {len(self.b['long_actions'])}"
                                                                 if self.b["long_actions"] else ""))
         self.v.addWidget(side)
-        confirm = QCheckBox("Sécurité : maintenir ½ s pour déclencher")
-        confirm.setToolTip("Évite un appui accidentel (FTB, arrêt du stream…). Une jauge se remplit sur la touche.")
+        confirm = QCheckBox("Sécurité : maintenir ½ s")
+        confirm.setToolTip("Évite un appui accidentel (FTB, arrêt du stream…) : il faut maintenir la touche ½ s "
+                           "pour déclencher. Une jauge se remplit sur la touche.")
         confirm.setChecked(bool(self.b.get("confirm")))
         confirm.toggled.connect(lambda v: (self._set("confirm", v), self.rebuild()))
         self.v.addWidget(confirm)
         if self.side == "long_actions" and self.b.get("confirm"):
-            self.v.addWidget(label("Avec la sécurité, l'appui long déclenche déjà les actions de l'appui court : "
-                                   "cette liste est ignorée.", "Hint", True))
+            self.v.addWidget(wrap(label("Avec la sécurité, l'appui long déclenche déjà les actions de l'appui "
+                                        "court : cette liste est ignorée.", "Hint")))
         elif not toggle and self.b["long_actions"] and not self.b.get("confirm"):
-            self.v.addWidget(label("Un appui long est défini : l'appui court part au relâchement de la touche.",
-                                   "Hint", True))
+            self.v.addWidget(wrap(label("Un appui long est défini : l'appui court part au relâchement de la "
+                                        "touche.", "Hint")))
         lst = self.b[self.side]
         self.step = min(self.step, max(0, len(lst) - 1))
 
@@ -300,6 +684,7 @@ class Inspector(QFrame):
             self.steps.setObjectName("Steps")
             self.steps.setDragDropMode(QAbstractItemView.InternalMove)
             self.steps.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.steps.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             self.steps.setWordWrap(False)
             self.steps.setTextElideMode(Qt.ElideMiddle)
             self.steps.setUniformItemSizes(True)
@@ -357,6 +742,7 @@ class Inspector(QFrame):
             idx = it.data(Qt.UserRole)
             if idx is not None and idx < len(lst):
                 it.setText(f"{i + 1}.  {summary(lst[idx], names)}")
+                it.setToolTip(summary(lst[idx], names))
 
     def _step_editor(self, a: dict) -> QWidget:
         frame, lay = _card()
@@ -367,24 +753,44 @@ class Inspector(QFrame):
         lay.addWidget(types)
         spec = ACTIONS.get(a["type"], {"fields": [], "help": ""})
         if spec.get("help"):
-            lay.addWidget(label(spec["help"], "Hint", True))
+            lay.addWidget(wrap(label(spec["help"], "Hint")))
+        integ = INTEGRATION_OF.get(a["type"])
+        if integ:
+            self._integration_rows({"actions": [a], "actions_off": [], "long_actions": []}, lay)
         f = form()
         for fs in spec["fields"]:
+            if a["type"] == "vmix.preview" and fs["key"] == "duration" and (a.get("then") or "none") == "none":
+                continue  # durée : seulement utile si le 2e appui envoie à l'antenne
+            if a["type"] == "intercom.ptt" and a.get("mode") == "alloff" and fs["key"] in ("bus", "fallback_keys"):
+                continue  # « couper tous les bus » : ni bus ni raccourci de secours
             w = make_field(self.engine, fs, a.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names())
-            if fs["kind"] in ("bool", "input", "multiline", "hotkey"):
+            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text"):
                 if fs["kind"] != "bool":
                     f.addRow(label(short_label(fs), "Muted"))
                 f.addRow(w)
             else:
                 f.addRow(label(short_label(fs), "Muted"), w)
         lay.addLayout(f)
+        if a["type"] in ("vmix.preview", "vmix.program") and self.side == "actions" and self.step == 0 \
+                and self.b["mode"] != "toggle":
+            take = QPushButton("Convertir en Take")
+            take.setObjectName("Small")
+            take.setToolTip("Take : 1er appui = preview, 2e appui = antenne (même input, même mix)")
+            take.clicked.connect(self.convert_to_take)
+            lay.addWidget(take, 0, Qt.AlignLeft)
         if a["type"] == "http":
             curl = QPushButton("Coller une commande curl…")
             curl.setObjectName("Small")
             curl.clicked.connect(self._paste_curl)
-            lay.addWidget(curl)
+            lay.addWidget(curl, 0, Qt.AlignLeft)
         return frame
+
+    def convert_to_take(self):
+        nb = to_take(self.b)
+        if nb:
+            self.b = nb
+            self.commit(rebuild=True)
 
     def _set_mode(self, mode: str):
         if self.b["mode"] != mode:
@@ -467,10 +873,13 @@ class Inspector(QFrame):
                 self.label_edit.blockSignals(True)
                 self.label_edit.setPlainText(new_label)
                 self.label_edit.blockSignals(False)
+        if k in ("then", "bus", "mode") and a["type"] in ("vmix.preview", "intercom.ptt"):
+            self.commit(rebuild=True)  # champs affichés / état d'intégration qui en dépendent
+            return
         self.commit(coalesce=f"{self.side}.{self.step}.{k}")
 
     def _paste_curl(self):
-        text, ok = QInputDialog.getMultiLineText(self, "Commande curl", "Collez la commande curl :")
+        text, ok = QInputDialog.getMultiLineText(self, "Commande curl", "Colle la commande curl :")
         if not ok or not text.strip():
             return
         try:
@@ -500,7 +909,7 @@ class Inspector(QFrame):
         auto.setChecked(self.b.get("auto_feedback", True))
         auto.toggled.connect(lambda v: self._set("auto_feedback", v))
         self.v.addWidget(auto)
-        self.auto_desc = label(self._auto_text(), "Hint", True)
+        self.auto_desc = wrap(label(self._auto_text(), "Hint"))
         self.v.addWidget(self.auto_desc)
         for i, f in enumerate(self.b["feedbacks"]):
             self.v.addWidget(self._fb_card(i, f))
@@ -519,10 +928,10 @@ class Inspector(QFrame):
         spec = CONDITIONS.get(cond.get("type"), {"label": cond.get("type"), "fields": []})
         head = QHBoxLayout()
         head.addWidget(label("SI", "Chip"))
-        head.addWidget(label(spec["label"]))
-        head.addStretch()
+        head.addWidget(wrap(label(spec["label"])), 1)
         rm = QPushButton("✕")
         rm.setObjectName("Ghost")
+        rm.setToolTip("Supprimer ce retour d'état")
         rm.clicked.connect(lambda: self._remove_fb(i))
         head.addWidget(rm)
         lay.addLayout(head)
@@ -530,7 +939,7 @@ class Inspector(QFrame):
         for fs in spec["fields"]:
             w = make_field(self.engine, fs, cond.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_cond(i, k, v))
-            if fs["kind"] in ("input", "multiline"):
+            if fs["kind"] in ("input", "multiline", "text"):  # texte : toute la largeur (URL, chemin JSON…)
                 fl.addRow(label(short_label(fs), "Muted"))
                 fl.addRow(w)
             else:

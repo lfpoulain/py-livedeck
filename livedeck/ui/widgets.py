@@ -1,22 +1,97 @@
 """Petits composants réutilisables."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QStandardItem
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QCompleter, QFormLayout,
-                               QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox,
-                               QVBoxLayout, QWidget)
+                               QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QPlainTextEdit,
+                               QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
 from ..actions import ACTIONS, CATEGORIES, VMIX_FUNCTIONS
 from . import theme as T
 
 
+def typo(text: str) -> str:
+    """Espaces insécables du français : jamais de retour à la ligne dans « … » ni avant « : »."""
+    return (text or "").replace(" :", " :").replace("« ", "« ").replace(" »", " »")
+
+
 def label(text: str, name: str = "", wrap: bool = False) -> QLabel:
-    lb = QLabel(text)
+    lb = QLabel(typo(text))
     if name:
         lb.setObjectName(name)
     lb.setWordWrap(wrap)
     return lb
+
+
+def tame_combo(c: QComboBox, min_chars: int = 8) -> QComboBox:
+    """Une option longue (titre vMix, nom de tally…) ne doit jamais élargir la colonne : la liste fermée est
+    raccourcie, la liste ouverte reste assez large pour tout lire (widen_popup)."""
+    c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    c.setMinimumContentsLength(min_chars)
+    c.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    return c
+
+
+def widen_popup(c: QComboBox) -> None:
+    """À appeler une fois la liste remplie : le menu déroulant affiche les textes en entier."""
+    c.view().setMinimumWidth(min(640, c.view().sizeHintForColumn(0) + 32))
+
+
+class FlowLayout(QLayout):
+    """Disposition qui passe à la ligne quand la largeur manque (puces de catégories…)."""
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items = []
+        self._sp = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._place(QRect(0, 0, w, 0), False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        return s
+
+    def _place(self, rect, apply: bool) -> int:
+        x, y, line = rect.x(), rect.y(), 0
+        for it in self._items:
+            hint = it.sizeHint()
+            if x + hint.width() > rect.right() + 1 and line:
+                x, y, line = rect.x(), y + line + self._sp, 0
+            if apply:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._sp
+            line = max(line, hint.height())
+        return y + line - rect.y()
 
 
 def section(title: str, trailing: QWidget | None = None) -> QHBoxLayout:
@@ -37,6 +112,7 @@ def form() -> QFormLayout:
     f.setVerticalSpacing(8)
     f.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
     f.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    f.setRowWrapPolicy(QFormLayout.WrapLongRows)  # colonne étroite : le libellé passe au-dessus du champ
     return f
 
 
@@ -84,30 +160,32 @@ class Seg(QFrame):
 class ColorRow(QWidget):
     """Pastilles de couleurs + sélecteur libre. Valeur vide autorisée si allow_none."""
     changed = Signal(str)
+    COLS = 8
 
     def __init__(self, value: str, allow_none: bool = False, swatches=None):
         super().__init__()
         self.value = value or ""
-        lay = QHBoxLayout(self)
+        lay = QGridLayout(self)  # 8 pastilles par ligne : tient dans la colonne la plus étroite
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(3)
         self.btns = []
         items = ([""] if allow_none else []) + list(swatches or T.SWATCHES)
-        for c in items:
+        for i, c in enumerate(items):
             b = QPushButton("∅" if not c else "")
             b.setFixedSize(18, 18)
             b.setCursor(Qt.PointingHandCursor)
             b.setToolTip(c or "Aucune")
             b.clicked.connect(lambda _=False, c=c: self.set(c, True))
             b.setProperty("color", c)
-            lay.addWidget(b)
+            lay.addWidget(b, i // self.COLS, i % self.COLS)
             self.btns.append(b)
         self.custom = QPushButton("…")
         self.custom.setFixedSize(24, 18)
         self.custom.setToolTip("Couleur personnalisée")
         self.custom.clicked.connect(self._pick)
-        lay.addWidget(self.custom)
-        lay.addStretch()
+        n = len(items)
+        lay.addWidget(self.custom, n // self.COLS, n % self.COLS)
+        lay.setColumnStretch(self.COLS, 1)
         self._paint()
 
     def _paint(self):
@@ -157,6 +235,7 @@ class HotkeyEdit(QWidget):
         self.edit = QLineEdit(value)
         self.edit.setPlaceholderText("shift+a, ctrl+f5…")
         self.edit.textEdited.connect(self.changed.emit)
+        self.edit.setMinimumWidth(60)
         self.rec = QPushButton("● Enregistrer")
         self.rec.setObjectName("Small")
         self.rec.setCheckable(True)
@@ -165,7 +244,7 @@ class HotkeyEdit(QWidget):
         lay.addWidget(self.rec)
 
     def _toggle(self, on: bool):
-        self.rec.setText("Appuyez…" if on else "● Enregistrer")
+        self.rec.setText("Appuie…" if on else "● Enregistrer")
         if on:
             self.grabKeyboard()
         else:
@@ -206,12 +285,13 @@ class InputCombo(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(3)
-        self.combo = QComboBox()
+        self.combo = tame_combo(QComboBox(), 10)
         self.combo.setEditable(True)
         self.combo.setInsertPolicy(QComboBox.NoInsert)
         self.combo.setMaxVisibleItems(18)
         for i in engine.vmix.state.inputs:
             self.combo.addItem(f"{i['number']:>2}   {i['title']}", i["title"])
+        widen_popup(self.combo)
         self.combo.setCurrentIndex(-1)
         self.combo.setEditText(value)
         self.combo.completer().setCompletionMode(QCompleter.PopupCompletion)
@@ -219,7 +299,8 @@ class InputCombo(QWidget):
         self.combo.lineEdit().setPlaceholderText("Choisir un input…")
         self.combo.activated.connect(self._picked)
         self.combo.lineEdit().textEdited.connect(self._typed)
-        self.status = label("", "Hint")
+        self.status = label("", "Hint", True)
+        self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         lay.addWidget(self.combo)
         lay.addWidget(self.status)
         self._update_status(value)
@@ -265,6 +346,8 @@ def fill_types(combo: QComboBox, current: str) -> None:
         for t, s in items:
             combo.addItem(f"   {s['label']}", t)
     combo.setCurrentIndex(max(0, combo.findData(current)))
+    tame_combo(combo, 10)
+    widen_popup(combo)
     combo.blockSignals(False)
 
 
@@ -275,8 +358,8 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
         w = InputCombo(engine, value or "")
         w.changed.connect(on_change)
         return w
-    if kind in ("mix", "overlay", "choice", "page", "tally"):
-        w = QComboBox()
+    if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus", "orch_overlay"):
+        w = tame_combo(QComboBox())  # option longue raccourcie ; texte complet en info-bulle et dans la liste
         if kind == "mix":
             items = [(1, "Master (Program)")] + [(i, f"Mix {i}") for i in range(2, 17)]
         elif kind == "overlay":
@@ -286,30 +369,47 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
                                                      for d in engine.cfg.get("integrations", {}).get("tallies", [])]
         elif kind == "page":
             items = [("next", "Page suivante"), ("prev", "Page précédente")] + list((page_names or {}).items())
+        elif kind == "intercom_bus":  # bus proposés par le client py-intercom (lus sur /status)
+            items = engine.intercom.bus_choices()
+            if value and value not in dict(items):
+                items = items + [(value, f"{value} (absent)" if engine.intercom.buses else str(value))]
+        elif kind == "orch_overlay":  # overlays réglés + ceux vus en direct sur orchestream
+            items = engine.orchestream.names()
+            if value and value not in dict(items):
+                items = items + [(value, str(value))]
         else:
             items = spec["options"]
         for v, text in items:
             w.addItem(text, v)
+            w.setItemData(w.count() - 1, text, Qt.ToolTipRole)
+        widen_popup(w)
         idx = w.findData(value)
         w.setCurrentIndex(idx if idx >= 0 else 0)
         w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i)))
         return w
     if kind == "function":
-        w = QComboBox()
+        w = tame_combo(QComboBox(), 10)
         w.setEditable(True)
         w.addItems(VMIX_FUNCTIONS)
+        widen_popup(w)
         w.setEditText(value or "")
         w.completer().setCompletionMode(QCompleter.PopupCompletion)
         w.completer().setFilterMode(Qt.MatchContains)
         w.lineEdit().setPlaceholderText("Cut, SetText, Snapshot…")
         w.currentTextChanged.connect(on_change)
         return w
-    if kind == "int":
+    if kind in ("int", "port", "seconds"):
         w = QSpinBox()
-        w.setRange(0, 600000)
-        w.setSingleStep(50)
-        w.setSuffix(" ms")
-        w.setValue(int(value or 0))
+        if kind == "port":
+            w.setRange(1, 65535)
+        elif kind == "seconds":
+            w.setRange(1, 3600)
+            w.setSuffix(" s")
+        else:
+            w.setRange(0, 600000)
+            w.setSingleStep(50)
+            w.setSuffix(" ms")
+        w.setValue(int(value if value not in (None, "") else (spec.get("default") or 0)))
         w.valueChanged.connect(on_change)
         return w
     if kind == "bool":
