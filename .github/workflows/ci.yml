@@ -1,0 +1,113 @@
+name: CI
+
+# Chaque push sur main : lint + tests.
+# Si la version de livedeck/__init__.py n'a pas encore de release, l'exe Windows est compilé
+# et la release vX.Y.Z est publiée avec les notes du CHANGELOG (tools/release.py prépare tout ça).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Dépendances
+        run: pip install -r requirements.txt pyflakes
+
+      - name: Lint
+        run: python -m pyflakes livedeck tests tools main.py
+
+      - name: Tests
+        run: python tests/test_core.py
+
+  release:
+    needs: tests
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          V=$(python -c "import livedeck; print(livedeck.__version__)")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" > /dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::La release v$V existe déjà : rien à publier. Monte la version (tools/release.py) pour en sortir une nouvelle."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            python tools/release_notes.py "$V" > notes.md
+          fi
+
+      - name: Dépendances
+        if: steps.v.outputs.new == 'true'
+        run: |
+          pip install -r requirements-build.txt
+          python -m livedeck.setup_hidapi
+
+      - name: Compilation de l'exe
+        if: steps.v.outputs.new == 'true'
+        run: python tools/build_exe.py --version ${{ steps.v.outputs.version }}
+
+      - name: Vérification de l'exe
+        if: steps.v.outputs.new == 'true'
+        shell: bash
+        run: |
+          export LIVEDECK_HOME="$RUNNER_TEMP/livedeck-selftest"
+          ./dist/LiveDeck-${{ steps.v.outputs.version }}-win64.exe --selftest &
+          PID=$!
+          for i in $(seq 1 60); do [ -f "$LIVEDECK_HOME/selftest.txt" ] && break; sleep 1; done
+          kill $PID 2>/dev/null || true
+          cat "$LIVEDECK_HOME/selftest.txt"
+          # l'exe démarre, embarque pynput et hidapi (USB des Stream Decks)
+          grep -q "^OK LiveDeck ${{ steps.v.outputs.version }}" "$LIVEDECK_HOME/selftest.txt"
+          grep -q "^clavier=ok" "$LIVEDECK_HOME/selftest.txt"
+          grep -Eq "^decks=[0-9]+ deck" "$LIVEDECK_HOME/selftest.txt"
+
+      - name: Artefact
+        if: steps.v.outputs.new == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveDeck-${{ steps.v.outputs.version }}-win64
+          path: dist/*.exe
+
+      - name: Publication de la release
+        if: steps.v.outputs.new == 'true'
+        shell: bash
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" dist/*.exe \
+            --target "$GITHUB_SHA" \
+            --title "LiveDeck ${{ steps.v.outputs.version }}" \
+            --notes-file notes.md

@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# données personnelles : ta config de régie reste sur ton PC
+data/
+*.companionconfig
+!tests/fixtures/*.companionconfig
+
+# bibliothèque USB téléchargée par setup.bat
+livedeck/lib/
+
+# build de l'exe
+build/
+dist/
+build_log.txt

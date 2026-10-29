@@ -1,0 +1,5248 @@
+{
+ "version": 9,
+ "type": "full",
+ "companionBuild": "4.2.4+8798-stable-f844bbb4fc",
+ "pages": {
+  "1": {
+   "id": "d7O2XKBkJ2EqohclmE1UO",
+   "name": "StreamDeck XL",
+   "controls": {
+    "0": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Animateur",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "FWepINS9WC_kdQauvGLRN",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_animateur_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "ojEy0cs2Rr6ZJuia0wrdD",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_animateur_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "General",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "ItDKYPmT9PLxVcsoBS9ox",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_general_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "omc5e3TbdTOx2ZgZ4xxvF",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_general_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Reporter",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "KVHNKOV4oZBK3aqb-hyDS",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_reporter_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "iLm6j9SmMIOlhR_0Wpvr7",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_reporter_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "Camera Regie",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "-0oFlxWufhfBgyAkCtGHJ",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_cameraregie_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "2aKqqdFMS5PK3r-8YerVV",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_cameraregie_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Ecran Jeu",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "oVlgS2iXVh36vjgvISl-a",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ecranjeu_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "41qEPMThagIDwAupfPBwP",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ecranjeu_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "Iphone",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "6fpoqW7IQn5Ytp2MqX_Mm",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_iphone_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "0mPTOBj8b3ixPUCzBxJk_",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_iphone_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "6": {
+      "type": "button",
+      "style": {
+       "text": "PTZ Plateau",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "w5u4TB7ACpLktvEdd0ver",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ptzplateau_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "LT2dVkija5R0Sf4KIrkG5",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ptzplateau_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "7": {
+      "type": "button",
+      "style": {
+       "text": "PTZ Atelier",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "nkeys3FfqV84Prluznz9c",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ptzatelier_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "_TWT5_BmWRoQ1dTqfEymu",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ptzatelier_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "1": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Animateur",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "mUSvZW7X0RY6iLomHKh6D",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_animateur_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "Iajf6iUpn_BCHZl5uDCRa",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_animateur_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "General",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "NdH46fOvfafnOQGQaWnLg",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_general_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "_k3mLolzRPRgObwOZJW-C",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_general_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Reporter",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "On3iL7m7BB4vM4TGX8cAn",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_reporter_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "Fhj2L8eK-grZV6zW9Usbh",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_reporter_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "Camera Regie",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "RadFxeWCpUiPktM3XFd0R",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_cameraregie_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "ontrgHX2mKoxntR96h1LO",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_cameraregie_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Ecran Jeu",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "DVfW3Xc2Pc48T0IZs4xwl",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ecranjeu_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "-cMSdTBoEE3Km7Vc4DeiP",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ecranjeu_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "Iphone",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "vniCu6gt9mHNp95d546ZB",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_iphone_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "YI9KKoyhpEAB6anDrfiI3",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_iphone_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "6": {
+      "type": "button",
+      "style": {
+       "text": "PTZ Plateau",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "mBoy1nDuzm8VoBNtb_Mo1",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ptzplateau_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "ytxDWBuAWxev69kUFxQTA",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ptzplateau_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "7": {
+      "type": "button",
+      "style": {
+       "text": "PTZ Atelier",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "6U3v7ZTSb44ZQUlniJqCS",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ptzatelier_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "3uDh6_7u62yL1y78PR_r0",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ptzatelier_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "2": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Couloir",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "u9rhuf01GDilo1QdIa4vF",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Couloir",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "k626HCLB_FgZQd2E4Xqw_",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Couloir",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Showroom",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "w8kvOvn6e8M6y_DT7OBhE",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Showroom",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "BJlD6IX3MJ3jYTAp5453j",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Showroom",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Cuisine",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "TCTa3xPOAl9XRcZsvDotE",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Cuisine",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "j-poZfkJAXWWwIuWbYeSt",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Cuisine",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Cactus",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "NVlAhpVT3IgvjCpVYsGYw",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Cactus",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "-QAmOO0rZ6VTq684-DX6s",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Cactus",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Large",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "fd1L5C_RQz2ERRljgpiYS",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Large",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "tq16br_oLTplMAzYkp-MW",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Large",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Canapé  ",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "OqQjEsvJ6zh2vObEC7Cb8",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Canapé",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "t9yWa0x9IoUmsnzc1DeW_",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Canapé",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "6": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Bambulab",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "TL8Qru61sEsM0zH13prGm",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Bambulab",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "GOL73YYKu-d86gg_HXFaM",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Bambulab",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "7": {
+      "type": "button",
+      "style": {
+       "text": "PTZ - Bureau",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "3TsrJeEYqmgtNToLlcGNY",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ - Bureau",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "CX2OZNyNsELypjT-PY_7S",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "PTZ - Bureau",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "3": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Intercom Regie",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 51,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "RhmqS_bbQAcpvuLNWrdgK",
+        "definitionId": "bank_pushed",
+        "connectionId": "internal",
+        "options": {
+         "location_target": "this",
+         "location_text": "$(this:page)/$(this:row)/$(this:column)",
+         "location_expression": "concat($(this:page), '/', $(this:row), '/', $(this:column))",
+         "latch_compatability": false
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 4210943
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "RhT8oSV6cdB75HepgELTB",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "-7zo15SBtGKzPGXJ1FBxT",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "A"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ],
+         "up": [
+          {
+           "id": "ewE_TwxddmFv7SqPUbLNK",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "A"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "15Y2Q8f_g-q8dfNCsEh23",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ]
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Intercom Plateau",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 51,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "8ZnYWUadfaPLVeR82JxYl",
+        "definitionId": "bank_pushed",
+        "connectionId": "internal",
+        "options": {
+         "location_target": "this",
+         "location_text": "$(this:page)/$(this:row)/$(this:column)",
+         "location_expression": "concat($(this:page), '/', $(this:row), '/', $(this:column))",
+         "latch_compatability": false
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 4210943
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "zQcNKU0q87aC3XMKoUpxs",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "WyKMhI57p19_QQsDFgSkJ",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "Z"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ],
+         "up": [
+          {
+           "id": "ViCw92tkc7Q0uKW-Rgtf1",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "Z"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "6tE4S5lGJJwaV_iVQnjyO",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ]
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "CUT",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 16744448,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "Pk4P6xSXCx5RPRBEk1siB",
+           "definitionId": "command",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "command": "cut",
+            "encode": false
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Stinger",
+       "textExpression": false,
+       "size": "18",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 16744448,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "uSCyTGVue4M6q0SCBzlyw",
+           "definitionId": "transition",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "functionID": "Stinger1",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "Cut Auto",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342387,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "AQVHVkX8ZCmQ1JSs8GH8s",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Mix5",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 16711935,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "WXC7AzHDjIprWd90xerYp",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Mix5",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "7": {
+      "type": "button",
+      "style": {
+       "text": "Intercom vMix",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 51,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "7K66U9bs7XbtRELIk81n7",
+        "definitionId": "bank_pushed",
+        "connectionId": "internal",
+        "options": {
+         "location_target": "this",
+         "location_text": "$(this:page)/$(this:row)/$(this:column)",
+         "location_expression": "concat($(this:page), '/', $(this:row), '/', $(this:column))",
+         "latch_compatability": false
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 4210943
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "59PkANx35EOpYikyxZgYA",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "6INFB_5zS6niKR_HjDOgv",
+           "definitionId": "press",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyPress": "E"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ],
+         "up": [
+          {
+           "id": "RscvodRPfWrAT8mWr6pxq",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "E"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "4bPp2VGrLzu7se2xPXmiw",
+           "definitionId": "release",
+           "connectionId": "5o5lqyKQqbCGtI08_8g7I",
+           "options": {
+            "keyRelease": "Shift"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ]
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "4": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Invité",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "vrXnN3pbnFvHoJ5xT-Mlr",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_invite_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "9R8kZwEEVIzZpjO0VITKq",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_invite_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Invité",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "_qMEMOv65045o9XFiMjEC",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_invite_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "77qOHr6NTfKXkV3Bd8txj",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_invite_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Cut Split",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342387,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "odVQwIl3kouTnttaWuMTj",
+           "definitionId": "command",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "command": "Cut Mix=3",
+            "encode": false
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "Split Screen",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "kK5gkePCa9R8Oej19w2NK",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_sceneinvite_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "_6tM5S3gsls8ZbzPE6Utz",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_sceneinvite_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "6": {
+      "type": "button",
+      "style": {
+       "text": "Split Screen",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "ER3NtsGt6wrrthWyRDuoI",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_sceneinvite_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "eh-Mmf7JEWOi1N7QXIhZr",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_sceneinvite_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    }
+   },
+   "gridSize": {
+    "minColumn": 0,
+    "maxColumn": 7,
+    "minRow": 0,
+    "maxRow": 6
+   }
+  },
+  "2": {
+   "id": "4Vi9f0CLWM-qbY8i2tr4a",
+   "name": "StreamDeck 1",
+   "controls": {
+    "0": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Waiting Screen",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "IWlUHmSorX7bYTSqLtGXt",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Waiting Screen",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "cO-TM1iaYRt-bDjRrFJw0",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Waiting Screen",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          },
+          {
+           "id": "pVuDbu3WfOUd-BiZvwiTv",
+           "definitionId": "transition",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "functionID": "Stinger1",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Intro",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "ErsoBqTfAw8HMXjXfp_HT",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Intro",
+         "overlay": "1",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16711680
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "-ZwXJDrfb4RRjEG8g9nLc",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Intro",
+            "overlay": "1",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Magneto",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "2_ee2PAdbMwrlMiSxPUl9",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Magneto",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "iQmHFD42vkvOTnfAsDFki",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Magneto",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          },
+          {
+           "id": "SgMGkR9Ow0Kf0jrl6Xrh_",
+           "definitionId": "transition",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "functionID": "Stinger1",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "ImageIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "8fBmeat7yC8pcY3xJXG66",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "ImageIA",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "sQpxyyzCqGJq7UVeVpxBk",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "ImageIA",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "VideoIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "wm6zNWCARArkob5INMcje",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "VideoIA",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "TAp31DXYcxRKSLXUNtDqq",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "VideoIA",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "5": {
+      "type": "button",
+      "style": {
+       "text": "",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 0,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "1": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Waiting Screen",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "wKU_yS8n6r6Ar2Fr7XeXO",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Waiting Screen",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "hWJV0HG2wIJxgMGx6jpxT",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Waiting Screen",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Intro",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "uGxrL5irZzvWjvH_1Bz63",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Intro",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "Q7IxHWJOzfFXFuwmUgn2C",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Intro",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Magneto",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "fMyHG022GP4aSEZ_qsO-Y",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Magneto",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "PwVUNmtGEA5fL1HLE_RVm",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "Magneto",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "ImageIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "vyrPex7w3GgDJEF4OF5E9",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "ImageIA",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "mxU3tPLFXPsxS52Q3LUEx",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "ImageIA",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "VideoIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 13056,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "gtSJ-0IIStIvFN2vtwJ4h",
+        "definitionId": "inputPreview",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "VideoIA",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 65280,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "LiNS-yyMRL67JdJ679UqQ",
+           "definitionId": "previewInput",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "VideoIA",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "2": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "Check Tally",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 0,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "mevtG8LWbJiUDS2HKEqLe",
+        "definitionId": "variable_value",
+        "connectionId": "internal",
+        "options": {
+         "variable": "expression:All_Connected",
+         "op": "eq",
+         "value": "true"
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 2323491
+        },
+        "isInverted": false,
+        "children": {}
+       },
+       {
+        "id": "0aKxVo8GXV7OxCQDp_fgy",
+        "definitionId": "variable_value",
+        "connectionId": "internal",
+        "options": {
+         "variable": "expression:PingAllTallyMessage",
+         "op": "ne",
+         "value": "ALL CONNECTED"
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 13369344,
+         "text": "$(expression:PingAllTallyMessage)",
+         "textExpression": false,
+         "size": "auto"
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "w6tuz1Hv3R_ujflFeNGCm",
+           "definitionId": "post",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.52/vmix/reconnect",
+            "body": "{}",
+            "header": "",
+            "contenttype": "application/json",
+            "result_stringify": true
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "WWBzvStTVdN_zlBzfy8gc",
+           "definitionId": "post",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.51/vmix/reconnect",
+            "body": "{}",
+            "header": "",
+            "contenttype": "application/json",
+            "result_stringify": true
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "TZefP5Npy_AfYUkulCrMi",
+           "definitionId": "post",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.53/vmix/reconnect",
+            "body": "{}",
+            "header": "",
+            "contenttype": "application/json",
+            "result_stringify": true
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "Hu4s0v7ztE7EUTd6caxzz",
+           "definitionId": "get",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.53/status",
+            "header": "",
+            "result_stringify": false,
+            "jsonResultDataVariable": "TallyGeneral"
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "99XvQxXzwoYyh5PoFFLUN",
+           "definitionId": "get",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.51/status",
+            "header": "",
+            "result_stringify": false,
+            "jsonResultDataVariable": "TallyReporter"
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "rvDeJ79QqlczO1eOwxOgg",
+           "definitionId": "get",
+           "connectionId": "psf3zESw__P4ZpvvEymnu",
+           "options": {
+            "url": "http://10.0.0.52/status",
+            "header": "",
+            "result_stringify": false,
+            "jsonResultDataVariable": "TallyAnimateur"
+           },
+           "upgradeIndex": 1,
+           "type": "action"
+          },
+          {
+           "id": "7bT9jRedJ3SkgaVVamSs7",
+           "definitionId": "startPing",
+           "connectionId": "Weic5PluCVzSjWTGrUrrt",
+           "options": {},
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "nUIN5C3dvvIJDvaS5VANH",
+           "definitionId": "sendCustomPing",
+           "connectionId": "Weic5PluCVzSjWTGrUrrt",
+           "options": {
+            "host": "10.0.0.53",
+            "timeout": 3,
+            "aliveText": "true",
+            "failText": "false",
+            "customVariable": "PingTallyGeneral"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "hICFdFmLoOc4j1CgNag8T",
+           "definitionId": "sendCustomPing",
+           "connectionId": "Weic5PluCVzSjWTGrUrrt",
+           "options": {
+            "host": "10.0.0.51",
+            "timeout": 3,
+            "aliveText": "true",
+            "failText": "false",
+            "customVariable": "PingTallyReporter"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          },
+          {
+           "id": "4Wf2stIYu60GtRPX19PBz",
+           "definitionId": "sendCustomPing",
+           "connectionId": "Weic5PluCVzSjWTGrUrrt",
+           "options": {
+            "host": "10.0.0.52",
+            "timeout": 3,
+            "aliveText": "true",
+            "failText": "false",
+            "customVariable": "PingTallyAnimateur"
+           },
+           "upgradeIndex": 0,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "Cut Lateraux",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342387,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "2rJV_w-RoTyOvaZ3Oo4mH",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "VideoIA",
+         "mix": 2,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 10027161,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "mAE0LYlzTm7Ne495Xbmf-",
+           "definitionId": "command",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "command": "Cut Mix=2",
+            "encode": false
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Cut Central",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342387,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "Z0ruuwwaqpULwQxgKYWrD",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "ImageIA",
+         "mix": 1,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 10027161,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "blcBYnZuIB0JfG5QPT6CF",
+           "definitionId": "command",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "command": "Cut Mix=1",
+            "encode": false
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    }
+   },
+   "gridSize": {
+    "minColumn": 0,
+    "maxColumn": 7,
+    "minRow": 0,
+    "maxRow": 6
+   }
+  },
+  "3": {
+   "id": "k4T3K49Yk4E05ac7ZJHcf",
+   "name": "StreamDeck 2",
+   "controls": {
+    "0": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "PIP Animateur",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "HKietEE9eOoNYaoNWUPXq",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Animateur",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "by9_J12bS8c_aC4-3wq_M",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Animateur",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "PIP General",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "9pW3D8uGNu3cv2Z0WMHTL",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "General",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "Kn0x0NghCN9-Hc0nW2Pg7",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "General",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "PIP\r\nReporter",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "cfDm-P6fqk-z-ygw2Tu5w",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Reporter",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "hBZnGjFndPDoJpJkLILMW",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Reporter",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "PIP\r\nRegie",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "uOrD_Sx2XNZ3dw2g12277",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Camera Regie",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "uO3kd6q0owXgWWwdo2xvW",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Camera Regie",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "PIP Ecran Jeu",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "0OwWfkiV-q3zr7Gmzl0-5",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Ecran Jeu",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "bhqk1FO7B0nU7LJV2opm5",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Ecran Jeu",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "1": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "6DOF",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "wmOaQlkKtyZS-cvRH6puM",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "51",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "w8deiF_Rquy2wplCPZ2Ip",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "51",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "pip 6dof",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "47yFlX5c_xGpgCQ150xuc",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "56",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "HK8IJzCQE0czzMZte3wsE",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "56",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "pip jeu",
+       "textExpression": false,
+       "size": "auto",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "xnOWJ81cGzxNVSb94BPUz",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "55",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 16777215,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "5y_qPv3reg0SZ-Yf7vaYd",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "55",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "PTZ Atelier",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3342336,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "xIk6II-6woYQqRhMjquoP",
+        "definitionId": "inputLive",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "$(vmix:input_ptzatelier_number)",
+         "mix": 0,
+         "mixVariable": "1",
+         "fg": 0,
+         "bg": 16711680,
+         "tally": ""
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "uVovG7X3Cgy8vagQT45bg",
+           "definitionId": "programCut",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "input": "$(vmix:input_ptzatelier_number)",
+            "mix": 0,
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "2": {
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Speedizz",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "ozRwpJkY1j2_lExyziGnp",
+        "definitionId": "variable_value",
+        "connectionId": "internal",
+        "options": {
+         "variable": "custom:is_speedizz_onscreen",
+         "op": "eq",
+         "value": "1"
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 16776960
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "xFClWxkv7FwVlstZeVZyH",
+           "definitionId": "logic_if",
+           "connectionId": "internal",
+           "options": {},
+           "type": "action",
+           "children": {
+            "condition": [
+             {
+              "id": "CuiLrkv_FplH_1VXew-rU",
+              "definitionId": "variable_value",
+              "connectionId": "internal",
+              "options": {
+               "variable": "custom:is_speedizz_onscreen",
+               "op": "eq",
+               "value": "1"
+              },
+              "type": "feedback",
+              "style": {
+               "color": 16777215,
+               "bgcolor": 16711680
+              },
+              "isInverted": false,
+              "children": {}
+             }
+            ],
+            "actions": [
+             {
+              "id": "uQPElcFo8NCI241D7nM7t",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/speedizz/hide",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "3J6B4Kf2gnDDQdjHd5sPN",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_speedizz_onscreen",
+               "value": "0"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ],
+            "else_actions": [
+             {
+              "id": "i_ei_6j2psvnYvv_C4949",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/speedizz/show",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "z3fUQjMrOHdCQkWfpE6ZL",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_speedizz_onscreen",
+               "value": "1"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ]
+           }
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Poll",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "BX7OJAlcB1X5MV5HjI230",
+        "definitionId": "variable_value",
+        "connectionId": "internal",
+        "options": {
+         "variable": "custom:is_poll_onscreen",
+         "op": "eq",
+         "value": "1"
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 16776960
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "rNTD3hQBucxUX_0_ery-w",
+           "definitionId": "logic_if",
+           "connectionId": "internal",
+           "options": {},
+           "type": "action",
+           "children": {
+            "condition": [
+             {
+              "id": "wnyg6qsFBgdYqJ3i7ue3M",
+              "definitionId": "variable_value",
+              "connectionId": "internal",
+              "options": {
+               "variable": "custom:is_poll_onscreen",
+               "op": "eq",
+               "value": "1"
+              },
+              "type": "feedback",
+              "style": {
+               "color": 16777215,
+               "bgcolor": 16711680
+              },
+              "isInverted": false,
+              "children": {}
+             }
+            ],
+            "actions": [
+             {
+              "id": "6qFK5jx-d_buyeeu0htPT",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/poll/hide",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "OPQrfGqvUhFQVz2g1gz7a",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_poll_onscreen",
+               "value": "0"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ],
+            "else_actions": [
+             {
+              "id": "1aIemXRZD-fh2sU2lmDhz",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/poll/show",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "hCquc34kZKNHo39DGwpXM",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_poll_onscreen",
+               "value": "1"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ]
+           }
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "Com.",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "DImai8eYhYHXjPuuO1rjL",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Commentaire",
+         "overlay": "7",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "KJCbyq_GNdWTRlmEGAgle",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Commentaire",
+            "overlay": "7",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "Twizz",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "3X_nI4UJp8_wr-Icp0ypb",
+        "definitionId": "variable_value",
+        "connectionId": "internal",
+        "options": {
+         "variable": "custom:is_twizz_onscreen",
+         "op": "eq",
+         "value": "1"
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 16776960
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "yyJXYMHnuJX9BSCRcVmln",
+           "definitionId": "logic_if",
+           "connectionId": "internal",
+           "options": {},
+           "type": "action",
+           "children": {
+            "condition": [
+             {
+              "id": "h5jXCxAAYKmKRS1UNzulr",
+              "definitionId": "variable_value",
+              "connectionId": "internal",
+              "options": {
+               "variable": "custom:is_twizz_onscreen",
+               "op": "eq",
+               "value": "1"
+              },
+              "type": "feedback",
+              "style": {
+               "color": 16777215,
+               "bgcolor": 16711680
+              },
+              "isInverted": false,
+              "children": {}
+             }
+            ],
+            "actions": [
+             {
+              "id": "Jf2koy5tenH07bAr68A8e",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/twizz/hide",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "OTq8mT-hsk2XqrE-ON6wc",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_twizz_onscreen",
+               "value": "0"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ],
+            "else_actions": [
+             {
+              "id": "KMXOp7_nrq5SUwQ3T2DOg",
+              "definitionId": "post",
+              "connectionId": "psf3zESw__P4ZpvvEymnu",
+              "options": {
+               "url": "http://orchestream.local/api/overlay/twizz/show",
+               "body": "{}",
+               "header": "",
+               "contenttype": "application/json",
+               "result_stringify": true
+              },
+              "upgradeIndex": 1,
+              "type": "action"
+             },
+             {
+              "id": "CN2IL9X3bMnkMaFbR1iEM",
+              "definitionId": "custom_variable_set_value",
+              "connectionId": "internal",
+              "options": {
+               "name": "is_twizz_onscreen",
+               "value": "1"
+              },
+              "type": "action",
+              "children": {}
+             }
+            ]
+           }
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "3": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "PIP iPhone",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "-1mIEDFtdcOfiB_k4TBQ9",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "Iphone",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "K_XMJGb9gAUFj0m7ltcWq",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "Iphone",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "PIP PTZ Plateau",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "-H8E5ypH5CVwj-Qq6Ckwf",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ Plateau",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "DutF3pWdPUhp9MJ1Ld_QZ",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "PTZ Plateau",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "PIP Invité",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "EaPF1CIOUMrLr_rrub6n4",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "42",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 8750336
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "01OHzRn_rzHQZn7gWrTG-",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "$(vmix:input_invite_number)",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "3": {
+      "type": "button",
+      "style": {
+       "text": "PIP PTZ Atelier",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "HaE-X0vPERFeJeojtFZIY",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "PTZ Atelier",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "lzol5_aehd0I_hw3iIAAs",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "PTZ Atelier",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "4": {
+      "type": "button",
+      "style": {
+       "text": "PIP VideoIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "8a_ZGMcQKtLLgVe1TAQtz",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "VideoIA",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "mikMewcRqDxo57kn1ys23",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "VideoIA",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    },
+    "4": {
+     "0": {
+      "type": "button",
+      "style": {
+       "text": "PIP ImageIA",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 3355392,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "6D0dRbYmhZm1AZ-6UIWvR",
+        "definitionId": "overlayStatus",
+        "connectionId": "A66F9sBy83mNNU0kTF0K9",
+        "options": {
+         "input": "ImageIA",
+         "overlay": "2",
+         "fg": 0,
+         "bgPreview": 65280,
+         "bgProgram": 16776960
+        },
+        "upgradeIndex": 14,
+        "type": "feedback",
+        "isInverted": false
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "8QANj5anQ4T7GTMkV9H65",
+           "definitionId": "overlayFunctions",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "type": "OverlayInput",
+            "input": "ImageIA",
+            "overlay": "2",
+            "mix": [
+             0
+            ],
+            "mixVariable": "1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "1": {
+      "type": "button",
+      "style": {
+       "text": "Pet",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 4737096,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "kggPwMAX-mBNcx9sFTE1t",
+        "definitionId": "bank_pushed",
+        "connectionId": "internal",
+        "options": {
+         "location_target": "this",
+         "location_text": "$(this:page)/$(this:row)/$(this:column)",
+         "location_expression": "concat($(this:page), '/', $(this:row), '/', $(this:column))",
+         "latch_compatability": false
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 14342874
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "E45hUuJo-VK5xiGcFbu8E",
+           "definitionId": "keyPress",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "value": "D1"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     },
+     "2": {
+      "type": "button",
+      "style": {
+       "text": "Qualité",
+       "textExpression": false,
+       "size": "14",
+       "png64": null,
+       "alignment": "center:center",
+       "pngalignment": "center:center",
+       "color": 16777215,
+       "bgcolor": 4737096,
+       "show_topbar": "default"
+      },
+      "options": {
+       "stepProgression": "auto",
+       "stepExpression": "",
+       "rotaryActions": false
+      },
+      "feedbacks": [
+       {
+        "id": "Y2lAVeDZ8h2C9CPk7UHfM",
+        "definitionId": "bank_pushed",
+        "connectionId": "internal",
+        "options": {
+         "location_target": "this",
+         "location_text": "$(this:page)/$(this:row)/$(this:column)",
+         "location_expression": "concat($(this:page), '/', $(this:row), '/', $(this:column))",
+         "latch_compatability": false
+        },
+        "type": "feedback",
+        "style": {
+         "color": 0,
+         "bgcolor": 14342874
+        },
+        "isInverted": false,
+        "children": {}
+       }
+      ],
+      "steps": {
+       "0": {
+        "action_sets": {
+         "down": [
+          {
+           "id": "gPF4wlfvD8o6gNCFwQmyt",
+           "definitionId": "keyPress",
+           "connectionId": "A66F9sBy83mNNU0kTF0K9",
+           "options": {
+            "value": "D2"
+           },
+           "upgradeIndex": 14,
+           "type": "action"
+          }
+         ],
+         "up": []
+        },
+        "options": {
+         "runWhileHeld": []
+        }
+       }
+      },
+      "localVariables": []
+     }
+    }
+   },
+   "gridSize": {
+    "minColumn": 0,
+    "maxColumn": 7,
+    "minRow": 0,
+    "maxRow": 6
+   }
+  }
+ },
+ "triggers": {},
+ "triggerCollections": [],
+ "custom_variables": {
+  "is_twizz_onscreen": {
+   "description": "Variable interrupteur pour button twizz",
+   "defaultValue": "0",
+   "persistCurrentValue": false,
+   "sortOrder": 0
+  },
+  "TallyGeneral": {
+   "description": "Tally status for General",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 1
+  },
+  "TallyReporter": {
+   "description": "Tally status for Reporter",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 2
+  },
+  "TallyAnimateur": {
+   "description": "Tally status for Animateur",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 3
+  },
+  "PingTallyReporter": {
+   "description": "Ping status for Reporter",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 4
+  },
+  "PingTallyAnimateur": {
+   "description": "Ping status for Animateur",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 5
+  },
+  "PingTallyGeneral": {
+   "description": "Ping status for General",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 6
+  },
+  "is_poll_onscreen": {
+   "description": "Variable interrupteur pour button poll",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 7
+  },
+  "is_speedizz_onscreen": {
+   "description": "A custom variable",
+   "defaultValue": "",
+   "persistCurrentValue": false,
+   "sortOrder": 8
+  }
+ },
+ "customVariablesCollections": [],
+ "expressionVariables": {
+  "RUBXMgNvCzgN375c5a7Vu": {
+   "type": "expression-variable",
+   "options": {
+    "variableName": "ConnectedReporter",
+    "description": "Tally Connected state for Reporter",
+    "sortOrder": 0
+   },
+   "entity": {
+    "id": "yyHz5_VhdYjRw2SOpZnQr",
+    "definitionId": "expression_value",
+    "connectionId": "internal",
+    "options": {
+     "expression": "jsonpath($(custom:TallyReporter), \"$.connected\")"
+    },
+    "type": "feedback",
+    "style": {},
+    "isInverted": false,
+    "children": {}
+   },
+   "localVariables": []
+  },
+  "4x6zHq0UPRWWCfm05mcyH": {
+   "type": "expression-variable",
+   "options": {
+    "variableName": "ConnectedAnimateur",
+    "description": "Tally Connected state for Animateur",
+    "sortOrder": 0
+   },
+   "entity": {
+    "id": "eebjxiwJXt10lcr4sfn1W",
+    "definitionId": "expression_value",
+    "connectionId": "internal",
+    "options": {
+     "expression": "jsonpath($(custom:TallyAnimateur), \"$.connected\")"
+    },
+    "type": "feedback",
+    "style": {},
+    "isInverted": false,
+    "children": {}
+   },
+   "localVariables": []
+  },
+  "8JBrA7u4wF8wV4kFqRBWg": {
+   "type": "expression-variable",
+   "options": {
+    "variableName": "ConnectedGeneral",
+    "description": "Tally Connected state for general",
+    "sortOrder": 0
+   },
+   "entity": {
+    "id": "tMUuVG1icJlxuyf8lmACY",
+    "definitionId": "expression_value",
+    "connectionId": "internal",
+    "options": {
+     "expression": "jsonpath($(custom:TallyGeneral), \"$.connected\")"
+    },
+    "type": "feedback",
+    "style": {},
+    "isInverted": false,
+    "children": {}
+   },
+   "localVariables": []
+  },
+  "yYoQEypmc0U3DBBv9K1mE": {
+   "type": "expression-variable",
+   "options": {
+    "variableName": "All_Connected",
+    "description": "Tally Connected state for all",
+    "sortOrder": 0
+   },
+   "entity": {
+    "id": "cIkpZkSbup4C65U5AEC0u",
+    "definitionId": "expression_value",
+    "connectionId": "internal",
+    "options": {
+     "expression": "$(expression:ConnectedGeneral) == true && $(expression:ConnectedAnimateur) == true && $(expression:ConnectedReporter) == true "
+    },
+    "type": "feedback",
+    "style": {},
+    "isInverted": false,
+    "children": {}
+   },
+   "localVariables": []
+  },
+  "Vv_30aJI4gUSnc9xnXoKh": {
+   "type": "expression-variable",
+   "options": {
+    "variableName": "PingAllTallyMessage",
+    "description": "Affichage des connections aux 3 tally",
+    "sortOrder": 0
+   },
+   "entity": {
+    "id": "CqSj-7CFg84J_kBMlLjds",
+    "definitionId": "expression_value",
+    "connectionId": "internal",
+    "options": {
+     "expression": "$(custom:PingTallyReporter) == \"true\" && $(custom:PingTallyAnimateur) == \"true\" && $(custom:PingTallyGeneral) == \"true\"\r\n? \"ALL CONNECTED\"\r\n: concat(\r\n    \"Tally \",\r\n    $(custom:PingTallyReporter) == \"true\" ? \"\" : \"Reporter \",\r\n    $(custom:PingTallyAnimateur) == \"true\" ? \"\" : \"Animateur \",\r\n    $(custom:PingTallyGeneral) == \"true\" ? \"\" : \"General \",\r\n    \"NOT CONNECTED\"\r\n  )"
+    },
+    "type": "feedback",
+    "style": {},
+    "isInverted": false,
+    "children": {}
+   },
+   "localVariables": []
+  }
+ },
+ "expressionVariablesCollections": [],
+ "instances": {
+  "A66F9sBy83mNNU0kTF0K9": {
+   "moduleInstanceType": "connection",
+   "instance_type": "studiocoast-vmix",
+   "moduleVersionId": "4.2.0",
+   "updatePolicy": "stable",
+   "sortOrder": 1,
+   "label": "vmix",
+   "isFirstInit": false,
+   "config": {
+    "host": "127.0.0.1",
+    "tcpPort": 8099,
+    "connectionErrorLog": true,
+    "apiPollInterval": 250,
+    "volumeLinear": false,
+    "shiftDelimiter": "|",
+    "shiftBlinkPrvPrgm": true,
+    "shiftBlinkLayerRouting": true,
+    "variablesShowInputs": true,
+    "variablesShowInputsLowercase": true,
+    "variablesShowInputNumbers": true,
+    "variablesShowInputGUID": false,
+    "variablesShowInputPosition": false,
+    "variablesShowInputCC": false,
+    "variablesShowInputLayers": false,
+    "variablesShowInputLayerPosition": false,
+    "variablesShowInputList": false,
+    "variablesShowInputTitleIndex": false,
+    "variablesShowInputTitleName": false,
+    "variablesShowInputVolume": false,
+    "variablesShowAudio": false,
+    "variablesShowDynamicInputs": false,
+    "variablesShowDynamicValues": false,
+    "variablesShowMix": false,
+    "variablesShowOutputs": false,
+    "variablesShowOverlays": false,
+    "variablesShowReplay": false,
+    "variablesShowTransitions": false,
+    "debugSettings": false,
+    "debugVariableDefinitionDelay": 5000,
+    "debugVersionUpdateNotifications": true
+   },
+   "secrets": {},
+   "lastUpgradeIndex": 14,
+   "enabled": true
+  },
+  "psf3zESw__P4ZpvvEymnu": {
+   "moduleInstanceType": "connection",
+   "instance_type": "generic-http",
+   "moduleVersionId": "2.7.0",
+   "updatePolicy": "stable",
+   "sortOrder": 2,
+   "label": "http",
+   "isFirstInit": false,
+   "config": {
+    "prefix": "",
+    "proxyAddress": "",
+    "rejectUnauthorized": true
+   },
+   "secrets": {},
+   "lastUpgradeIndex": 1,
+   "enabled": true
+  },
+  "tY1yFCfJMkUFJN4xdjatT": {
+   "moduleInstanceType": "connection",
+   "instance_type": "generic-dataentry",
+   "moduleVersionId": "1.0.2",
+   "updatePolicy": "stable",
+   "sortOrder": 3,
+   "label": "dataentry",
+   "isFirstInit": false,
+   "config": {
+    "autolengthraw": false,
+    "enterlengthraw": 4,
+    "autolengthformatted": false,
+    "enterlengthformatted": 4,
+    "autoregex": false,
+    "enterregex": "/.*/i",
+    "autotime": false,
+    "timeout": 2.5,
+    "criterialogic": "or",
+    "copydata": "raw",
+    "after": "clear",
+    "formattype": "none",
+    "formatecma": "*",
+    "formatprintf": "%s",
+    "formatregex": "/(.)/$1/g",
+    "maxlength": 1024,
+    "cursor": "|"
+   },
+   "secrets": {},
+   "lastUpgradeIndex": -1,
+   "enabled": true
+  },
+  "5o5lqyKQqbCGtI08_8g7I": {
+   "moduleInstanceType": "connection",
+   "instance_type": "vicreo-hotkey",
+   "moduleVersionId": "4.7.3",
+   "updatePolicy": "stable",
+   "sortOrder": 4,
+   "label": "VICREO-Listener",
+   "isFirstInit": false,
+   "config": {
+    "port": 10001,
+    "password": "",
+    "host": "127.0.0.1"
+   },
+   "secrets": {},
+   "lastUpgradeIndex": 0,
+   "enabled": true
+  },
+  "Weic5PluCVzSjWTGrUrrt": {
+   "moduleInstanceType": "connection",
+   "instance_type": "generic-ping",
+   "moduleVersionId": "2.0.0",
+   "updatePolicy": "stable",
+   "sortOrder": 5,
+   "label": "generic-ping",
+   "isFirstInit": false,
+   "config": {
+    "host": "10.0.0.1",
+    "timeout": 10,
+    "retryrate": 60000,
+    "verbose": false
+   },
+   "secrets": {},
+   "lastUpgradeIndex": 0,
+   "enabled": true
+  },
+  "JeawkTF2sJ_Rd3jtSjYLa": {
+   "moduleInstanceType": "connection",
+   "instance_type": "generic-osc",
+   "moduleVersionId": "2.8.2",
+   "updatePolicy": "stable",
+   "sortOrder": 7,
+   "label": "osc",
+   "isFirstInit": false,
+   "config": {
+    "protocol": "udp",
+    "listen": true,
+    "host": "10.0.0.50",
+    "targetPort": "1223",
+    "feedbackPort": "1234"
+   },
+   "secrets": {},
+   "lastUpgradeIndex": 0,
+   "enabled": true
+  }
+ },
+ "connectionCollections": [],
+ "surfaces": {
+  "streamdeck:DEMOXL0000001": {
+   "groupConfig": {
+    "name": "Auto group",
+    "last_page_id": "d7O2XKBkJ2EqohclmE1UO",
+    "startup_page_id": "d7O2XKBkJ2EqohclmE1UO",
+    "use_last_page": true,
+    "restrict_pages": true,
+    "allowed_page_ids": [
+     "d7O2XKBkJ2EqohclmE1UO"
+    ],
+    "page": 1,
+    "last_page": 1,
+    "startup_page": 1,
+    "allowed_pages": [
+     1
+    ]
+   },
+   "config": {
+    "brightness": 100,
+    "rotation": 0,
+    "never_lock": false,
+    "xOffset": 0,
+    "yOffset": 0,
+    "groupId": null
+   },
+   "type": "Elgato Stream Deck XL",
+   "integrationType": "elgato-streamdeck",
+   "gridSize": {
+    "columns": 8,
+    "rows": 4
+   },
+   "name": "XL"
+  },
+  "streamdeck:DEMOSD0000001": {
+   "groupConfig": {
+    "name": "Auto group",
+    "last_page_id": "4Vi9f0CLWM-qbY8i2tr4a",
+    "startup_page_id": "4Vi9f0CLWM-qbY8i2tr4a",
+    "use_last_page": true,
+    "restrict_pages": true,
+    "allowed_page_ids": [
+     "4Vi9f0CLWM-qbY8i2tr4a"
+    ],
+    "page": 1,
+    "last_page": 2,
+    "startup_page": 2,
+    "allowed_pages": [
+     2
+    ]
+   },
+   "config": {
+    "brightness": 100,
+    "rotation": 0,
+    "never_lock": false,
+    "xOffset": 0,
+    "yOffset": 0,
+    "groupId": null
+   },
+   "type": "Elgato Stream Deck",
+   "integrationType": "elgato-streamdeck",
+   "gridSize": {
+    "columns": 5,
+    "rows": 3
+   },
+   "name": "Normal",
+   "groupId": null
+  },
+  "streamdeck:DEMOSD0000002": {
+   "groupConfig": {
+    "name": "Auto group",
+    "last_page_id": "k4T3K49Yk4E05ac7ZJHcf",
+    "startup_page_id": "k4T3K49Yk4E05ac7ZJHcf",
+    "use_last_page": true,
+    "restrict_pages": false,
+    "allowed_page_ids": [],
+    "page": 1,
+    "last_page": 3,
+    "startup_page": 3,
+    "allowed_pages": []
+   },
+   "config": {
+    "brightness": 100,
+    "rotation": 0,
+    "never_lock": false,
+    "xOffset": 0,
+    "yOffset": 0,
+    "groupId": null
+   },
+   "type": "Elgato Stream Deck MK.2",
+   "integrationType": "elgato-streamdeck",
+   "gridSize": {
+    "columns": 5,
+    "rows": 3
+   }
+  }
+ },
+ "surfaceGroups": {}
+}
