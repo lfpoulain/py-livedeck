@@ -11,6 +11,10 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# hors écran, Qt n'a pas de polices sans ce dossier : les mesures de mise en page seraient fausses
+_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+if _fonts.is_dir():
+    os.environ.setdefault("QT_QPA_FONTDIR", str(_fonts))
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
