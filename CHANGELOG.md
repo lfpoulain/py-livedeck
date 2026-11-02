@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.3.1 — 2026-11-02
+
+### Correctif
+- **Molette** : dans la colonne de droite (et dans les Réglages), la molette fait toujours défiler la colonne. Elle ne change plus la valeur d'une liste, d'un nombre ou d'un curseur qui passe sous la souris ; ces champs se règlent au clic ou au clavier.
+
 ## 1.3.0 — 2026-10-29
 
 ### Fiabilité en direct

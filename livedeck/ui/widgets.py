@@ -1,11 +1,11 @@
 """Petits composants réutilisables."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QStandardItem
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QCompleter, QFormLayout,
+from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QCompleter, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QPlainTextEdit,
-                               QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
+                               QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from ..actions import ACTIONS, CATEGORIES, VMIX_FUNCTIONS
 from . import theme as T
@@ -31,6 +31,29 @@ def tame_combo(c: QComboBox, min_chars: int = 8) -> QComboBox:
     c.setMinimumContentsLength(min_chars)
     c.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     return c
+
+
+class _WheelGuard(QObject):
+    """Dans une zone qui défile, la molette fait défiler la zone : elle ne change jamais la liste, le nombre
+    ou le curseur qui passe sous la souris. Ces champs se règlent au clic ou au clavier."""
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox, QSlider)):
+            area = obj.parentWidget()
+            while area is not None and not isinstance(area, QAbstractScrollArea):
+                area = area.parentWidget()
+            if area is not None:
+                QApplication.sendEvent(area.viewport(), e)
+                return True
+        return False
+
+
+def install_wheel_guard() -> None:
+    """Une seule fois pour toute l'application (fenêtre principale, réglages, petites fenêtres)."""
+    app = QApplication.instance()
+    if app is not None and not hasattr(app, "_wheel_guard"):
+        app._wheel_guard = _WheelGuard(app)
+        app.installEventFilter(app._wheel_guard)
 
 
 def widen_popup(c: QComboBox) -> None:

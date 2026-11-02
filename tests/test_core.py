@@ -1605,6 +1605,33 @@ def test_review_small_fixes(tmp_path):
     w.quit_app()
 
 
+def test_wheel_scrolls_column_not_fields(tmp_path):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QComboBox
+    acts = [new_action(t) for t in ("vmix.program", "vmix.preview", "vmix.overlay", "vmix.audio")]
+    e, w, pid = ui_window(tmp_path, {"0,0": new_button(label="Molette", actions=acts)})
+    w.grid.select("0,0")
+    ins = w.inspector
+    bar = ins.scroll.verticalScrollBar()
+    assert wait(lambda: bar.maximum() > 0), "l'inspecteur doit défiler pour ce test"
+    combos = [c for c in ins.inner.findChildren(QComboBox)
+              if c.isVisible() and c.count() > 1 and c.currentIndex() < c.count() - 1]
+    assert combos
+    bar.setValue(0)
+    for c in combos[:3]:
+        before, pos = c.currentIndex(), bar.value()
+        mid = QPointF(c.rect().center())
+        ev = QWheelEvent(mid, QPointF(c.mapToGlobal(c.rect().center())), QPoint(0, 0), QPoint(0, -120),
+                         Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+        app.sendEvent(c, ev)
+        app.processEvents()
+        assert c.currentIndex() == before, (c, before, c.currentIndex())
+        assert bar.value() > pos or bar.value() == bar.maximum(), (pos, bar.value())
+    e.stop()
+    w.close()
+
+
 if __name__ == "__main__":
     import tempfile
     failed = 0

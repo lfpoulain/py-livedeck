@@ -28,7 +28,7 @@ from .inspector import Inspector
 from .library import LibraryPanel
 from .search import SearchDialog
 from .settings import SettingsDialog
-from .widgets import Seg, label, tame_combo, typo
+from .widgets import Seg, install_wheel_guard, label, tame_combo, typo
 
 HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic droit : options  ·  "
         "Entrée : tester  ·  F1 : aide")
@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(1560, 900)
         self.setMinimumSize(1200, 640)
+        install_wheel_guard()
 
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
