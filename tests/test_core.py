@@ -1702,4 +1702,16 @@ if __name__ == "__main__":
                     import traceback
                     traceback.print_exc()
                     print("ÉCHEC", name)
-    sys.exit(1 if failed else 0)
+    # Fin du processus sans démontage, une fois les résultats écrits : sous Windows, décharger Qt (des
+    # dizaines de fenêtres de test) pendant que des fils natifs tournent encore plante parfois (violation
+    # d'accès) et faussait le code de retour alors que tous les tests étaient passés.
+    code = 1 if failed else 0
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p  # poignée 64 bits, sinon tronquée et l'appel échoue
+        k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        k32.TerminateProcess(k32.GetCurrentProcess(), code)
+    os._exit(code)
