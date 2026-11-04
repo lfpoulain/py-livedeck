@@ -240,7 +240,7 @@ class SettingsDialog(QDialog):
         v.addSpacing(6)
         v.addWidget(label("ORCHESTREAM  ·  OVERLAYS WEB", "H2"))
         self.orch_url = QLineEdit(integ["orchestream"].get("url", ""))
-        self.orch_url.setPlaceholderText("http://serveur:3333")
+        self.orch_url.setPlaceholderText("http://serveur:5174")
         v.addWidget(self.orch_url)
         row = QHBoxLayout()
         row.addWidget(label("Overlays", "Muted"))

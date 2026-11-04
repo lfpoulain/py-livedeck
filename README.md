@@ -41,7 +41,7 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 | ⌨️ **Clavier et HTTP** | Raccourcis enregistrés en appuyant sur les touches (maintenus ou non), requêtes HTTP en collant une commande `curl`. |
 | 📡 **OSC, TCP / UDP, API JSON** | Pilote QLab, Reaper, une X32, un projecteur ou une caméra VISCA, et affiche la valeur d'une API JSON sur une touche. |
 | 🔤 **Texte dynamique** | Titre à l'antenne, temps restant d'une vidéo, texte d'un titre, heure… mis à jour en direct sur les touches. |
-| 🎙️ **Intégrations maison** | Talkback **py-intercom**, overlays **orchestream** et **Tally32**, avec leur état en direct, un bouton Tester et des messages d'erreur clairs. |
+| 🎙️ **Intégrations maison** | Talkback **py-intercom**, overlays **orchestream** (v2 et v1) et **Tally32**, avec leur état en direct, un bouton Tester et des messages d'erreur clairs. |
 | 🛟 **Sûr en direct** | Un talkback se coupe toujours au relâché, même si la touche change entre-temps ; tout est relâché au débranchement ou à la fermeture. Sauvegardes quotidiennes. |
 | 🔒 **Mode Live** | L'édition se verrouille pendant le direct, seul ▶ Tester reste actif. |
 | 🔎 **Recherche (Ctrl+F)** | Retrouve une touche sur toutes les pages ; la touche vide propose toutes les actions, avec recherche et catégories. |

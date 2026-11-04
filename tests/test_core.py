@@ -1145,8 +1145,8 @@ def test_integration_settings_and_details(tmp_path):
     assert wait(lambda: e.intercom.online and e.orchestream.connected, 6)
     dlg._refresh_status()
     assert "En ligne" in dlg.ic_status.text() and "Quiz" in dlg.orch_status.text(), dlg.orch_status.text()
-    assert [n for n, _ in e.orchestream.names()] == ["twizz", "quiz"]
-    orch.emit("poll:overlay:toggle", {"isVisible": True})    # overlay appris en direct
+    assert [n for n, _ in e.orchestream.names()][:2] == ["twizz", "quiz"]
+    orch.set("poll", True)                          # overlay de la v2 absent des réglages : appris en direct
     assert wait(lambda: e.orchestream.overlays.get("poll") is True)
     assert "poll" in [n for n, _ in e.orchestream.names()]
     # « Tester » essaie les valeurs saisies et classe le résultat
@@ -1158,7 +1158,7 @@ def test_integration_settings_and_details(tmp_path):
     dlg._test("intercom")
     assert wait(lambda: "en ligne" in result.text(), 6), result.text()
     dlg._test("orchestream")
-    assert wait(lambda: "flux en direct ouvert" in dlg._tests["orchestream"][1].text(), 6)
+    assert wait(lambda: "orchestream-v2 joignable" in dlg._tests["orchestream"][1].text(), 6)
     dlg._test("tallies")
     assert wait(lambda: "pas connecté à vMix" in dlg._tests["tallies"][1].text(), 6)
     dlg.orch_overlays.setText("twizz, quiz = Le Quiz, poll")
@@ -1631,6 +1631,62 @@ def test_wheel_scrolls_column_not_fields(tmp_path):
     e.stop()
     w.close()
 
+
+def test_orchestream_v2(tmp_path):
+    from livedeck.integrations import probe_orchestream
+    orch = fakes.FakeOrchestream(18251)
+    orch.visible["poll"] = True                     # déjà à l'antenne avant le lancement de LiveDeck
+    e, pid, logs = one_page(tmp_path, {
+        "0,0": new_button(label="Twizz", actions=[new_action("orchestream.overlay", overlay="twizz")]),
+        "0,1": new_button(label="Sondage", actions=[new_action("orchestream.overlay", overlay="poll")]),
+        "0,2": new_button(label="Speedizz", actions=[new_action("orchestream.overlay", overlay="speedizz",
+                                                                mode="show")])},
+        {"orchestream": {"url": "127.0.0.1:18251"}})
+    o = e.orchestream
+    # la v2 garde l'état : connu dès la connexion, sans attendre un changement
+    assert wait(lambda: o.connected and o.api == "v2", 6)
+    assert o.overlays == {"twizz": False, "poll": True, "speedizz": False}, o.overlays
+    assert wait(lambda: any(orch.subscribed.values()))
+    # basculer : show puis hide, la réponse de la v2 met l'état à jour
+    tap(e, pid, "0,0")
+    assert wait(lambda: orch.visible["twizz"] and o.overlays["twizz"] is True)
+    tap(e, pid, "0,1")
+    assert wait(lambda: orch.visible["poll"] is False and o.overlays["poll"] is False)
+    # changé depuis la régie d'orchestream : suivi par Transmit (le ping est ignoré)
+    orch.ping()
+    orch.set("twizz", False)
+    assert wait(lambda: o.overlays["twizz"] is False)
+    orch.set("poll", True)
+    assert wait(lambda: o.overlays["poll"] is True)
+    # rien à afficher : le 409 OVERLAY_EMPTY est expliqué tel quel
+    tap(e, pid, "0,2")
+    assert wait(lambda: any("lancez une partie" in m for _, m in logs)), logs
+    assert not orch.visible["speedizz"]
+    assert probe_orchestream("127.0.0.1:18251")[0] is True
+    assert "à l'antenne : Sondage" in probe_orchestream("127.0.0.1:18251")[1]
+    # adresse publique (tunnel) : la v2 refuse la régie, le message dit quoi faire
+    orch.external = True
+    ok, msg = probe_orchestream("127.0.0.1:18251")
+    assert ok is False and "adresse locale" in msg, msg
+    e.stop()
+
+
+def test_orchestream_v1_still_supported(tmp_path):
+    orch = fakes.FakeOrchestream(18252, v1=True)
+    e, pid, logs = one_page(tmp_path, {
+        "0,0": new_button(label="Twizz", actions=[new_action("orchestream.overlay", overlay="twizz")])},
+        {"orchestream": {"url": "127.0.0.1:18252"}})
+    o = e.orchestream
+    assert wait(lambda: o.connected and o.api == "v1", 6)
+    tap(e, pid, "0,0")
+    assert wait(lambda: orch.visible["twizz"] and o.overlays["twizz"] is True)
+    orch.set("twizz", False)
+    assert wait(lambda: o.overlays["twizz"] is False)
+    orch.emit("quiz:overlay:toggle", {"isVisible": True})    # overlay appris en direct
+    assert wait(lambda: o.overlays.get("quiz") is True)
+    from livedeck.integrations import probe_orchestream
+    assert "v1" in probe_orchestream("127.0.0.1:18252")[1]
+    e.stop()
 
 if __name__ == "__main__":
     import tempfile

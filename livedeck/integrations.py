@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from .webreq import DIRECT, error_kind, open_url
@@ -395,6 +396,21 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def _orch_message(data) -> str:
+    """Message d'erreur d'orchestream : v2 {"error": {"code", "message"}}, v1 {"error": "…"} ou {"message": "…"}."""
+    if not isinstance(data, dict):
+        return ""
+    err = data.get("error")
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("code") or "")
+    return str(err or data.get("message") or "")
+
+
+def _orch_code(data) -> str:
+    err = data.get("error") if isinstance(data, dict) else None
+    return str(err.get("code") or "") if isinstance(err, dict) else ""
+
+
 def explain_orchestream(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
     host, where = _hostport(url)
     if exc is not None:
@@ -405,43 +421,77 @@ def explain_orchestream(url: str, status: int | None = None, data=None, exc: Bas
     if _is_proxy_reply(status or 0, data):
         return _net_text("proxy", "orchestream", where) + f" (HTTP {status})"
     if status == 404:
+        if _orch_code(data) == "NOT_FOUND":  # orchestream-v2 joint par son adresse publique (tunnel)
+            return (f"{where} est bien orchestream-v2, mais il refuse la régie par cette adresse (adresse publique "
+                    "ou tunnel) : utilise son adresse locale, ex. http://192.168.1.20:5174")
         return f"{where} répond, mais sans l'API d'orchestream (/api/overlay/…) : vérifie l'adresse"
-    msg = ((data or {}).get("error") or (data or {}).get("message")) if isinstance(data, dict) else ""
-    return f"orchestream : {msg or f'erreur {status}'}"
+    return f"orchestream : {_orch_message(data) or f'erreur {status}'}"
+
+
+def _read_json(resp) -> object:
+    try:
+        return json.loads(resp.read(262144).decode("utf-8", "replace") or "null")
+    except ValueError:
+        return None
+
+
+def _orch_state(url: str, timeout: float) -> tuple[int, object]:
+    """GET /api/overlay/state (orchestream-v2) : (statut HTTP, JSON). Lève OSError si injoignable."""
+    try:
+        with open_url(urllib.request.Request(f"{url}/api/overlay/state"), timeout) as resp:
+            return resp.status, _read_json(resp)
+    except urllib.error.HTTPError as e:
+        return e.code, _read_json(e)
+
+
+def _is_v2_state(status: int, data) -> bool:
+    return status == 200 and isinstance(data, dict) and isinstance(data.get("widgets"), dict)
+
+
+def _v2_refused(status: int, data) -> bool:
+    """404 « NOT_FOUND » en JSON sur /api/overlay/state : orchestream-v2 refuse la régie par cette adresse."""
+    return status == 404 and _orch_code(data) == "NOT_FOUND"
 
 
 def probe_orchestream(url: str, timeout: float = 4.0) -> tuple[bool | None, str]:
-    """Test ponctuel : ouvre le flux en direct /api/overlay/events puis le referme."""
+    """Test ponctuel : état des overlays (orchestream-v2), sinon flux en direct de la v1."""
     url = normalize_url(url)
     if not url:
-        return None, "Adresse à renseigner (ex. http://serveur:3333)."
+        return None, "Adresse à renseigner (ex. http://serveur:5174)."
     try:
-        with open_url(urllib.request.Request(f"{url}/api/overlay/events"), timeout) as resp:
-            ctype = resp.headers.get("Content-Type", "")
-            if resp.status == 200 and "event-stream" in ctype:
-                return True, f"orchestream joignable : flux en direct ouvert ({url})"
-            return False, f"{url} répond ({resp.status}, {ctype or 'sans type'}), mais ce n'est pas le flux d'orchestream"
-    except urllib.error.HTTPError as e:
+        status, data = _orch_state(url, timeout)
+        if _is_v2_state(status, data):
+            shown = [overlay_label(k) for k, w in data["widgets"].items() if isinstance(w, dict) and w.get("visible")]
+            return True, (f"orchestream-v2 joignable ({url}) · "
+                          + (f"à l'antenne : {', '.join(shown)}" if shown else "aucun overlay affiché"))
+        if _v2_refused(status, data):
+            return False, explain_orchestream(url, status, data)
         try:
-            body = json.loads(e.read(4096).decode("utf-8", "replace") or "null")
-        except ValueError:
-            body = None
-        return False, explain_orchestream(url, e.code, body)
+            with open_url(urllib.request.Request(f"{url}/api/overlay/events"), timeout) as resp:
+                ctype = resp.headers.get("Content-Type", "")
+                if resp.status == 200 and "event-stream" in ctype:
+                    return True, f"orchestream (v1) joignable : flux en direct ouvert ({url})"
+                return False, f"{url} répond ({resp.status}, {ctype or 'sans type'}), mais ce n'est pas orchestream"
+        except urllib.error.HTTPError as e:
+            return False, explain_orchestream(url, e.code, _read_json(e))
     except OSError as e:
         return False, explain_orchestream(url, exc=e)
 
 
 class Orchestream(_Service):
-    """Overlays web d'orchestream : commandes show/hide et état suivi en direct par le flux SSE.
-    orchestream ne garde pas l'état de Twizz / Sondage : il reste « inconnu » jusqu'au premier changement."""
+    """Overlays web d'orchestream : commandes show/hide et état suivi en direct.
+    orchestream-v2 : état lu sur /api/overlay/state, puis canal « overlay » de Transmit (/__transmit/events).
+    orchestream v1 (utilisé si la v2 ne répond pas) : flux SSE /api/overlay/events ; l'état de Twizz et du
+    Sondage y reste inconnu jusqu'au premier changement."""
 
     def __init__(self, on_change, log):
         super().__init__(on_change, log)
         self.url = ""
+        self.api = ""  # "v2", "v1" ou "" (pas encore connu)
         self.connected = False
         self.error = ""
         self.labels: dict[str, str] = dict(ORCH_OVERLAYS)
-        self.learned: list[str] = []  # overlays vus dans le flux en direct mais absents des réglages
+        self.learned: list[str] = []  # overlays vus en direct mais absents des réglages
         self.overlays: dict[str, bool | None] = {k: None for k, _ in ORCH_OVERLAYS}
 
     def configure(self, url: str, overlays: list[tuple[str, str]] | None = None) -> None:
@@ -453,16 +503,21 @@ class Orchestream(_Service):
                 self.overlays.setdefault(name, None)
         if url != self.url:
             self.url = url
+            self.api = ""
             self.error = ""
             self.learned = []
             self.overlays = {k: None for k in self.labels}
             self._wake.set()
 
     def names(self) -> list[tuple[str, str]]:
-        """Overlays réglés, puis ceux appris en direct (événements « <nom>:overlay:toggle »)."""
+        """Overlays réglés, puis ceux appris en direct."""
         out = list(self.labels.items())
         out += [(k, overlay_label(k)) for k in list(self.learned) if k not in self.labels]
         return out
+
+    def _learn(self, name: str) -> None:
+        if name not in self.labels and name not in self.learned:
+            self.learned.append(name)
 
     def _set(self, name: str, visible) -> None:
         visible = None if visible is None else bool(visible)
@@ -479,19 +534,29 @@ class Orchestream(_Service):
         if ok != self.connected:
             self.connected = ok
             if ok or not why:
-                self._log("info" if ok else "warn", f"orchestream {'connecté' if ok else 'déconnecté'} ({self.url})")
+                what = "orchestream-v2" if self.api == "v2" else "orchestream"
+                self._log("info" if ok else "warn", f"{what} {'connecté' if ok else 'déconnecté'} ({self.url})")
             self._on_change()
 
     def _handle(self, event: str, data) -> None:
+        """Événement de la v1 (« <nom>:overlay:toggle », instantanés Speedizz)."""
         m = re.fullmatch(r"([\w-]+):overlay:toggle", event)
         if m and isinstance(data, dict):
-            if m.group(1) not in self.labels and m.group(1) not in self.learned:
-                self.learned.append(m.group(1))
+            self._learn(m.group(1))
             self._set(m.group(1), data.get("isVisible"))
         elif event == "speedizz:snapshot":
             self._set("speedizz", bool(isinstance(data, dict) and data.get("isVisible")))
         elif event == "speedizz:session:finished":
             self._set("speedizz", False)
+
+    def _widget(self, w) -> None:
+        """État d'un widget de la v2 : {"widget", "visible", "data"}."""
+        if isinstance(w, dict) and isinstance(w.get("widget"), str):
+            self._learn(w["widget"])
+            self._set(w["widget"], w.get("visible"))
+
+    def _alive(self, url: str) -> bool:
+        return not self._stop.is_set() and url == self.url and self.active
 
     def _run(self) -> None:
         delay = 2
@@ -502,31 +567,69 @@ class Orchestream(_Service):
                 continue
             url, why = self.url, ""
             try:
-                with open_url(urllib.request.Request(f"{url}/api/overlay/events"), 45) as resp:
-                    self._set_connected(True)
-                    delay = 2
-                    event, data = "", []
-                    for raw in resp:
-                        if self._stop.is_set() or url != self.url or not self.active:
-                            break
-                        line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                        if line.startswith("event:"):
-                            event = line[6:].strip()
-                        elif line.startswith("data:"):
-                            data.append(line[5:].strip())
-                        elif not line and event:
-                            try:
-                                self._handle(event, json.loads("\n".join(data) or "null"))
-                            except ValueError:
-                                pass
-                            event, data = "", []
+                status, data = _orch_state(url, 6)
+                if _is_v2_state(status, data):
+                    self.api = "v2"
+                    self._run_v2(url, data)
+                elif _v2_refused(status, data):
+                    why = explain_orchestream(url, status, data)
+                else:
+                    self.api = "v1"
+                    self._run_v1(url)
             except urllib.error.HTTPError as e:
-                why = explain_orchestream(url, e.code)
+                why = explain_orchestream(url, e.code, _read_json(e))
             except OSError as e:
                 why = explain_orchestream(url, exc=e)
+            if self.connected:
+                delay = 2  # la connexion avait abouti : on retente vite
             self._set_connected(False, why)
             self._sleep(delay)
             delay = min(delay * 2, 15)
+
+    def _sse(self, resp, url: str):
+        """Messages SSE (événement, données JSON) d'une réponse ouverte, tant que le service est actif."""
+        event, data = "", []
+        for raw in resp:
+            if not self._alive(url):
+                return
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].strip())
+            elif not line and (event or data):
+                try:
+                    yield event, json.loads("\n".join(data) or "null")
+                except ValueError:
+                    pass
+                event, data = "", []
+
+    def _run_v1(self, url: str) -> None:
+        with open_url(urllib.request.Request(f"{url}/api/overlay/events"), 45) as resp:
+            self._set_connected(True)
+            for event, data in self._sse(resp, url):
+                if event:
+                    self._handle(event, data)
+
+    def _run_v2(self, url: str, snapshot: dict) -> None:
+        """Transmit : ouvre le flux avec un identifiant, s'abonne au canal « overlay », relit l'état, écoute."""
+        uid = uuid.uuid4().hex
+        # orchestream envoie un ping toutes les 25 s : 45 s sans rien = connexion perdue
+        with open_url(urllib.request.Request(f"{url}/__transmit/events?uid={uid}"), 45) as resp:
+            body = json.dumps({"uid": uid, "channel": "overlay"}).encode()
+            sub = urllib.request.Request(f"{url}/__transmit/subscribe", data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with open_url(sub, 6):
+                pass
+            status, fresh = _orch_state(url, 6)  # relu après l'abonnement : aucun changement perdu entre les deux
+            for w in (fresh if _is_v2_state(status, fresh) else snapshot)["widgets"].values():
+                self._widget(w)
+            self._set_connected(True)
+            for _, msg in self._sse(resp, url):
+                if isinstance(msg, dict) and msg.get("channel") == "overlay":
+                    payload = msg.get("payload")
+                    if isinstance(payload, dict) and payload.get("type") == "widget.update":
+                        self._widget(payload.get("data"))
 
     def command(self, name: str, mode: str) -> bool:
         if not self.url:
@@ -540,11 +643,14 @@ class Orchestream(_Service):
             self._log("error", explain_orchestream(self.url, exc=e))
             return False
         if 200 <= status < 300:
-            self._set(name, data.get("isVisible", show) if isinstance(data, dict) else show)
+            if isinstance(data, dict):  # v2 : état du widget ; v1 : {"isVisible"}
+                show = data.get("visible", data.get("isVisible", show))
+            self._set(name, show)
             return True
-        if status == 404 and isinstance(data, dict) and (data.get("message") or data.get("error")):
-            msg = data.get("message") or data.get("error")  # refus métier (ex. aucune partie Speedizz)
-        elif status == 404:
+        code = _orch_code(data)
+        if status in (404, 409) and _orch_message(data) and code not in ("NOT_FOUND", "E_ROUTE_NOT_FOUND"):
+            msg = _orch_message(data)  # refus métier (ex. « Aucun Speedizz à afficher »)
+        elif status == 422 or (status == 404 and code != "NOT_FOUND"):
             msg = f"overlay « {name} » inconnu d'orchestream (pas de route /api/overlay/{name})"
         else:
             msg = explain_orchestream(self.url, status, data).removeprefix("orchestream : ")

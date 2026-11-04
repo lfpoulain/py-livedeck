@@ -1,5 +1,17 @@
 # Journal des versions
 
+## 1.4.0 — 2026-11-04
+
+### orchestream-v2
+- **Compatible orchestream-v2** : LiveDeck lit l'état des overlays au démarrage (`/api/overlay/state`) et suit
+  chaque changement par le canal temps réel `overlay` d'orchestream-v2. Une touche est donc juste dès le
+  lancement, même si Twizz ou le Sondage étaient déjà à l'antenne : plus de liseré gris en attendant.
+- Les refus d'orchestream-v2 sont affichés tels quels dans le Moniteur (« Aucun Twizz à afficher : lancez une
+  partie d'abord. »).
+- orchestream-v2 refuse la régie par son adresse publique (tunnel, passerelle) : **Tester** l'explique et indique
+  d'utiliser l'adresse locale (par ex. `http://192.168.1.20:5174`).
+- L'ancienne version d'orchestream reste reconnue automatiquement, sans rien régler.
+
 ## 1.3.1 — 2026-11-02
 
 ### Correctif

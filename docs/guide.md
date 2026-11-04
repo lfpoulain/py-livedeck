@@ -251,7 +251,7 @@ elles sont toutes surveillées.
 | Outil | Ce que fait LiveDeck | Retour sur la touche |
 |---|---|---|
 | **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
-| **orchestream** (overlays web) | Afficher / masquer / basculer, avec l'état suivi en direct par le flux `/api/overlay/events` | Jaune quand l'overlay est affiché, liseré gris si l'état est inconnu |
+| **orchestream** (overlays web) | Afficher / masquer / basculer, avec l'état suivi en direct (canal `overlay` d'orchestream-v2, ou flux `/api/overlay/events` de la v1) | Jaune quand l'overlay est affiché, liseré gris si l'état est inconnu |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 
 ### Régler py-intercom
@@ -286,9 +286,15 @@ un proxy d'entreprise ne peut plus bloquer le talkback.
 
 ### orchestream et Tally32
 
-- **orchestream** : indique l'adresse du serveur (par ex. `http://serveur:3333`) et la liste des overlays
-  (`twizz, poll = Sondage, speedizz` : `nom = Libellé` pour un nom affiché). Un overlay vu dans le flux en direct
-  est aussi proposé automatiquement.
+- **orchestream** : indique l'adresse **locale** du serveur (par ex. `http://192.168.1.20:5174` pour
+  orchestream-v2) et la liste des overlays (`twizz, poll = Sondage, speedizz` : `nom = Libellé` pour un nom
+  affiché). Les overlays connus du serveur sont aussi proposés automatiquement. LiveDeck reconnaît tout seul
+  orchestream-v2 et l'ancienne version (v1).
+  - Avec **orchestream-v2**, l'état des overlays est lu dès la connexion : une touche est jaune tout de suite si
+    l'overlay est déjà à l'antenne. Montrer un widget vide (pas de question, pas de sondage) est refusé, et le
+    Moniteur affiche le message d'orchestream (« Aucun Twizz à afficher : lancez une partie d'abord. »).
+  - orchestream-v2 n'accepte la régie que par son adresse locale. Son adresse publique (tunnel, passerelle
+    invités) répond « introuvable » : **Tester** te le dit et te propose l'adresse locale.
 - **Tally32** : un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur
   te demande de mettre à jour son firmware.
 
@@ -300,8 +306,8 @@ secours), les interrupteurs show/hide d'orchestream vers l'overlay suivi en dire
 (pings + GET + variables) vers la surveillance native des Tally32. Une configuration LiveDeck 1.x est convertie
 à l'ouverture ; les touches converties sont listées une fois dans le Moniteur.
 
-Limite connue : orchestream ne mémorise pas l'état de Twizz et du Sondage côté serveur. Au démarrage,
-LiveDeck l'ignore (liseré gris) jusqu'au premier changement ; Speedizz, lui, est connu tout de suite.
+Limite de l'ancienne version (orchestream v1) : elle ne mémorise pas l'état de Twizz et du Sondage. Au
+démarrage, LiveDeck l'ignore (liseré gris) jusqu'au premier changement ; orchestream-v2 n'a plus cette limite.
 
 ## Commandes réseau : OSC, TCP / UDP, API JSON
 
@@ -372,7 +378,7 @@ Pendant le diagnostic, les touches ne déclenchent rien (les actions maintenues 
 | Touche talkback DÉSARMÉ | Le client tourne mais n'est pas connecté au serveur intercom : connecte-le dans py-intercom. |
 | Touche talkback BUS ABSENT | Ce bus n'existe pas dans le client : choisis-en un autre dans l'étape *Intercom* (la liste vient du client). |
 | Talkback refusé « proxy » | Un proxy intercepte la requête : les adresses locales le contournent déjà ; pour une IP publique, vérifie `HTTP_PROXY` ou le proxy de Windows. |
-| Overlay orchestream avec liseré gris | État inconnu tant que l'overlay n'a pas changé depuis le démarrage (limite d'orchestream). |
+| Overlay orchestream avec liseré gris | orchestream v1 : état inconnu tant que l'overlay n'a pas changé depuis le démarrage (passe à orchestream-v2). Sinon, LiveDeck n'est pas connecté : clique **Tester** dans Réglages → Intégrations. |
 | Une variable affiche « — » | vMix est hors ligne ou l'input de la variable est introuvable. |
 | Une action ne fait rien | Ouvre le **Moniteur** : chaque refus de vMix (avec la commande refusée), d'un serveur HTTP, de py-intercom, d'orchestream ou d'un tally y est écrit avec son message. |
 

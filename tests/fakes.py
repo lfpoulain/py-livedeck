@@ -128,10 +128,20 @@ class FakeIntercom:
 
 
 class FakeOrchestream:
-    def __init__(self, port):
+    """orchestream-v2 (par défaut) ou v1 (v1=True).
+    v2 : GET /api/overlay/state, /api/overlay/<w>/show|hide (GET ou POST, 409 OVERLAY_EMPTY sans contenu),
+    temps réel Transmit (GET /__transmit/events?uid=…, POST /__transmit/subscribe {uid, channel}).
+    external=True imite une requête arrivée par l'adresse publique : 404 NOT_FOUND partout."""
+
+    def __init__(self, port, v1=False):
+        self.v1 = v1
+        self.external = False
         self.visible = {"twizz": False, "poll": False, "speedizz": False}
+        self.content = {"twizz": True, "poll": True, "speedizz": False}  # v2 : un widget sans contenu refuse « show »
         self.speedizz_run = False
         self.clients: list[queue.Queue] = []
+        self.streams: dict[str, queue.Queue] = {}  # v2 : uid → file du flux
+        self.subscribed: dict[str, set] = {}
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -145,37 +155,82 @@ class FakeOrchestream:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def do_GET(self):
-                if self.path == "/api/overlay/events":
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.end_headers()
-                    q = queue.Queue()
-                    fake.clients.append(q)
-                    snap = {"isVisible": fake.visible["speedizz"]} if fake.speedizz_run else None
-                    # comme orchestream : instantanés au branchement, puis battements de cœur (commentaires SSE)
-                    try:  # le client peut refermer tout de suite (bouton « Tester »)
-                        self.wfile.write(b"event: polls:snapshot\ndata: []\n\n:heartbeat\n\n")
-                        self.wfile.write(f"event: speedizz:snapshot\ndata: {json.dumps(snap)}\n\n".encode())
+            def _stream(self, q, first: bytes, fmt):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                try:  # le client peut refermer tout de suite (bouton « Tester »)
+                    self.wfile.write(first)
+                    self.wfile.flush()
+                    while True:
+                        self.wfile.write(fmt(q.get()))
                         self.wfile.flush()
-                        while True:
-                            ev, data = q.get()
-                            self.wfile.write(f"event: {ev}\ndata: {json.dumps(data)}\n\n".encode())
-                            self.wfile.flush()
-                    except OSError:
+                except OSError:
+                    pass
+
+            def do_GET(self):
+                path = self.path.split("?", 1)[0]
+                if fake.external:
+                    return self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
+                if fake.v1:
+                    if path == "/api/overlay/events":
+                        q = queue.Queue()
+                        fake.clients.append(q)
+                        snap = {"isVisible": fake.visible["speedizz"]} if fake.speedizz_run else None
+                        # comme orchestream v1 : instantanés au branchement, puis battements de cœur
+                        self._stream(q, b"event: polls:snapshot\ndata: []\n\n:heartbeat\n\n"
+                                     + f"event: speedizz:snapshot\ndata: {json.dumps(snap)}\n\n".encode(),
+                                     lambda m: f"event: {m[0]}\ndata: {json.dumps(m[1])}\n\n".encode())
                         fake.clients.remove(q)
+                        return
+                    return self.do_POST()
+                if path == "/api/overlay/state":
+                    return self._send(200, {"widgets": {w: fake.widget(w) for w in fake.visible}})
+                if path == "/__transmit/events":
+                    uid = self.path.split("uid=", 1)[-1] if "uid=" in self.path else ""
+                    if not uid:
+                        return self._send(500, {"error": {"code": "E_RUNTIME", "message": "Missing uid"}})
+                    q = queue.Queue()
+                    fake.streams[uid], fake.subscribed[uid] = q, set()
+                    self._stream(q, b":ok\n\n", lambda m: f"data: {json.dumps(m)}\n\n".encode())
+                    fake.streams.pop(uid, None)
+                    fake.subscribed.pop(uid, None)
                     return
                 self.do_POST()
 
             def do_POST(self):
-                parts = self.path.strip("/").split("/")  # api overlay <name> <show|hide>
+                path = self.path.split("?", 1)[0]
+                if fake.external:
+                    return self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
+                if path == "/__transmit/subscribe" and not fake.v1:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    if body.get("uid") not in fake.subscribed or body.get("channel") != "overlay":
+                        return self._send(400, {"error": {"code": "BAD_REQUEST", "message": "Requête invalide."}})
+                    fake.subscribed[body["uid"]].add("overlay")
+                    self.send_response(204)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                parts = path.strip("/").split("/")  # api overlay <name> <show|hide>
                 if len(parts) == 4 and parts[:2] == ["api", "overlay"]:
                     name, act = parts[2], parts[3]
-                    if name == "speedizz" and act == "show" and not fake.speedizz_run:
-                        return self._send(404, {"success": False, "message": "Aucun Speedizz à afficher"})
+                    if fake.v1:
+                        if name == "speedizz" and act == "show" and not fake.speedizz_run:
+                            return self._send(404, {"success": False, "message": "Aucun Speedizz à afficher"})
+                        fake.set(name, act == "show")
+                        return self._send(200, {"success": True, "isVisible": act == "show"})
+                    if name not in fake.visible:
+                        return self._send(422, {"error": {"code": "E_VALIDATION_ERROR", "message": "Requête invalide."}})
+                    if act == "show" and not fake.content[name]:
+                        return self._send(409, {"error": {"code": "OVERLAY_EMPTY",
+                                                          "message": "Aucun Speedizz à afficher : lancez une partie d’abord."}})
                     fake.set(name, act == "show")
-                    return self._send(200, {"success": True, "isVisible": act == "show"})
-                self._send(404, {"error": "?"})
+                    return self._send(200, fake.widget(name))
+                if fake.v1:  # route inconnue d'AdonisJS 6 (orchestream v1)
+                    return self._send(404, {"errors": [{"message": f"Cannot {self.command}:{path}",
+                                                        "code": "E_ROUTE_NOT_FOUND"}]})
+                self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
 
             def log_message(self, *a):
                 pass
@@ -183,13 +238,34 @@ class FakeOrchestream:
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
+    def widget(self, name):
+        return {"widget": name, "visible": self.visible.get(name, False),
+                "data": {"name": name} if self.content.get(name, True) else None}
+
     def set(self, name, visible):
+        """L'overlay change (depuis LiveDeck ou la régie d'orchestream) : diffusé aux clients abonnés."""
         self.visible[name] = visible
-        self.emit(f"{name}:overlay:toggle", {"isVisible": visible})
+        self.content.setdefault(name, True)
+        if self.v1:
+            self.emit(f"{name}:overlay:toggle", {"isVisible": visible})
+        else:
+            self.broadcast("widget.update", self.widget(name))
 
     def emit(self, ev, data):
+        """v1 : événement SSE nommé."""
         for q in list(self.clients):
             q.put((ev, data))
+
+    def broadcast(self, type_, data):
+        """v2 : message Transmit du canal « overlay »."""
+        msg = {"channel": "overlay", "payload": {"type": type_, "data": data, "at": "2026-11-04T12:00:00Z"}}
+        for uid, q in list(self.streams.items()):
+            if "overlay" in self.subscribed.get(uid, ()):
+                q.put(msg)
+
+    def ping(self):
+        for q in list(self.streams.values()):
+            q.put({"channel": "$$transmit/ping", "payload": {}})
 
 
 class FakeKeys:
