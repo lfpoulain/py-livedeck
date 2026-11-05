@@ -101,6 +101,11 @@ def normalize_button(b: dict) -> dict:
     return b
 
 
+def control_kind(cid: str) -> str:
+    from .loupedeck import control_kind as kind  # import tardif : loupedeck ne dépend pas du modèle
+    return kind(cid)
+
+
 def new_page(name: str, cols: int = 8, rows: int = 4, surface: str = "") -> dict:
     """surface : « loupedeck » pour dessiner molettes, bandeaux et molette centrale ;
     vide = déduit de l'appareil qui affiche la page (Stream Deck par défaut)."""
@@ -200,8 +205,14 @@ def normalize_config(cfg: dict) -> dict:
         p.setdefault("surface", "")
         for b in p["buttons"].values():
             normalize_button(b)
-        for c in p["controls"].values():
+        for cid, c in p["controls"].items():
             normalize_control(c)
+            # Un bouton ne tourne pas : une action de rotation posée là ne partirait jamais.
+            # (Les versions précédentes la conservaient en déposant un réglage de molette dessus.)
+            if control_kind(cid) != "rotary" and (c["actions_cw"] or c["actions_ccw"]):
+                if not c["actions"]:
+                    c["actions"] = c["actions_cw"] + c["actions_ccw"]
+                c["actions_cw"], c["actions_ccw"] = [], []
     return cfg
 
 

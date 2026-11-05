@@ -16,7 +16,9 @@ from .render import hex_rgb, render, render_strip, render_wheel
 
 log = logging.getLogger("livedeck")
 
-NAV = ld.DEFAULT_NAV  # voir loupedeck.py : navigation par défaut des boutons laissés libres
+# Aucun bouton n'a de rôle par défaut : un contrôle sans action affectée ne fait RIEN. Un
+# comportement caché (changer de page, par exemple) se découvre en appuyant par accident, en
+# plein direct. Pour naviguer, on pose « Page suivante » sur le bouton de son choix.
 
 
 class LoupedeckHandle:
@@ -224,7 +226,8 @@ class LoupedeckManager:
                     v["label"] = h.model.replace("Loupedeck ", "") if idx == 0 else ("●" if idx % 2 else "")
                     h.dev.draw_key(idx, render(v, h.size), refresh=False)
                 h.dev.refresh("center")
-                h.dev.vibrate("court")
+                if self.haptic_enabled(h.serial):
+                    h.dev.vibrate("court")
             except Exception:
                 pass
             h.invalidate(everything=True)
@@ -342,8 +345,15 @@ class LoupedeckManager:
         r, c = (int(n) for n in k.split(","))
         return r * h.cols + c
 
+    def haptic_enabled(self, serial: str) -> bool:
+        """Réglage de l'appareil (Réglages → Decks). Activé par défaut."""
+        return bool((self.engine.cfg["decks"].get(serial) or {}).get("haptic", True))
+
     def _haptic(self, h: LoupedeckHandle, k: str) -> None:
-        """Vibration à l'appui : sur une dalle tactile, rien n'indique sinon que l'appui est pris."""
+        """Vibration à l'appui : sur une dalle tactile, rien n'indique sinon que l'appui est pris.
+        Le réglage de l'appareil prime sur celui du contrôle : décoché, plus rien ne vibre."""
+        if not self.haptic_enabled(h.serial):
+            return
         el = self.engine.button(h.page_id, k) if h.page_id else None
         pattern = (el or {}).get("haptic", "court")
         if not pattern:
@@ -358,10 +368,6 @@ class LoupedeckManager:
         if self.diag_handler or not h.page_id:
             return
         k = control_key(cid)
-        if not self.engine.control(h.page_id, cid) and cid in NAV:
-            if evt["down"]:  # bouton libre : navigation par défaut, comme sur le Stream Deck Neo
-                self.goto(h.serial, NAV[cid])
-            return
         if evt["down"]:
             self._haptic(h, k)
         # Même libre, l'appui est transmis : le moteur le signale à l'éditeur, qui sélectionne

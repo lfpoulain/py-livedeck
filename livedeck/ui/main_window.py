@@ -26,7 +26,7 @@ from . import theme as T
 from .deck_view import ControlBar, DeckGrid
 from .diagnostic import DiagnosticDialog
 from .dialogs import LEGEND, FillRowDialog, ImportOptionsDialog, ShortcutsDialog
-from .inspector import Inspector
+from .inspector import Inspector, prepare_preset
 from .library import LibraryPanel
 from .search import SearchDialog
 from .settings import SettingsDialog
@@ -248,10 +248,15 @@ class MainWindow(QMainWindow):
         self.lock_btn.clicked.connect(self.toggle_lock)
         lay.addWidget(self.lock_btn, 0, Qt.AlignVCenter)
         self._lockable.append(self.mode)
+        # Décoché par défaut, et mémorisé : c'est une aide au câblage, pas un comportement permanent.
+        # Coché, le moindre appui sur un bouton de l'appareil déplace la sélection de l'éditeur, ce
+        # qui est vite insupportable en exploitation — surtout sur un Loupedeck et ses 47 contrôles.
         self.follow = QCheckBox("Suivre le deck")
-        self.follow.setChecked(True)
-        self.follow.setToolTip("Suivre le Stream Deck : appuyer sur une touche physique la sélectionne dans "
-                               "l'éditeur")
+        self.follow.setChecked(bool(self.engine.cfg["options"].get("follow_deck", False)))
+        self.follow.setToolTip("Pour câbler l'appareil : appuyer sur une touche ou tourner une molette la "
+                               "sélectionne dans l'éditeur, même si elle est vide.\nÀ décocher pendant un "
+                               "direct, sinon l'éditeur suit chaque appui.")
+        self.follow.toggled.connect(self._set_follow)
         lay.addWidget(self.follow)
         lay.addSpacing(6)
         imp = QPushButton("Fichier")
@@ -432,6 +437,10 @@ class MainWindow(QMainWindow):
             self._goto_page(payload)
         elif kind == "activity":
             self._activity(*payload)
+
+    def _set_follow(self, on: bool) -> None:
+        self.engine.mutate(lambda cfg: cfg.setdefault("options", {}).__setitem__("follow_deck", bool(on)),
+                           coalesce="follow_deck")
 
     @property
     def sel(self) -> str | None:
@@ -776,7 +785,7 @@ class MainWindow(QMainWindow):
 
     def _target(self) -> str | None:
         """Touche visée par un double-clic : la sélection, sinon la première case libre."""
-        k = self.grid.sel or self.engine.first_free(self.page_id)
+        k = self.sel or self.engine.first_free(self.page_id)
         if not k:
             self.toast("La page est pleine : sélectionne une touche à remplacer.", error=True)
         return k
@@ -788,6 +797,8 @@ class MainWindow(QMainWindow):
         if not k:
             return
         mode = self.library.inputs.drop_mode()
+        if mode == "pair" and parse_control(k) is not None:
+            mode = "preview"  # « preview + program » s'étale sur deux rangées : impossible sur une molette
         if mode == "pair":
             self.engine.assign_input(self.page_id, k, title, "preview")
             r, c = parse_key(k)
@@ -805,15 +816,19 @@ class MainWindow(QMainWindow):
         k = self._target()
         if k:
             self._drop_preset(k, pid)
-            self.grid.select(k)
 
     def _drop_preset(self, k: str, pid: str):
         b = presets.make(pid, self.engine)
-        if b:
-            b = presets.place(b, k)  # molette : garde la rotation ; touche : n'en garde que l'appui
-            self.engine.set_button(self.page_id, k, b)
-            self.select(k)
-            self.inspector.load(self.page_id, k, force=True)
+        if not b:
+            return
+        got = prepare_preset(self, b, k)  # molette : demande appui, rotation ou sens
+        if got is None:
+            return
+        b, side = got
+        self.engine.set_button(self.page_id, k, b)
+        self.select(k)
+        self.inspector.side, self.inspector.step = side, 0
+        self.inspector.load(self.page_id, k, force=True)
 
     def _drop_inputs(self, k: str, titles: list[str]):
         self.fill_row(k, titles, self.library.inputs.drop_mode())

@@ -99,11 +99,6 @@ CONTROL_LABELS = {
 }
 STRIP_ZONES = 3  # chaque bandeau latéral est découpé en 3 zones tactiles affichables
 
-# Boutons qui changent de page TANT QU'AUCUNE action ne leur est affectée (comme les touches
-# tactiles du Stream Deck Neo). L'éditeur l'affiche sur le bouton, pour que ce ne soit pas
-# un comportement caché : leur donner une action le remplace.
-DEFAULT_NAV = {"fnL": "prev", "fnR": "next"}
-NAV_MARK = {"prev": "◀", "next": "▶"}
 
 # Nom court pour l'étiquette d'un contrôle libre, quand la place manque. Les molettes, les
 # bandeaux et les boutons ronds se reconnaissent à leur forme et à leur place : on n'y écrit rien

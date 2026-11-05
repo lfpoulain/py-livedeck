@@ -214,14 +214,36 @@ class DeckGrid(QWidget):
                 return surface_of(d["model"])
         return "streamdeck"
 
+    def device_grid(self) -> tuple[int, int]:
+        """Grille réellement affichée par l'appareil. Un Loupedeck a un pavé fixe (4×3 sur un CT) :
+        si la page est plus grande, l'appareil n'en montre que ce qui tient, et la vue doit montrer
+        la même chose — sinon on dessine une colonne qui n'existe pas."""
+        p = self.page
+        cols, rows = (p["cols"], p["rows"]) if p else (8, 4)
+        if self.surface != "loupedeck":
+            return cols, rows
+        prof = ld.PROFILES[0x0007]
+        for d in (self.engine.decks.info() if self.engine.decks else []):
+            if d["page"] == self.page_id and surface_of(d["model"]) == "loupedeck":
+                prof = next((pr for pr in ld.PROFILES.values() if pr.name == d["model"]), prof)
+                break
+        return min(cols, prof.cols), min(rows, prof.rows)
+
+    def hidden_keys(self) -> int:
+        """Touches de la page que l'appareil ne peut pas afficher (page plus grande que son pavé)."""
+        p = self.page
+        if not p or self.surface != "loupedeck":
+            return 0
+        cols, rows = self.device_grid()
+        return sum(1 for k in p["buttons"] if not (lambda rc: rc[0] < rows and rc[1] < cols)(parse_key(k)))
+
     def _geom(self):
         """(colonnes, rangées, côté d'une touche, écart, x0, y0, boîtier).
 
         x0/y0 = coin du pavé de touches ; `body` = l'appareil dessiné. La colonne d'état de
         LiveDeck est réservée en plus, à droite : elle ne fait pas partie de l'appareil et ne
         doit donc pas en déformer les proportions."""
-        p = self.page
-        cols, rows = (p["cols"], p["rows"]) if p else (8, 4)
+        cols, rows = self.device_grid()
         if self.surface == "loupedeck":
             return self._geom_loupedeck(cols, rows)
         pad, foot = 0.42, 0.5  # marges du boîtier, pied (en touches)
@@ -416,10 +438,7 @@ class DeckGrid(QWidget):
             if v and v.get("label"):
                 text = v["label"].replace("\n", " ").strip()
         if not text:
-            cid = parse_control(k) or ""
-            # Un bouton libre qui change de page le montre : sinon on le découvre en appuyant.
-            nav = ld.NAV_MARK.get(ld.DEFAULT_NAV.get(cid, "")) if not el else None
-            text = "+" if hover else (nav or ld.short_label(cid))
+            text = "+" if hover else ld.short_label(parse_control(k) or "")
         p.setPen(QColor(v["fg"]) if v and v.get("fg") else QColor(T.FAINT if hover else "#59616f"))
         size = cell * (0.13 if kind == "wheel" else 0.095)
         p.setFont(self._font(size))
@@ -454,7 +473,12 @@ class DeckGrid(QWidget):
             else ("LIVE  ·  CLIC = APPUI" if self.live else "AFFICHÉE SUR AUCUN DECK")
         if self.locked:
             text = "VERROUILLÉ  ·  " + text
-        p.setPen(QColor(T.ACCENT if decks and not self.locked else ("#b91c1c" if red else "#3c4352")))
+        hidden = self.hidden_keys()
+        if hidden:  # page plus grande que le pavé de l'appareil : il n'en affiche qu'une partie
+            cols, rows = self.device_grid()
+            text = f"{hidden} TOUCHE{'S' if hidden > 1 else ''} HORS DU PAVÉ {cols}×{rows}  ·  " + text
+        p.setPen(QColor("#b91c1c" if hidden else
+                        (T.ACCENT if decks and not self.locked else ("#b91c1c" if red else "#3c4352"))))
         p.setFont(self._font(cell * 0.09, True, cell * 0.02))
         p.drawText(QRectF(body.center().x(), foot_y, body.width() / 2 - cell * 0.42, cell * 0.3),
                    Qt.AlignRight | Qt.AlignVCenter, text)
@@ -593,10 +617,6 @@ class DeckGrid(QWidget):
             hint = "" if self.live else "  ·  clic pour choisir une action"
             if cid is not None and ld.control_kind(cid) == "rotary":
                 hint += "  ·  rotation dans les deux sens et appui"
-            nav = ld.DEFAULT_NAV.get(cid or "")
-            if nav:  # comportement par défaut : il doit être écrit, pas découvert en appuyant
-                hint = (f"  ·  tant qu'il est libre, il affiche la page "
-                        f"{'précédente' if nav == 'prev' else 'suivante'}" + hint)
             return f"{where} : vide{hint}"
         e = self.engine
         names = e.page_names()

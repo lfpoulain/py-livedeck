@@ -38,7 +38,9 @@ from livedeck.ldeck import LoupedeckHandle, LoupedeckManager  # noqa: E402
 from livedeck import vmix as vmix_mod  # noqa: E402
 from livedeck.feedback import GREEN, RED, auto  # noqa: E402
 from livedeck.model import (DECK_SIZES, backup_config, config_text, control_key, deck_size,  # noqa: E402
-                           default_config, load_config, new_button, new_control, new_page, surface_of)
+                           default_config, key, load_config, new_button, new_control, new_page,
+                           normalize_config, parse_control, surface_of)
+from livedeck.ui.inspector import prepare_preset  # noqa: E402
 from livedeck.ui.deck_view import BOTTOM_L, BOTTOM_R, ControlBar, DeckGrid  # noqa: E402
 from livedeck.ui import theme  # noqa: E402
 from livedeck.ui.diagnostic import DiagnosticDialog  # noqa: E402
@@ -46,6 +48,7 @@ from livedeck.ui.main_window import MainWindow  # noqa: E402
 from livedeck.ui.search import ROLE, SearchDialog  # noqa: E402
 from livedeck.ui.settings import SettingsDialog  # noqa: E402
 from livedeck.ui.widgets import InputCombo  # noqa: E402
+from livedeck.ui import widgets as ui_widgets  # noqa: E402
 from livedeck.vars import expand  # noqa: E402
 from livedeck.vmix import VmixClient, _encode_query  # noqa: E402
 from livedeck.webreq import parse_curl  # noqa: E402
@@ -1939,9 +1942,9 @@ def test_loupedeck_pages_and_hub(tmp_path):
     lm.refresh()                                       # rien n'a changé : le cache évite tout renvoi
     assert len([c for c in port.commands if c[0] == ld.CMD_FRAMEBUFF]) == before
 
-    port.button("fnR")                                 # page suivante
+    lm.goto(h.serial, "next")                          # navigation (via une action « page »)
     assert wait(lambda: h.page_id == b, 3), h.page_id
-    port.button("fnL")
+    lm.goto(h.serial, "prev")
     assert wait(lambda: h.page_id == a, 3), h.page_id
     assert [p["id"] for p in e.pages if (p["cols"], p["rows"]) == (8, 4)], "la page XL reste disponible"
 
@@ -2077,10 +2080,13 @@ def test_loupedeck_controls_actions(tmp_path):
     port.button("key2", down=False)
     assert wait(lambda: "Cut" in names(before), 3), names(before)
 
-    # 7) Un bouton sans contrôle affecté garde la navigation par défaut
+    # 7) Un bouton sans contrôle affecté ne fait rien du tout
     e.cfg["pages"].append(new_page("CT 2", cols=4, rows=3))
+    before = len(sent.functions)
     port.button("fnR")
-    assert wait(lambda: h.page_id == e.cfg["pages"][1]["id"], 3), h.page_id
+    port.button("fnR", down=False)
+    time.sleep(0.3)
+    assert h.page_id == page["id"] and len(sent.functions) == before, "un bouton libre doit rester inerte"
     e.stop()
 
 
@@ -2384,26 +2390,43 @@ def test_selected_control_outlined_in_view(tmp_path):
     e.stop()
 
 
-def test_free_nav_buttons_are_visible(tmp_path):
-    """Fn G / Fn D libres changent de page : la vue et l'info-bulle doivent le dire, sinon on le
-    découvre en appuyant — et ça passe pour un comportement bizarre."""
+def test_free_buttons_do_nothing(tmp_path):
+    """Aucun bouton n'a de rôle caché : sans action affectée, il ne doit RIEN faire — surtout pas
+    changer de page, ce qui se découvrirait en appuyant par accident en plein direct."""
     e = engine(tmp_path, start=False)
     ct = new_page("CT", cols=4, rows=3, surface="loupedeck")
-    e.cfg["pages"] = [ct, new_page("CT 2", cols=4, rows=3, surface="loupedeck")]
+    other = new_page("CT 2", cols=4, rows=3, surface="loupedeck")
+    e.cfg["pages"] = [ct, other]
     e.start()
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = ct["id"]
+    sent = vmix_server()
+    n = len(sent.functions)
+
+    # Un par un : « page suivante » puis « page précédente » se compenseraient et masqueraient
+    # le défaut si on les enchaînait avant de vérifier.
+    for cid in ("fnL", "fnR", "home", "undo", "keyboard", "enter", "save", "a", "e", "key0", "key7"):
+        port.button(cid)
+        port.button(cid, down=False)
+        time.sleep(0.15)
+        assert h.page_id == ct["id"], f"« {cid} » a changé la page tout seul : {h.page_id}"
+    assert len(sent.functions) == n, sent.functions[n:]
+    assert not e.pressed and not e._active
+
+    # Pour naviguer, on pose explicitement l'action sur le bouton de son choix.
+    e.decks = DeckHub(e, [lm])
+    e.set_button(ct["id"], control_key("fnR"),
+                 new_control("button", actions=[new_action("page", page="next")]))
+    port.button("fnR")
+    port.button("fnR", down=False)
+    assert wait(lambda: h.page_id == other["id"], 3), h.page_id
+
+    # Et rien dans l'éditeur n'annonce de rôle par défaut.
     g = DeckGrid(e)
     g.resize(1000, 900)
     g.set_page(ct["id"])
-    tip = g.tooltip_text(control_key("fnR"))
-    assert "page suivante" in tip, tip
-    assert "page précédente" in g.tooltip_text(control_key("fnL"))
-    assert ld.DEFAULT_NAV == {"fnL": "prev", "fnR": "next"}
-    assert ld.NAV_MARK["next"] == "▶"
-    # Un bouton qui n'a pas ce rôle n'affiche rien de tel.
-    assert "page" not in g.tooltip_text(control_key("save")).lower()
-    # Dès qu'on lui donne une action, la navigation s'efface au profit de celle-ci.
-    e.set_button(ct["id"], control_key("fnR"), new_control("button", label="REC"))
-    assert "page suivante" not in g.tooltip_text(control_key("fnR"))
+    for cid in ("fnL", "save", "home"):
+        assert "page" not in g.tooltip_text(control_key(cid)).lower(), cid
     g.grab()
     e.stop()
 
@@ -2484,12 +2507,13 @@ def test_follow_deck_selects_empty_keys(tmp_path):
     port.touch(20, 135, finger=4)                              # zone libre d'un bandeau
     assert wait(lambda: (pid, control_key("stripL2"), h.serial) in seen, 3), seen
 
-    # fnL / fnR libres gardent la navigation : ils ne sélectionnent pas.
+    # fnL / fnR n'ont aucun rôle réservé : ils se sélectionnent comme les autres, et la page
+    # ne change pas toute seule.
     e.cfg["pages"].append(new_page("CT 2", cols=4, rows=3, surface="loupedeck"))
     seen.clear()
     port.button("fnR")
-    assert wait(lambda: h.page_id == e.cfg["pages"][1]["id"], 3)
-    assert not any(k == control_key("fnR") for _, k, _ in seen), seen
+    assert wait(lambda: (pid, control_key("fnR"), h.serial) in seen, 3), seen
+    assert h.page_id == pid, "un bouton libre ne doit pas changer de page"
 
     # L'éditeur suit : la molette libre devient la sélection courante.
     w = MainWindow(e)
@@ -2794,7 +2818,8 @@ def test_knob_preset_in_inspector(tmp_path):
     w.page_id = pid
     w.grid.set_page(pid)
     w._select_control(control_key("knobTL"))
-    w.inspector._create("knob_master")
+    with mock.patch.object(ui_widgets, "ask_slot", return_value="both"):
+        w.inspector._create("knob_master")
     assert w.inspector.side == "actions_cw", w.inspector.side
     c = e.control(pid, "knobTL")
     assert c["kind"] == "rotary" and c["actions_cw"][0]["target"] == "master"
@@ -2842,6 +2867,253 @@ def test_loupedeck_open_failure_logged_once(tmp_path):
         lm._scan()
         lm._scan()
     assert len(errors()) == 2, errors()
+    e.stop()
+
+
+def test_preset_slots_and_assign():
+    """Où poser une action sur une molette : mêmes choix partout, seule la recommandation change."""
+    cut = presets.make("cut")
+    base = ["press", "cw", "ccw"]
+    choices, best = presets.slots(cut)
+    assert [s for s, _ in choices] == base and best == "press", (choices, best)
+    # Un réglage au cran suit le sens de rotation : la rotation est conseillée, mais les choix
+    # proposés restent les mêmes — sinon les molettes sembleraient avoir des possibilités différentes.
+    choices, best = presets.slots(presets.make("win_vol_up"))
+    assert [s for s, _ in choices] == base and best == "cw", (choices, best)
+    choices, best = presets.slots(presets.make("knob_scroll"))
+    assert [s for s, _ in choices] == base and best == "cw", "réglage sans appui : rotation conseillée"
+    choices, best = presets.slots(presets.make("knob_master"))
+    assert [s for s, _ in choices] == ["both"] + base and best == "both", choices
+    assert presets.slots(presets.make("label"))[0] == [], "texte seul : rien à demander"
+
+    b = presets.assign(cut, "cw")
+    assert b["actions_cw"][0]["effect"] == "Cut" and not b["actions"] and not b["actions_ccw"]
+    b = presets.assign(cut, "ccw")
+    assert b["actions_ccw"][0]["effect"] == "Cut" and not b["actions_cw"] and not b["actions"]
+    b = presets.assign(cut, "press")
+    assert b["actions"][0]["effect"] == "Cut" and not b["actions_cw"]
+    knob = presets.make("knob_master")
+    b = presets.assign(knob, "press")
+    assert b["actions"][0]["function"] == "MasterAudio" and not b["actions_cw"], "appui seulement"
+    b = presets.assign(knob, "turn")
+    assert b["actions_cw"][0]["type"] == "vmix.adjust" and not b["actions"], "rotation seulement"
+    b = presets.assign(knob, "both")
+    assert b["actions_cw"] and b["actions"]
+    # Un interrupteur posé sur la rotation redevient un simple déclenchement (pas de 2e appui).
+    b = presets.assign(presets.make("toggle_http"), "cw")
+    assert b["mode"] == "press" and not b["actions_off"] and b["actions_cw"]
+    assert presets.SLOT_SIDE["ccw"] == "actions_ccw" and presets.SLOT_SIDE["press"] == "actions"
+
+
+def test_assigning_to_knob_asks_where(tmp_path):
+    """Choisir une action pour une molette demande « appui, rotation… » au lieu de la poser
+    d'office sur l'appui. Une touche ordinaire, elle, ne pose aucune question."""
+    e = engine(tmp_path, start=False)
+    pid = _knob_page(e, {})
+    e.start()
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    asked = []
+
+    def answer(slot):
+        def fn(parent, choices, title="", recommended=""):
+            asked.append((title, [s for s, _ in choices], recommended))
+            return slot
+        return fn
+
+    # Depuis l'inspecteur : rotation horaire choisie.
+    w._select_control(control_key("knobTL"))
+    with mock.patch.object(ui_widgets, "ask_slot", answer("cw")):
+        w.inspector._create("cut")
+    c = e.control(pid, "knobTL")
+    assert c["actions_cw"][0]["effect"] == "Cut" and not c["actions"], c
+    assert w.inspector.side == "actions_cw", "l'éditeur s'ouvre sur la liste choisie"
+    assert asked and asked[0][1] == ["press", "cw", "ccw"] and "Molette haut gauche" in asked[0][0], asked
+
+    # Les 6 encodeurs et la molette centrale proposent EXACTEMENT la même chose : c'est le même
+    # type de contrôle, la liste ne doit pas changer de l'un à l'autre.
+    seen = {}
+    for cid in ("knobTL", "knobCL", "knobBL", "knobTR", "knobCR", "knobBR", "wheel"):
+        asked.clear()
+        with mock.patch.object(ui_widgets, "ask_slot", answer(None)):
+            prepare_preset(w, presets.make("cut", e), control_key(cid))
+        seen[cid] = (tuple(asked[0][1]), asked[0][2])
+    assert len(set(seen.values())) == 1, seen
+
+    # Annuler la question ne crée rien.
+    w._select_control(control_key("knobCL"))
+    with mock.patch.object(ui_widgets, "ask_slot", answer(None)):
+        w.inspector._create("cut")
+    assert e.control(pid, "knobCL") is None, "annulé : aucun contrôle créé"
+
+    # Glisser-déposer depuis la bibliothèque : même question.
+    with mock.patch.object(ui_widgets, "ask_slot", answer("press")):
+        w._drop_preset(control_key("knobBL"), "fade")
+    c = e.control(pid, "knobBL")
+    assert c["actions"][0]["effect"] == "Fade" and not c["actions_cw"], c
+    assert w.inspector.key == control_key("knobBL") and w.inspector.side == "actions"
+    with mock.patch.object(ui_widgets, "ask_slot", answer("ccw")):
+        w._drop_preset(control_key("wheel"), "cut")
+    assert w.inspector.side == "actions_ccw" and e.control(pid, "wheel")["actions_ccw"]
+
+    # Touche de la grille, bouton rond : un seul emplacement possible, aucune question.
+    def never(*a, **k):
+        raise AssertionError("aucune question ne doit être posée hors d'une molette")
+    with mock.patch.object(ui_widgets, "ask_slot", never):
+        w._drop_preset("0,0", "cut")
+        w._drop_preset(control_key("key2"), "cut")
+    assert e.button(pid, "0,0")["actions"][0]["effect"] == "Cut"
+    assert e.control(pid, "key2")["actions"][0]["effect"] == "Cut"
+    w.close()
+    e.stop()
+
+
+def test_no_rotation_on_a_button(tmp_path):
+    """Un bouton qui ne tourne pas ne doit jamais garder d'action de rotation : elle ne partirait
+    jamais, et l'éditeur comme l'info-bulle annonceraient une rotation impossible."""
+    e = engine(tmp_path, start=False)
+    pid = _knob_page(e, {})
+    e.start()
+    g = DeckGrid(e)
+    g.resize(1000, 900)
+    g.set_page(pid)
+    for k in (control_key("key5"), control_key("save"), "0,0"):
+        b = presets.place(presets.make("knob_master", e), k)
+        assert not b.get("actions_cw") and not b.get("actions_ccw"), (k, b)
+        assert b["actions"][0]["function"] == "MasterAudio", (k, b)   # l'appui est conservé
+        if parse_control(k) is not None:
+            assert b["kind"] == "button"
+        else:
+            assert "kind" not in b and "step" not in b, "une touche de grille n'a pas ces réglages"
+    # Un réglage SANS appui ne doit pas disparaître : sa rotation devient l'appui (un cran).
+    b = presets.place(presets.make("knob_scroll", e), control_key("key5"))
+    assert not b.get("actions_cw") and b["actions"][0]["type"] == "win.scroll", b
+    # Une configuration déjà enregistrée avec ce défaut se répare au chargement.
+    cfg = default_config()
+    p = new_page("CT", cols=4, rows=3)
+    p["controls"] = {"key5": new_control("button", label="Master",
+                                         actions_cw=[new_action("vmix.adjust", target="master")]),
+                     "save": new_control("button", label="X", actions=[new_action("vmix.function",
+                                                                                  function="Cut")],
+                                         actions_ccw=[new_action("vmix.adjust", target="master")]),
+                     "knobTL": new_control("rotary", actions_cw=[new_action("vmix.adjust")])}
+    cfg["pages"] = [p]
+    cfg = normalize_config(cfg)
+    c = cfg["pages"][0]["controls"]
+    assert not c["key5"]["actions_cw"] and c["key5"]["actions"][0]["type"] == "vmix.adjust", c["key5"]
+    assert not c["save"]["actions_ccw"] and c["save"]["actions"][0]["function"] == "Cut", c["save"]
+    assert c["knobTL"]["actions_cw"], "une vraie molette garde sa rotation"
+
+    # L'info-bulle d'un bouton n'annonce aucune rotation.
+    e.set_button(pid, control_key("key5"), presets.place(presets.make("knob_master", e), control_key("key5")))
+    tip = g.tooltip_text(control_key("key5"))
+    assert "Rotation" not in tip, tip
+    e.stop()
+
+
+def test_loupedeck_view_uses_device_grid(tmp_path):
+    """Une page plus grande que le pavé de l'appareil ne doit pas faire dessiner des colonnes
+    que l'appareil n'a pas : le CT a 4 colonnes, pas 5."""
+    e = engine(tmp_path, start=False)
+    big = new_page("Régie", cols=5, rows=3, surface="loupedeck")
+    for r in range(3):
+        for c in range(5):
+            big["buttons"][key(r, c)] = new_button(label=f"{r}{c}")
+    e.cfg["pages"] = [big]
+    e.start()
+    g = DeckGrid(e)
+    g.resize(1100, 1000)
+    g.set_page(big["id"])
+    assert g.device_grid() == (4, 3), g.device_grid()
+    keys = [k for k, (_, kind) in g._layout().items() if kind == "key"]
+    assert len(keys) == 12, f"{len(keys)} touches dessinées au lieu de 12"
+    assert "0,4" not in keys and "0,3" in keys, keys
+    assert g.hidden_keys() == 3, g.hidden_keys()      # la 5e colonne : 3 touches invisibles
+    g.grab()                                           # le pied affiche l'avertissement, sans lever
+    # Une page à la taille de l'appareil n'avertit de rien.
+    small = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    e.cfg["pages"].append(small)
+    g.set_page(small["id"])
+    assert g.device_grid() == (4, 3) and g.hidden_keys() == 0
+    # Et une page Stream Deck garde sa grille complète.
+    sd = new_page("XL", cols=8, rows=4)
+    e.cfg["pages"].append(sd)
+    g.set_page(sd["id"])
+    assert g.device_grid() == (8, 4) and g.hidden_keys() == 0
+    e.stop()
+
+
+def test_follow_deck_is_off_by_default(tmp_path):
+    """« Suivre le deck » doit être décoché par défaut et mémorisé : coché, le moindre appui sur
+    l'appareil déplace la sélection de l'éditeur, ce qui est intenable en exploitation."""
+    e = engine(tmp_path, start=False)
+    pid = _knob_page(e, {})
+    e.start()
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    assert not w.follow.isChecked(), "coché par défaut : l'éditeur suivrait chaque appui"
+
+    # Décoché : un appui sur l'appareil ne touche pas à la sélection.
+    w.grid.select("0,0")
+    w._activity(pid, control_key("knobTL"), "CT")
+    assert w.sel == "0,0", "la sélection ne doit pas bouger quand on ne suit pas le deck"
+
+    w.follow.setChecked(True)                       # le choix est enregistré
+    assert e.cfg["options"]["follow_deck"] is True
+    w._activity(pid, control_key("knobTL"), "CT")
+    assert w.sel == control_key("knobTL"), "coché : l'éditeur suit, pour câbler l'appareil"
+    w.close()
+
+    w2 = MainWindow(e)                              # rouvert : le réglage est retrouvé
+    assert w2.follow.isChecked()
+    w2.follow.setChecked(False)
+    assert e.cfg["options"]["follow_deck"] is False
+    w2.close()
+    e.stop()
+
+
+def test_loupedeck_haptic_option(tmp_path):
+    """La vibration est une option de l'appareil : activée par défaut, et décochée plus rien
+    ne vibre, même si un contrôle demande une vibration."""
+    e = engine(tmp_path, start=False)
+    pid = _knob_page(e, {"key0": new_control("button", label="REC", haptic="long")})
+    e.cfg["pages"][0]["buttons"]["0,0"] = new_button(label="Cam 1")
+    e.start()
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = pid
+
+    def vibrations():
+        return [c for c in port.commands if c[0] == ld.CMD_VIBRATE]
+
+    port.touch(*key_xy(0), finger=1)
+    port.touch(*key_xy(0), finger=1, end=True)
+    assert wait(lambda: vibrations(), 3), "activée par défaut : un appui doit vibrer"
+    port.button("key0")
+    assert wait(lambda: any(c[1] == bytes([ld.HAPTIC["long"]]) for c in vibrations()), 3), \
+        "le motif choisi pour le contrôle est respecté"
+
+    e.cfg["decks"][h.serial] = {"haptic": False}
+    n = len(vibrations())
+    port.touch(*key_xy(0), finger=2)
+    port.touch(*key_xy(0), finger=2, end=True)
+    port.button("key0")
+    time.sleep(0.4)
+    assert len(vibrations()) == n, "décochée : plus aucune vibration"
+    lm.identify(h.serial)
+    time.sleep(0.2)
+    assert len(vibrations()) == n, "même « Identifier » respecte le réglage"
+
+    # Le réglage s'affiche dans Réglages → Decks pour un Loupedeck, et s'enregistre.
+    e.decks = DeckHub(e, [lm])
+    dlg = SettingsDialog(e, None)
+    row = next(r for r in dlg.deck_rows if r[0] == h.serial)
+    assert row[3] is not None and not row[3].isChecked(), "case Vibration absente ou mal initialisée"
+    row[3].setChecked(True)
+    dlg._save()
+    assert e.cfg["decks"][h.serial]["haptic"] is True
+    dlg.close()
     e.stop()
 
 

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 
 from .. import autostart
 from ..health import parse_targets
+from ..model import surface_of
 from ..integrations import (integration_status, overlay_label, overlay_list, probe_intercom, probe_orchestream,
                             probe_tally)
 from . import theme as T
@@ -183,13 +184,22 @@ class SettingsDialog(QDialog):
             bright.setFixedWidth(100)
             bright.setToolTip("Luminosité")
             grid.addWidget(bright, i, 2)
+            # Vibration : seulement pour un appareil qui en est capable (Loupedeck). Un appareil
+            # débranché garde la case s'il l'avait déjà réglée, pour ne pas perdre le choix.
+            haptic = None
+            if (d and surface_of(d["model"]) == "loupedeck") or (not d and "haptic" in conf):
+                haptic = QCheckBox("Vibration")
+                haptic.setChecked(bool(conf.get("haptic", True)))
+                haptic.setToolTip("Retour vibratoire à chaque appui sur l'appareil. Décoché, l'appareil ne "
+                                  "vibre plus du tout, quels que soient les réglages des contrôles.")
+                grid.addWidget(haptic, i, 3)
             ident = QPushButton("Identifier")
             ident.setObjectName("Small")
             ident.setToolTip("Allume ce deck en couleur pendant 2 secondes")
             ident.setEnabled(bool(d))
             ident.clicked.connect(lambda _=False, s=s: e.decks and e.decks.identify(s))
-            grid.addWidget(ident, i, 3)
-            self.deck_rows.append((s, page, bright))
+            grid.addWidget(ident, i, 4)
+            self.deck_rows.append((s, page, bright, haptic))
         grid.setColumnStretch(1, 1)
         v.addWidget(box)
         v.addWidget(label("Chaque deck est reconnu par son numéro de série et affiche sa page au démarrage.", "Hint", True))
@@ -328,8 +338,9 @@ class SettingsDialog(QDialog):
                 autostart.set_enabled(self.autostart.isChecked())
             except OSError as ex:
                 e.log("error", f"Démarrage automatique impossible à régler : {ex}")
-        decks = {serial: (page.currentData(), bright.value()) for serial, page, bright in self.deck_rows}
-        moved = [s for s, (pg, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
+        decks = {serial: (page.currentData(), bright.value(), haptic.isChecked() if haptic else None)
+                 for serial, page, bright, haptic in self.deck_rows}
+        moved = [s for s, (pg, _, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
         tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
         overlays = parse_overlays(self.orch_overlays.text())
         if [(o["name"], o["label"]) for o in overlays] == overlay_list(e.cfg["integrations"].get("orchestream")) \
@@ -340,9 +351,11 @@ class SettingsDialog(QDialog):
             cfg["vmix"] = {"host": host, "port": int(port)}
             cfg["options"].update(health_interval=self.interval.value(), start_live=self.start_live.isChecked(),
                                   close_to_tray=self.close_tray.isChecked())
-            for serial, (pg, bright) in decks.items():
+            for serial, (pg, bright, haptic) in decks.items():
                 conf = cfg["decks"].setdefault(serial, {})
                 conf["brightness"] = bright
+                if haptic is not None:
+                    conf["haptic"] = haptic
                 if pg:
                     conf["page"] = pg
                 else:

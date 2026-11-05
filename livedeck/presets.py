@@ -193,16 +193,79 @@ NEEDS_INPUT = ("program", "preview", "take", "overlay", "audio")
 ROTARY_FIRST = ["Molette"]  # sur une molette, ces réglages passent en tête du choix
 
 
+def slots(b: dict) -> tuple[list[tuple[str, str]], str]:
+    """Où poser ce bouton sur une molette : ([(emplacement, libellé)], emplacement recommandé).
+
+    La liste est TOUJOURS la même, quel que soit le contrôle et quelle que soit l'action : seule
+    la recommandation change. Une liste qui varie d'une molette à l'autre donne l'impression que
+    les contrôles n'ont pas les mêmes possibilités, alors qu'ils en ont exactement les mêmes.
+
+    Liste vide = rien à répartir (texte seul, surveillance réseau…) : pas de question à poser."""
+    from .actions import is_relative
+    turn, press = b.get("actions_cw") or [], b.get("actions") or []
+    if not turn and not press:
+        return [], "press"
+    both = "Tourner pour régler, appuyer pour l'autre action"
+    choices = [("press", "À l'appui"), ("cw", "À la rotation ⟳ (sens horaire)"),
+               ("ccw", "À la rotation ⟲ (sens antihoraire)")]
+    if turn and press:  # réglage pensé pour une molette : il a déjà les deux
+        return [("both", both)] + choices, "both"
+    if turn:            # réglage sans appui (molette de souris) : la rotation d'abord
+        return choices, "cw"
+    # Un réglage au cran suit le sens de rotation : le poser d'un seul côté suffit pour les deux.
+    return choices, ("cw" if all(is_relative(a) for a in press) else "press")
+
+
+SLOT_SIDE = {"press": "actions", "both": "actions_cw", "turn": "actions_cw", "cw": "actions_cw",
+             "ccw": "actions_ccw"}
+
+
+def assign(b: dict, slot: str) -> dict:
+    """Range les actions du bouton dans l'emplacement choisi (appui, rotation, sens)."""
+    import copy as _copy
+    b = _copy.deepcopy(b)
+    turn = b.pop("actions_cw", None) or []
+    b.pop("actions_ccw", None)
+    press = b.get("actions") or []
+    cw, ccw = [], []
+    if turn:
+        if slot == "press":
+            b["actions"] = press
+        elif slot == "turn":
+            b["actions"], cw = [], turn
+        else:
+            cw = turn
+    elif slot in ("turn", "cw", "ccw"):
+        cw, ccw = (press, []) if slot != "ccw" else ([], press)
+        b["actions"] = []
+        # Une rotation n'a ni « relâché » ni second appui : interrupteur et appui long n'ont plus de sens.
+        b["mode"], b["actions_off"], b["long_actions"] = "press", [], []
+    b["actions_cw"], b["actions_ccw"] = cw, ccw
+    return b
+
+
 def place(b: dict, k: str) -> dict:
-    """Adapte un bouton à l'endroit où on le pose. Une molette garde ses listes de rotation ; une
-    touche ou un bouton physique ne tourne pas, donc n'en garde que l'appui (la jauge reste)."""
+    """Adapte un bouton à l'endroit où on le pose.
+
+    Une molette garde ses listes de rotation. Une touche de l'écran ou un bouton physique ne tourne
+    pas : ses listes de rotation sont RETIRÉES, sinon il garderait une action qui ne partira jamais
+    et l'éditeur comme l'info-bulle annonceraient une rotation impossible."""
     from .loupedeck import control_kind
     from .model import normalize_control, parse_control
     cid = parse_control(k)
+    rotary = cid is not None and control_kind(cid) == "rotary"
+    if not rotary:
+        turn = (b.get("actions_cw") or []) + (b.get("actions_ccw") or [])
+        b = {**b, "actions_cw": [], "actions_ccw": []}
+        if turn and not (b.get("actions") or []):
+            # Réglage sans action d'appui (molette de souris, volume…) : sa rotation devient
+            # l'appui — un cran par appui — plutôt que de disparaître sans rien dire.
+            b["actions"] = turn
     if cid is not None:
         return normalize_control({**b, "kind": control_kind(cid)})
     b = dict(b)
-    b.pop("kind", None)
+    for key_ in ("kind", "actions_cw", "actions_ccw", "step", "haptic"):
+        b.pop(key_, None)  # une touche de la grille n'a pas ces réglages
     return b
 
 

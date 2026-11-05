@@ -23,11 +23,31 @@ from ..model import normalize_button, normalize_control, parse_control, parse_ke
 from ..render import render
 from ..webreq import parse_curl
 from . import theme as T
+from . import widgets as W
 from .deck_view import pil_to_pixmap
 from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
                       section, short_label, tame_combo)
 
 INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32"}
+
+
+def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:
+    """Prépare un bouton de la bibliothèque pour la case `k` : (bouton, liste à afficher), ou None
+    si l'utilisateur annule.
+
+    Sur une molette, on DEMANDE où ranger l'action (appui, rotation, sens) au lieu de la poser
+    d'office sur l'appui : la même action n'a pas du tout le même effet selon l'emplacement."""
+    cid = parse_control(k) if k else None
+    if cid is None or control_kind(cid) != "rotary":
+        return (presets.place(b, k) if k else b), "actions"
+    choices, best = presets.slots(b)
+    if len(choices) > 1:
+        slot = W.ask_slot(parent, choices, f"{CONTROL_LABELS.get(cid, cid)} : quand déclencher ?", best)
+        if slot is None:
+            return None
+    else:
+        slot = choices[0][0] if choices else "press"
+    return presets.place(presets.assign(b, slot), k), presets.SLOT_SIDE.get(slot, "actions")
 
 
 def _card() -> tuple[QFrame, QVBoxLayout]:
@@ -442,10 +462,11 @@ class Inspector(QFrame):
         b = presets.make(pid, self.engine)
         if not b:
             return
-        self.b = presets.place(b, self.key) if self.key else b
-        # Une molette s'ouvre sur sa rotation : c'est ce qu'on vient de choisir de régler.
-        rotary = self.b.get("kind") == "rotary" and self.b.get("actions_cw")
-        self.side, self.step = ("actions_cw" if rotary else "actions"), 0
+        got = prepare_preset(self, b, self.key)
+        if got is None:
+            return  # question annulée : on ne crée rien
+        self.b, side = got
+        self.side, self.step = side, 0
         self.commit(rebuild=True)
         if pid in presets.NEEDS_INPUT or pid == "knob_input":  # on demande tout de suite l'input
             QTimer.singleShot(0, self.focus_input)

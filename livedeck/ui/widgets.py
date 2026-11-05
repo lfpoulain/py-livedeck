@@ -484,6 +484,33 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
     return w
 
 
+def ask_slot(parent, choices: list[tuple[str, str]], title: str = "",
+             recommended: str = "") -> str | None:
+    """Demande où poser une action sur une molette (appui, rotation…). None = annulé.
+
+    Menu sous le pointeur plutôt que boîte de dialogue : on vient de cliquer ou de déposer, la
+    réponse se donne d'un second clic au même endroit. Les choix sont les mêmes pour toutes les
+    molettes ; seul celui qui convient le mieux à cette action est mis en avant."""
+    from PySide6.QtGui import QCursor
+    from PySide6.QtWidgets import QMenu
+    menu = QMenu(parent)
+    if title:
+        head = menu.addAction(title)
+        head.setEnabled(False)
+        menu.addSeparator()
+    actions = {}
+    for slot, text in choices:
+        a = menu.addAction(text + ("   (conseillé)" if slot == recommended else ""))
+        if slot == recommended:
+            f = a.font()
+            f.setBold(True)
+            a.setFont(f)
+            menu.setActiveAction(a)
+        actions[a] = slot
+    chosen = menu.exec(QCursor.pos())
+    return actions.get(chosen)
+
+
 def short_label(spec: dict) -> str:
     """Libellé de formulaire court (« Durée (ms, 0 = réglage vMix) » → « Durée »)."""
     return spec["label"].split(" (")[0]

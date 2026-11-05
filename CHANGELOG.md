@@ -1,5 +1,39 @@
 # Journal des versions
 
+## 1.6.1 — 2026-11-05
+
+### Loupedeck : plus rien ne se déclenche sans qu'on l'ait demandé
+- **Aucun bouton n'a de rôle par défaut.** `Fn G` et `Fn D` changeaient de page tant qu'ils étaient
+  libres : un comportement qu'on découvrait en appuyant par accident. Pour naviguer, pose
+  « Page suivante » sur le bouton de ton choix.
+- **« Suivre le deck » est décoché par défaut**, et ton choix est mémorisé. Coché, le moindre appui
+  sur l'appareil déplace la sélection de l'éditeur : pratique pour câbler, intenable en direct.
+- **La vibration devient une option**, par appareil, dans Réglages → Decks. Décochée, l'appareil ne
+  vibre plus du tout.
+
+### Molettes
+- **Choisir une action pour une molette demande où la poser** : à l'appui, à la rotation ⟳, à la
+  rotation ⟲, ou les deux. Les choix sont les mêmes pour les six encodeurs et la molette centrale ;
+  seul celui qui convient le mieux à l'action est conseillé. Avant, l'action partait d'office sur
+  l'appui.
+- **Un bouton ne garde plus d'action de rotation.** Poser un réglage de molette sur un bouton rond y
+  laissait une rotation qui ne pouvait jamais partir. Elle devient l'appui, ou disparaît si le bouton
+  a déjà une action. Les configurations existantes se réparent toutes seules au chargement.
+
+### Affichage
+- **La vue dessine la grille de l'appareil, pas celle de la page.** Une page 5×3 affichée sur un
+  Loupedeck CT montrait une 5e colonne qui n'existe pas. Si une page déborde du pavé, le pied de
+  l'appareil l'indique en rouge.
+- Le contrôle suivi ou sélectionné est entouré de blanc, comme une touche.
+
+### Divers
+- Un double-clic dans la bibliothèque visait parfois une autre case que la molette sélectionnée.
+- Le mode « preview + program », qui occupe deux rangées, ne plante plus sur une molette.
+- Un échec d'ouverture passager d'un Loupedeck ne s'affiche plus en erreur ; un échec qui dure est
+  signalé une seule fois, avec la marche à suivre.
+- CI : l'auto-test vérifie l'application packagée au lieu de lancer l'installateur, qui attendait
+  indéfiniment une boîte de dialogue sur un runner sans session interactive.
+
 ## 1.6.0 — 2026-11-05
 
 ### Loupedeck
