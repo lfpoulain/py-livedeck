@@ -35,6 +35,7 @@ HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic
 TOAST_MS = {"error": 9000, "warn": 6000}
 MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action", "Actions envoyées")]
 INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Overlays"), ("tallies", "Tallys")]
+HINT_LOCK = "Verrouillé : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)  ·  Ctrl+L pour déverrouiller"
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
 
 
@@ -100,6 +101,8 @@ class Tray(QSystemTrayIcon):
         menu.addAction("Afficher LiveDeck", win.bring_to_front)
         self.live_act = menu.addAction("Mode Live", lambda: win.set_live(self.live_act.isChecked()))
         self.live_act.setCheckable(True)
+        self.lock_act = menu.addAction("Verrouiller (pas de fausse manip)", lambda: (win.bring_to_front(), win.toggle_lock()))
+        self.lock_act.setCheckable(True)
         menu.addAction("Diagnostic Stream Deck…", lambda: (win.bring_to_front(), win.open_diagnostic()))
         menu.addSeparator()
         menu.addAction("Quitter LiveDeck", win.quit_app)
@@ -112,10 +115,12 @@ class Tray(QSystemTrayIcon):
 
     def sync(self):
         self.live_act.setChecked(self.win.grid.live)
+        self.lock_act.setChecked(self.win.locked)
+        self.live_act.setEnabled(not self.win.locked)
         e = self.win.engine
         decks = len(e.decks.info()) if e.decks else 0
         self.setToolTip(f"LiveDeck — vMix {'connecté' if e.vmix.state.connected else 'hors ligne'}, "
-                        f"{decks} Stream Deck{'s' if decks > 1 else ''}" + ("  ·  LIVE" if self.win.grid.live else ""))
+                        f"{decks} Stream Deck{'s' if decks > 1 else ''}" + ("  ·  LIVE" if self.win.grid.live else "") + ("  ·  VERROUILLÉ" if self.win.locked else ""))
 
 
 class MainWindow(QMainWindow):
@@ -123,11 +128,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.engine = engine
         self.clipboard: dict | None = None
+        self.locked = False
+        self._lockable: list = []  # ce que le verrou désactive
         self.page_id = engine.pages[0]["id"]
         self.setWindowTitle(f"LiveDeck {__version__}")
         self.setWindowIcon(app_icon())
         self.resize(1560, 900)
-        self.setMinimumSize(1200, 640)
+        self.setMinimumSize(1240, 640)
         install_wheel_guard()
 
         self.bridge = Bridge()
@@ -183,6 +190,9 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
         self._refresh_live()
+        self._lockable += [self.library, self.inspector]
+        if self._saved_lock():  # verrou gardé d'un lancement à l'autre (relance en plein direct)
+            self.set_locked(True)
         QTimer(self, interval=1000, timeout=self._update_pills).start()
         QTimer.singleShot(0, self._show_migration_notes)
 
@@ -227,6 +237,14 @@ class MainWindow(QMainWindow):
         self.mode.buttons["live"].setToolTip("Clic sur une touche = la déclencher, comme sur le Stream Deck (F5)")
         self.mode.changed.connect(lambda m: self.set_live(m == "live"))
         lay.addWidget(self.mode, 0, Qt.AlignVCenter)
+        self.lock_btn = QPushButton("Verrouiller")
+        self.lock_btn.setObjectName("LockBtn")
+        self.lock_btn.setCheckable(True)
+        self.lock_btn.setToolTip("Verrouille l'écran pendant un direct : plus d'édition ni de clic sur les touches. "
+                                 "Les Stream Decks restent actifs (Ctrl+L)")
+        self.lock_btn.clicked.connect(self.toggle_lock)
+        lay.addWidget(self.lock_btn, 0, Qt.AlignVCenter)
+        self._lockable.append(self.mode)
         self.follow = QCheckBox("Suivre le deck")
         self.follow.setChecked(True)
         self.follow.setToolTip("Suivre le Stream Deck : appuyer sur une touche physique la sélectionne dans "
@@ -237,9 +255,9 @@ class MainWindow(QMainWindow):
         imp.setToolTip("Importer, exporter, diagnostic des Stream Decks, aide")
         menu = QMenu(imp)
         menu.addSection("Importer")
-        menu.addAction("Config Bitfocus Companion…", self.import_companion)
-        menu.addAction("Configuration LiveDeck (.json)…", self.load_config_file)
-        menu.addAction("Une page (.json)…", self.import_page)
+        self._lockable += [menu.addAction("Config Bitfocus Companion…", self.import_companion),
+                           menu.addAction("Configuration LiveDeck (.json)…", self.load_config_file),
+                           menu.addAction("Une page (.json)…", self.import_page)]
         menu.addSection("Exporter")
         menu.addAction("La configuration…", self.export_config)
         menu.addAction("La page affichée…", self.export_page)
@@ -261,6 +279,7 @@ class MainWindow(QMainWindow):
         gear.setObjectName("Ghost")
         gear.clicked.connect(self.open_settings)
         lay.addWidget(gear)
+        self._lockable.append(gear)
         return h
 
     def _center(self) -> QVBoxLayout:
@@ -274,7 +293,8 @@ class MainWindow(QMainWindow):
         self.tabs.setUsesScrollButtons(True)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.tabs.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tabs.customContextMenuRequested.connect(lambda pos: self._page_menu().exec(self.tabs.mapToGlobal(pos)))
+        self.tabs.customContextMenuRequested.connect(
+            lambda pos: self.locked or self._page_menu().exec(self.tabs.mapToGlobal(pos)))
         row.addWidget(self.tabs, 1)
         legend = QPushButton("?")
         legend.setObjectName("Ghost")
@@ -286,15 +306,18 @@ class MainWindow(QMainWindow):
         find.setToolTip("Trouver une touche sur toutes les pages (Ctrl+F)")
         find.clicked.connect(self.open_search)
         row.addWidget(find)
+        self._lockable.append(find)
         add = QPushButton("＋ Page")
         add.setObjectName("Ghost")
         add.clicked.connect(self.add_page)
         row.addWidget(add)
+        self._lockable.append(add)
         more = QPushButton("⋯")
         more.setObjectName("Ghost")
         more.setToolTip("Options de la page")
         more.clicked.connect(lambda: self._page_menu().exec(more.mapToGlobal(more.rect().bottomLeft())))
         row.addWidget(more)
+        self._lockable.append(more)
         center.addLayout(row)
 
         self.grid = DeckGrid(self.engine)
@@ -305,6 +328,7 @@ class MainWindow(QMainWindow):
         self.grid.preset_dropped.connect(self._drop_preset)
         self.grid.context.connect(self._cell_menu)
         self.grid.test_key.connect(lambda k: self.engine.trigger(self.page_id, k))
+        self.grid.blocked.connect(lambda: self.toast(HINT_LOCK, error=True))
         center.addWidget(self.grid, 1)
         self.hint = label(HINT, "Hint", True)
         self.hint.setAlignment(Qt.AlignCenter)
@@ -348,6 +372,7 @@ class MainWindow(QMainWindow):
         return self.monitor_box
 
     def _shortcuts(self):
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=self.toggle_lock)
         for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo), ("Ctrl+Y", self.redo),
                         (QKeySequence.Copy, self.copy), (QKeySequence.Paste, self.paste),
                         (QKeySequence.Cut, self.cut), ("Ctrl+D", self.duplicate_selected),
@@ -355,7 +380,9 @@ class MainWindow(QMainWindow):
                         (Qt.Key_Escape, lambda: self.grid.select(None)), (QKeySequence.Find, self.open_search),
                         ("Ctrl+PgDown", lambda: self._goto_page("next")), ("Ctrl+PgUp", lambda: self._goto_page("prev")),
                         ("F1", self.open_help), ("F2", self._edit_label)):
-            QShortcut(QKeySequence(seq), self, activated=fn)
+            # verrouillé : seuls l'aide et le changement de page restent actifs
+            safe = seq in ("F1", "Ctrl+PgDown", "Ctrl+PgUp")
+            QShortcut(QKeySequence(seq), self, activated=fn if safe else (lambda fn=fn: self.locked or fn()))
 
     def _edit_label(self):
         ed = getattr(self.inspector, "label_edit", None)
@@ -475,7 +502,7 @@ class MainWindow(QMainWindow):
         self.hint.setObjectName("Hint")
         self.hint.setStyleSheet("")
         self.hint.setToolTip("")
-        self.hint.setText(typo(HINT_LIVE if self.grid.live else HINT))
+        self.hint.setText(typo(HINT_LOCK if self.locked else HINT_LIVE if self.grid.live else HINT))
         self.hint.style().unpolish(self.hint)
         self.hint.style().polish(self.hint)
 
@@ -611,6 +638,9 @@ class MainWindow(QMainWindow):
 
     # -- touches --------------------------------------------------------------
     def set_live(self, live: bool):
+        if self.locked:
+            self.mode.set("live" if self.grid.live else "edit")
+            return
         self.grid.set_live(live)
         self.mode.set("live" if live else "edit")
         self.inspector.set_locked(live)
@@ -619,7 +649,43 @@ class MainWindow(QMainWindow):
         if not self._toast_timer.isActive():
             self._end_toast()
 
+    # -- verrou ---------------------------------------------------------------
+    def _saved_lock(self) -> bool:
+        try:
+            return str(self._ui.value("locked", "false")).lower() == "true"
+        except Exception:
+            return False
+
+    def toggle_lock(self) -> None:
+        """Verrouiller est immédiat ; déverrouiller demande confirmation (un clic perdu ne doit pas rouvrir l'édition)."""
+        if self.locked and QMessageBox.question(
+                self, "Déverrouiller", "Déverrouiller l'édition et les clics sur les touches ?") != QMessageBox.Yes:
+            self.lock_btn.setChecked(True)
+            return
+        self.set_locked(not self.locked)
+
+    def set_locked(self, locked: bool) -> None:
+        """Pendant un direct : plus d'édition (bibliothèque, éditeur, pages, import, réglages) ni de clic sur les
+        touches. Les Stream Decks physiques et le moteur ne sont pas touchés."""
+        self.locked = locked
+        self.grid.set_locked(locked)
+        for w in self._lockable:
+            w.setEnabled(not locked)
+        self.lock_btn.setChecked(locked)
+        self.lock_btn.setText("Verrouillé" if locked else "Verrouiller")
+        self.setWindowTitle(f"LiveDeck {__version__}" + ("  ·  VERROUILLÉ" if locked else ""))
+        try:
+            self._ui.setValue("locked", "true" if locked else "false")
+            self._ui.sync()
+        except Exception:
+            pass
+        self.tray.sync()
+        self.toast("Verrouillé : plus d'édition ni de clic sur les touches" if locked else "Déverrouillé")
+
     def _editable(self) -> bool:
+        if self.locked:
+            self.toast(HINT_LOCK, error=True)
+            return False
         if self.grid.live:
             self.toast("Mode Live : édition verrouillée  ·  F5 pour modifier", error=True)
             return False
@@ -948,6 +1014,9 @@ class MainWindow(QMainWindow):
         self.grid.set_page(self.page_id)
 
     def open_settings(self, tab: str = "general"):
+        if self.locked:
+            self.toast(HINT_LOCK, error=True)
+            return
         SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general").exec()
         self._update_pills()
 

@@ -40,6 +40,7 @@ class DeckGrid(QWidget):
     preset_dropped = Signal(str, str)
     context = Signal(str, QPoint)
     test_key = Signal(str)  # Entrée sur la touche sélectionnée
+    blocked = Signal()  # un clic a été refusé : le verrou est actif
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -47,6 +48,7 @@ class DeckGrid(QWidget):
         self.page_id: str | None = None
         self.sel: str | None = None
         self.live = False
+        self.locked = False  # verrou : ni sélection, ni appui, ni glisser-déposer à la souris
         self._hover: str | None = None
         self._drop: str | None = None
         self._press_pos = None
@@ -96,6 +98,11 @@ class DeckGrid(QWidget):
 
     def set_live(self, live: bool) -> None:
         self.live = live
+        self.update()
+
+    def set_locked(self, locked: bool) -> None:
+        self.locked = locked
+        self.setCursor(Qt.ArrowCursor)
         self.update()
 
     def select(self, k: str | None, emit: bool = True) -> None:
@@ -155,7 +162,8 @@ class DeckGrid(QWidget):
         grad = QLinearGradient(body.topLeft(), body.bottomLeft())
         grad.setColorAt(0, QColor("#1c2029"))
         grad.setColorAt(1, QColor("#121419"))
-        p.setPen(QPen(QColor("#7f1d1d") if self.live else QColor("#2b313d"), 1.6 if self.live else 1.2))
+        red = self.live or self.locked
+        p.setPen(QPen(QColor("#7f1d1d") if red else QColor("#2b313d"), 1.6 if red else 1.2))
         p.setBrush(grad)
         p.drawRoundedRect(body, cell * 0.24, cell * 0.24)
         # pied : modèle et deck(s) qui affichent la page
@@ -167,7 +175,9 @@ class DeckGrid(QWidget):
         decks = [d for d in (self.engine.decks.info() if self.engine.decks else []) if d["page"] == self.page_id]
         text = ("SUR  " + "  ·  ".join(d["model"].replace("Stream Deck ", "").upper() for d in decks)) if decks \
             else ("LIVE  ·  CLIC = APPUI" if self.live else "AFFICHÉE SUR AUCUN DECK")
-        p.setPen(QColor(T.ACCENT if decks else ("#b91c1c" if self.live else "#3c4352")))
+        if self.locked:
+            text = "VERROUILLÉ  ·  " + text
+        p.setPen(QColor(T.ACCENT if decks and not self.locked else ("#b91c1c" if red else "#3c4352")))
         p.setFont(self._font(cell * 0.09, True, cell * 0.02))
         p.drawText(QRectF(body.center().x(), foot_y, body.width() / 2 - cell * 0.42, cell * 0.3),
                    Qt.AlignRight | Qt.AlignVCenter, text)
@@ -276,7 +286,7 @@ class DeckGrid(QWidget):
         p.setPen(QPen(QColor("#2a303b"), 1))
         p.setBrush(QColor("#181b22"))
         p.drawRoundedRect(rect, radius, radius)
-        hover = k == self._hover and not self.live
+        hover = k == self._hover and not self.live and not self.locked
         p.setPen(QColor(T.FAINT) if hover else QColor("#3a4150"))
         p.setFont(self._font(cell * (0.2 if hover else 0.12)))
         p.drawText(rect, Qt.AlignCenter, "+" if hover else "·")
@@ -343,6 +353,9 @@ class DeckGrid(QWidget):
 
     # -- souris ---------------------------------------------------------------
     def mousePressEvent(self, e):
+        if self.locked:
+            self.blocked.emit()
+            return
         k = self.key_at(e.position())
         if e.button() == Qt.RightButton:
             if k:
@@ -372,7 +385,7 @@ class DeckGrid(QWidget):
         k = self.key_at(e.position())
         if k != self._hover:
             self._hover = k
-            self.setCursor(Qt.PointingHandCursor if k else Qt.ArrowCursor)
+            self.setCursor(Qt.PointingHandCursor if k and not self.locked else Qt.ArrowCursor)
             self.update()
         page = self.page
         if (self._press_pos is not None and not self.live and self.sel and page
@@ -395,7 +408,7 @@ class DeckGrid(QWidget):
 
     # -- glisser-déposer ------------------------------------------------------
     def dragEnterEvent(self, e):
-        if not self.live and any(e.mimeData().hasFormat(m) for m in (MIME_CELL, MIME_INPUTS, MIME_PRESET)):
+        if not self.live and not self.locked and any(e.mimeData().hasFormat(m) for m in (MIME_CELL, MIME_INPUTS, MIME_PRESET)):
             e.acceptProposedAction()
 
     def dragMoveEvent(self, e):
@@ -436,7 +449,7 @@ class DeckGrid(QWidget):
     # -- clavier --------------------------------------------------------------
     def keyPressEvent(self, e):
         page = self.page
-        if not page or self.live:
+        if not page or self.live or self.locked:
             return super().keyPressEvent(e)
         moves = {Qt.Key_Left: (0, -1), Qt.Key_Right: (0, 1), Qt.Key_Up: (-1, 0), Qt.Key_Down: (1, 0)}
         if e.key() in moves:

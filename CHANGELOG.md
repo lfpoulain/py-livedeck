@@ -1,5 +1,20 @@
 # Journal des versions
 
+## 1.5.0 — 2026-11-05
+
+### Verrou de direct
+- **Verrouiller** (bouton de l'en-tête, Ctrl+L, ou menu de l'icône près de l'horloge) : plus d'édition ni de clic sur
+  les touches de l'écran, pour éviter les fausse manips pendant un direct. Les Stream Decks physiques restent actifs.
+  Déverrouiller demande une confirmation ; le verrou est conservé si LiveDeck est relancé.
+
+### Installateur
+- **LiveDeck s'installe** : la release fournit `LiveDeck-x.y.z-win64-setup.exe` à la place de l'exe seul. Installation pour ton compte
+  (sans droits administrateur), raccourci dans le menu Démarrer, raccourci Bureau en option, désinstallation dans
+  Paramètres → Applications.
+- **Mise à jour** : lance le nouvel installateur par-dessus l'ancien (il propose de fermer LiveDeck s'il tourne).
+  Ta configuration (`%APPDATA%\LiveDeck`) n'est jamais touchée, même à la désinstallation.
+- Démarrage plus rapide : l'app n'est plus décompressée dans un dossier temporaire à chaque lancement.
+
 ## 1.4.0 — 2026-11-04
 
 ### orchestream-v2

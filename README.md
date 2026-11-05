@@ -63,16 +63,18 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 
 ## Démarrage rapide
 
-### Option 1 · L'exe (recommandé)
+### Option 1 · L'installateur (recommandé)
 
-1. Va dans **[Releases](https://github.com/lfpoulain/py-livedeck/releases/latest)** et télécharge `LiveDeck-x.y.z-win64.exe`.
-2. Range-le dans un dossier à toi (par ex. `Documents\LiveDeck`) et double-clique dessus. Pas d'installation, pas de Python à installer.
+1. Va dans **[Releases](https://github.com/lfpoulain/py-livedeck/releases/latest)** et télécharge `LiveDeck-x.y.z-win64-setup.exe`.
+2. Double-clique dessus : LiveDeck s'installe pour ton compte (pas de droits administrateur), avec un raccourci dans le menu Démarrer
+   et, si tu le coches, sur le Bureau. Pas de Python à installer.
 
-Ta configuration est rangée dans **`%APPDATA%\LiveDeck`**, pas à côté de l'exe. Pour mettre à jour, quitte LiveDeck
-(clic droit sur l'icône près de l'horloge → Quitter) et remplace l'exe par la nouvelle version : tu retrouves toutes tes pages.
+Ta configuration est rangée dans **`%APPDATA%\LiveDeck`**, pas dans le dossier d'installation. Pour mettre à jour, quitte LiveDeck
+(clic droit sur l'icône près de l'horloge → Quitter) et lance le nouvel installateur par-dessus l'ancien : tu retrouves toutes tes pages.
+Pour désinstaller : Paramètres → Applications (ta configuration est conservée).
 
 > [!NOTE]
-> L'exe n'est pas signé. Au premier lancement, Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » :
+> L'installateur n'est pas signé. Au lancement, Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » :
 > clique **Informations complémentaires → Exécuter quand même**.
 
 ### Option 2 · Depuis les sources
@@ -98,7 +100,7 @@ Côté vMix, rien à configurer : LiveDeck utilise l'API TCP (port 8099), active
 |---|---|
 | 📘 [Guide d'utilisation](docs/guide.md) | Interface, création des touches, étapes, retours d'état, intégrations, diagnostic, raccourcis, dépannage |
 | 🧱 [Architecture](docs/architecture.md) | Organisation du code et flux de données, pour faire évoluer l'app |
-| 🚀 [Publier une version](docs/release.md) | Compiler l'exe et publier une release en une commande |
+| 🚀 [Publier une version](docs/release.md) | Compiler l'installateur et publier une release en une commande |
 | 📝 [Journal des versions](CHANGELOG.md) | Historique des changements |
 
 ## Structure du projet
@@ -120,9 +122,9 @@ py-livedeck/
 │   └── ui/                 # interface PySide6
 ├── tools/
 │   ├── fake_vmix.py        # faux vMix pour tester sans vMix
-│   ├── build_exe.py        # compilation de l'exe (PyInstaller)
+│   ├── build_exe.py        # compilation de l'exe (PyInstaller) et de l'installateur (Inno Setup)
 │   └── release.py          # publication d'une version
-├── .github/workflows/      # tests + release de l'exe à chaque version poussée sur main
+├── .github/workflows/      # tests + release de l'installateur à chaque version poussée sur main
 ├── tests/                  # tests de bout en bout (serveurs simulés)
 └── docs/                   # documentation
 ```
@@ -144,4 +146,4 @@ python tests/test_core.py
 Ce script lance les tests de bout en bout : import Companion, vMix, Take, appui long, Stream Deck simulé,
 édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream et Tally32.
 Ils fonctionnent aussi avec `pytest`.
-À chaque push sur `main`, GitHub Actions les relance, et publie l'exe quand la version change.
+À chaque push sur `main`, GitHub Actions les relance, et publie l'installateur quand la version change.

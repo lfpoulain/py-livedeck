@@ -1,16 +1,18 @@
-"""Construit LiveDeck-<version>-win64.exe (un seul fichier, sans console).
+"""Construit LiveDeck (dist/LiveDeck/LiveDeck.exe, sans console) puis son installateur
+dist/LiveDeck-<version>-win64-setup.exe (Inno Setup 6 : winget install JRSoftware.InnoSetup).
 
     pip install -r requirements-build.txt
-    python tools/build_exe.py
+    python tools/build_exe.py [--no-installer]
 
-Le résultat arrive dans dist/. L'exe est portable : sa configuration vit dans
-%APPDATA%\\LiveDeck, on peut donc le remplacer par une nouvelle version sans rien perdre.
+La configuration vit dans %APPDATA%\\LiveDeck : installer, mettre à jour ou désinstaller n'y touche pas.
 hidapi.dll (USB des Stream Decks) est embarquée : lancer setup.bat au moins une fois avant.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -56,10 +58,24 @@ def make_icon(path: Path):
     Image.open(png).save(path, sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
 
 
+def find_iscc() -> Path | None:
+    found = shutil.which("ISCC")
+    if found:
+        return Path(found)
+    roots = [os.environ.get(v) for v in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+    for root in filter(None, roots):
+        for sub in ("Inno Setup 6", r"Programs\Inno Setup 6"):
+            iscc = Path(root) / sub / "ISCC.exe"
+            if iscc.exists():
+                return iscc
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--version", default=__version__,
                     help="version attendue (la compilation échoue si elle diffère de livedeck.__version__)")
+    ap.add_argument("--no-installer", action="store_true", help="ne produit que le dossier dist/LiveDeck")
     args = ap.parse_args()
     if args.version.lstrip("v") != __version__:
         sys.exit(f"Version demandée {args.version} != livedeck.__version__ {__version__}.")
@@ -76,11 +92,11 @@ def main():
     vfile = BUILD / "version_info.txt"
     vfile.write_text(VERSION_INFO.format(t=tuple(int(x) for x in parts), v=__version__), encoding="utf-8")
 
-    name = f"LiveDeck-{__version__}-win64"
+    shutil.rmtree(DIST / "LiveDeck", ignore_errors=True)
     PyInstaller.__main__.run([
         str(ROOT / "main.py"),
-        "--name", name,
-        "--onefile", "--windowed", "--noconfirm", "--clean",
+        "--name", "LiveDeck",
+        "--onedir", "--windowed", "--noconfirm", "--clean",
         "--icon", str(ico),
         "--version-file", str(vfile),
         "--add-data", f"{ROOT / 'livedeck' / 'ui' / 'assets'};livedeck/ui/assets",
@@ -92,10 +108,19 @@ def main():
         "--workpath", str(BUILD / "work"),
         "--specpath", str(BUILD),
     ])
-    exe = DIST / f"{name}.exe"
-    size = exe.stat().st_size / 1e6
-    print(f"\nOK : {exe.relative_to(ROOT)}  ({size:.1f} Mo)")
     shutil.rmtree(BUILD / "work", ignore_errors=True)
+    exe = DIST / "LiveDeck" / "LiveDeck.exe"
+    print(f"\nOK : {exe.relative_to(ROOT)}")
+    if args.no_installer:
+        return
+
+    iscc = find_iscc()
+    if not iscc:
+        sys.exit("Inno Setup 6 introuvable (winget install JRSoftware.InnoSetup), ou relance avec --no-installer.")
+    subprocess.run([str(iscc), f"/DAppVersion={__version__}", f"/DSourceDir={DIST / 'LiveDeck'}",
+                    f"/DOutputDir={DIST}", f"/DIconFile={ico}", str(ROOT / "tools" / "installer.iss")], check=True)
+    setup = DIST / f"LiveDeck-{__version__}-win64-setup.exe"
+    print(f"\nOK : {setup.relative_to(ROOT)}  ({setup.stat().st_size / 1e6:.1f} Mo)")
 
 
 if __name__ == "__main__":

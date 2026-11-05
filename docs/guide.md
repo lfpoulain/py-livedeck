@@ -53,6 +53,10 @@
 - **Survoler une touche** du deck à l'écran affiche ce qu'elle fait, son prochain appui et ses problèmes éventuels
   (input introuvable, py-intercom indisponible).
 - **Édition / Live (F5)** : en Live, un clic déclenche la touche comme sur le deck.
+- **Verrouiller (Ctrl+L)** : pour un direct, bloque l'édition (bibliothèque, éditeur, pages, import, réglages) et les
+  clics sur les touches de l'écran : plus de fausse manip à la souris. Les Stream Decks physiques continuent de
+  fonctionner. Le verrou est immédiat, déverrouiller demande une confirmation, et il est conservé si LiveDeck est
+  relancé. Disponible aussi dans le menu de l'icône près de l'horloge.
 - **Moniteur** : journal horodaté des actions envoyées, des alertes et des erreurs (commande refusée par vMix,
   HTTP en échec, py-intercom injoignable…). Le bouton affiche le nombre d'erreurs et d'alertes non lues ; un filtre
   montre *Erreurs et alertes* ou *Actions envoyées*, avec **Copier**, **Effacer** et **Fichier journal**.
@@ -237,7 +241,7 @@ le bouton **Identifier** l'allume en couleur pour savoir lequel est lequel. Mod�
 Original / MK.2, +, + XL, XL, Studio et Pedal (les touches tactiles du Neo changent de page).
 
 La configuration est enregistrée automatiquement dans `%APPDATA%\LiveDeck\config.json`, indépendamment
-de l'exe : on peut le remplacer par une nouvelle version sans rien perdre
+de l'installation : mettre à jour ou désinstaller LiveDeck ne la touche pas
 (**Fichier → Exporter → La configuration…** pour une copie).
 
 ## Intégrations maison

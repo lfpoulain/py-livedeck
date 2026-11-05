@@ -362,6 +362,46 @@ def test_live_lock_search_and_diagnostic(tmp_path):
     w.quit_app()
 
 
+def test_lock_blocks_clicks_and_editing(tmp_path):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    e = engine(tmp_path, start=False)
+    w = MainWindow(e)
+    e.start()
+    w.show()
+    assert wait(lambda: e.vmix.state.inputs)
+    pid = e.pages[0]["id"]
+    w.grid.select("0,0")
+    w.set_live(True)  # même en Live, verrouillé : un clic ne déclenche rien
+    sent = []
+    real_press = e.press
+    e.press = lambda *a, **k: sent.append(a) or real_press(*a, **k)
+    w.set_locked(True)
+    assert w.locked and w.lock_btn.isChecked() and "VERROUILLÉ" in w.windowTitle()
+    QTest.mouseClick(w.grid, Qt.LeftButton, Qt.NoModifier, QPoint(w.grid.width() // 2, w.grid.height() // 2))
+    QTest.mouseClick(w.grid, Qt.RightButton, Qt.NoModifier, QPoint(w.grid.width() // 2, w.grid.height() // 2))
+    assert not sent
+    # édition : rien ne bouge, ni au clavier ni par les menus
+    w.delete_selected()
+    w.cut()
+    assert e.button(pid, "0,0") is not None
+    assert not w.library.isEnabled() and not w.inspector.isEnabled() and not w.mode.isEnabled()
+    assert not w._editable()
+    w.set_live(False)  # F5 refusé
+    assert w.grid.live
+    # le Stream Deck physique reste actif
+    tap(e, pid, "0,0")
+    assert sent[-2:] == [(pid, "0,0", True), (pid, "0,0", False)]
+    # le verrou survit à un redémarrage de l'interface
+    w2 = MainWindow(e)
+    assert w2.locked and not w2.library.isEnabled()
+    w2.set_locked(False)
+    assert w2.library.isEnabled() and w2.inspector.isEnabled() and not w2.locked
+    QTest.mouseClick(w2.grid, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
+    w2.quit_app()
+    w.quit_app()
+
+
 # -- intégrations maison ---------------------------------------------------------
 def integrations_engine(tmp_path):
     ic, orch = fakes.FakeIntercom(18192), fakes.FakeOrchestream(18193)

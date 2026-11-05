@@ -17,6 +17,7 @@ ROW_STYLES = [("take", "Take (1er appui preview, 2e antenne)"), ("pair", "Previe
 
 SHORTCUTS = [
     ("F5", "Passer en Live / revenir à l'édition"),
+    ("Ctrl+L", "Verrouiller / déverrouiller : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)"),
     ("Entrée", "Tester la touche sélectionnée (le deck à l'écran a le focus)"),
     ("← → ↑ ↓", "Changer de touche sélectionnée"),
     ("F2", "Modifier le texte de la touche"),

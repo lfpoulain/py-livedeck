@@ -9,7 +9,7 @@
   3. lance le lint et les tests ;
   4. crée le commit « Version 1.3.0 » et le pousse.
 
-Le push déclenche le workflow GitHub « CI » : il voit une version sans release, compile l'exe,
+Le push déclenche le workflow GitHub « CI » : il voit une version sans release, compile l'installateur,
 crée le tag v1.3.0 et publie la release avec les notes du CHANGELOG.
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ def main():
         INIT.write_text(new, encoding="utf-8")
         git("commit", "-am", f"Version {v}")
     git("push", "origin", "main", capture=False)
-    print(f"\nVersion {v} poussée. Le workflow « CI » compile l'exe et publie la release sur GitHub.")
+    print(f"\nVersion {v} poussée. Le workflow « CI » compile l'installateur et publie la release sur GitHub.")
 
 
 if __name__ == "__main__":

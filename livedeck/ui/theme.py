@@ -64,6 +64,8 @@ QPushButton#Seg {{ background: transparent; border: none; border-radius: 7px; pa
 QPushButton#Seg:checked {{ background: {RAISED}; color: {TEXT}; }}
 QPushButton#SegLive {{ background: transparent; border: none; border-radius: 7px; padding: 6px 14px; color: {MUTED}; }}
 QPushButton#SegLive:checked {{ background: #3a1518; color: #fca5a5; }}
+QPushButton#LockBtn {{ padding: 6px 12px; }}
+QPushButton#LockBtn:checked {{ background: #3a1518; color: #fca5a5; border-color: #7f1d1d; }}
 QFrame#SegBox {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 9px; }}
 QPushButton#Tile {{ text-align: left; padding: 9px 12px; border-radius: 9px; background: {PANEL2}; font-weight: 600; }}
 QPushButton#Tile:hover {{ background: {RAISED}; border-color: #3a4252; }}
