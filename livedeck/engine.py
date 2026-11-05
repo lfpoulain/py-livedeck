@@ -10,7 +10,7 @@ import time
 from . import actions, adjust, feedback, winsys
 from . import vars as textvars
 from .health import HealthMonitor, JsonPoller, parse_targets
-from .integrations import Intercom, Orchestream, Tallies, overlay_list
+from .integrations import Intercom, Multiview, Orchestream, Tallies, overlay_list
 from .model import (CONFIG_PATH, backup_config, config_text, control_key, has_backup_today, new_page,
                     normalize_button, normalize_control, open_config, parse_control, parse_key,
                     save_config_text)
@@ -98,6 +98,7 @@ class Engine:
         self.intercom = Intercom(lambda: self.emit("state"), self.log)
         self.orchestream = Orchestream(lambda: self.emit("state"), self.log)
         self.tallies = Tallies(lambda: self.emit("state"), self.log)
+        self.multiview = Multiview(lambda: self.emit("state"), self.log)
         self.decks = None
         if enable_decks:
             from .deck import DeckHub
@@ -116,7 +117,7 @@ class Engine:
         self.apply_integrations()
         self._ids = {b["id"] for _, _, b in self.all_buttons()}
         self._applied_decks = copy.deepcopy(self.cfg["decks"])
-        for s in (self.intercom, self.orchestream, self.tallies):
+        for s in (self.intercom, self.orchestream, self.tallies, self.multiview):
             s.start()
         if self.decks:
             self.decks.start()
@@ -129,7 +130,7 @@ class Engine:
         if self.decks:
             steps.append(self.decks.stop)
         steps += [self.vmix.stop, self.health.stop, self.jsonpoll.stop, self.intercom.stop, self.orchestream.stop, self.tallies.stop,
-                  self._stop_runners, self.flush_save]
+                  self.multiview.stop, self._stop_runners, self.flush_save]
         for step in steps:
             try:
                 step()
@@ -264,6 +265,7 @@ class Engine:
         orch = integ.get("orchestream") or {}
         self.orchestream.configure(orch.get("url", ""), overlay_list(orch))
         self.tallies.configure(integ.get("tallies", []))
+        self.multiview.configure((integ.get("multiview") or {}).get("url", ""))
         used = set()
         for _, _, b in self.all_buttons():
             for a in (b.get("actions") or []) + (b.get("actions_off") or []) + (b.get("long_actions") or []):
@@ -273,6 +275,7 @@ class Engine:
         self.intercom.set_wanted("intercom" in used)
         self.orchestream.set_wanted("orchestream" in used)
         self.tallies.set_wanted("tally" in used)
+        self.multiview.set_wanted("multiview" in used)
 
     def _sync_settings(self) -> None:
         """Après une modif, un annuler ou un rétablir : le vMix, la santé et la luminosité suivent la config."""

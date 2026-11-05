@@ -410,6 +410,17 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
         w.setCurrentIndex(idx if idx >= 0 else 0)
         w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i)))
         return w
+    if kind == "mv_item":  # flux et routes lus sur /status de py-multiview, saisie libre acceptée
+        w = tame_combo(QComboBox(), 10)
+        w.setEditable(True)
+        for name, text in engine.multiview.choices("stream") + engine.multiview.choices("route"):
+            w.addItem(name)
+            w.setItemData(w.count() - 1, text, Qt.ToolTipRole)
+        widen_popup(w)
+        w.setEditText(str(value or ""))
+        w.lineEdit().setPlaceholderText("nom du flux, ou 1, 2…")
+        w.currentTextChanged.connect(on_change)
+        return w
     if kind == "function":
         w = tame_combo(QComboBox(), 10)
         w.setEditable(True)

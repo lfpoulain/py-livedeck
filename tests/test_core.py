@@ -37,6 +37,7 @@ from livedeck import loupedeck as ld  # noqa: E402
 from livedeck.ldeck import LoupedeckHandle, LoupedeckManager  # noqa: E402
 from livedeck import vmix as vmix_mod  # noqa: E402
 from livedeck.feedback import GREEN, RED, auto  # noqa: E402
+from livedeck import integrations  # noqa: E402
 from livedeck.model import (DECK_SIZES, backup_config, config_text, control_key, deck_size,  # noqa: E402
                            default_config, key, load_config, new_button, new_control, new_page,
                            normalize_config, parse_control, surface_of)
@@ -580,6 +581,95 @@ def test_integrations(tmp_path):
     dlg._refresh_status()
     dlg.reject()
     w.quit_app()
+
+
+def multiview_engine(tmp_path, port=18196):
+    """Faux py-multiview + une page de touches qui le pilotent."""
+    mv = fakes.FakeMultiview(port)
+    cfg = default_config()
+    page = cfg["pages"][0]
+    page.update(name="MV", cols=5, rows=3)
+    # auto_feedback : la couleur de la touche est déduite de l'action par le moteur
+    page["buttons"]["0,0"] = new_button(label="Émission",
+                                        actions=[new_action("multiview.control", target="sender")])
+    page["buttons"]["0,1"] = new_button(label="Flux",
+                                        actions=[new_action("multiview.control", target="stream", ref="Caméra 1")])
+    page["buttons"]["0,2"] = new_button(label="Volume",
+                                        actions=[new_action("multiview.volume", value=35)])
+    page["buttons"]["0,3"] = new_button(label="Retour",
+                                        actions=[new_action("multiview.control", target="monitor", mode="on")])
+    cfg["integrations"]["multiview"] = {"url": f"127.0.0.1:{port}"}
+    e = engine(tmp_path, cfg=cfg)
+    assert wait(lambda: e.multiview.reachable)
+    return e, mv, page["id"]
+
+
+def test_multiview_drives_py_multiview(tmp_path):
+    e, mv, pg = multiview_engine(tmp_path)
+
+    # l'état lu alimente la touche : vert quand l'émission tourne
+    assert e.multiview.running("sender") is False
+    tap(e, pg, "0,0")
+    assert wait(lambda: mv.sender)
+    assert wait(lambda: e.visual(e.button(pg, "0,0"))["bg"].lower() == "#15803d")
+    # « bascule » est résolu depuis l'état connu : la 2e pression envoie « off », pas « toggle »
+    tap(e, pg, "0,0")
+    assert wait(lambda: not mv.sender)
+    assert mv.calls[:2] == ["sender/on", "sender/off"], mv.calls
+
+    # un flux s'adresse par son nom, accents compris
+    tap(e, pg, "0,1")
+    assert wait(lambda: mv.streams[0]["running"])
+    assert "stream/Caméra 1/on" in mv.calls
+
+    # mode absolu : « Démarrer » reste « on » même répété
+    tap(e, pg, "0,3")
+    tap(e, pg, "0,3")
+    assert wait(lambda: mv.monitor)
+    assert [c for c in mv.calls if c.startswith("monitor/")] == ["monitor/on", "monitor/on"]
+
+    # volume
+    tap(e, pg, "0,2")
+    assert wait(lambda: mv.volume == 35)
+
+
+def test_multiview_reports_refusals_and_absence(tmp_path):
+    e, mv, pg = multiview_engine(tmp_path, 18197)
+    logs = []
+    e.listeners.append(lambda k, pl: logs.append(pl) if k == "log" else None)
+
+    mv.refuse = "aucun écran assigné"
+    tap(e, pg, "0,0")
+    assert wait(lambda: any("aucun écran assigné" in m for _, m in logs)), logs
+
+    # py-multiview éteint : la touche le dit au lieu de rester verte
+    mv.refuse = ""
+    mv.srv.shutdown()
+    assert wait(lambda: e.multiview.reachable is False, 8)
+    assert e.multiview.unavailable() == "HORS LIGNE"
+    assert e.multiview.running("sender") is None
+
+
+def test_multiview_auto_feedback_colours():
+    b = new_button(label="Émission", actions=[new_action("multiview.control", target="sender")])
+    states = {f["cond"]["state"]: f.get("bg") or f.get("bar") for f in auto(b)}
+    assert states == {"on": "#15803d", "error": "#7c2d12", "unknown": "#5a6273"}
+    # le son coupé est un défaut, pas une marche : rouge
+    muted = new_button(actions=[new_action("multiview.control", target="mute", ref="1")])
+    assert next(f["bg"] for f in auto(muted) if f["cond"]["state"] == "on") == "#cc0000"
+
+
+def test_multiview_address_and_probe():
+    assert integrations.multiview_url("192.168.1.42") == "http://192.168.1.42:5090"
+    assert integrations.multiview_url("192.168.1.42:5099") == "http://192.168.1.42:5099"
+    assert integrations.multiview_url("http://poste/") == "http://poste:5090"
+    assert integrations.multiview_url("") == ""
+    mv = fakes.FakeMultiview(18198)
+    ok, msg = integrations.probe_multiview("127.0.0.1:18198")
+    assert ok is True and "1/2 flux en lecture" in msg, msg
+    mv.srv.shutdown()
+    ok, msg = integrations.probe_multiview("127.0.0.1:18198")
+    assert ok is False and "py-multiview" in msg
 
 
 # -- sûreté du moteur ------------------------------------------------------------

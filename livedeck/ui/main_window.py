@@ -599,7 +599,8 @@ class MainWindow(QMainWindow):
         self.deck_pill.setToolTip(f"Stream Deck : {detail}\n{tip}\nClic : diagnostic des Stream Decks")
         # intégrations utilisées par une touche : une pastille chacune, ou une seule si la fenêtre est étroite
         e = self.engine
-        services = {"intercom": e.intercom, "orchestream": e.orchestream, "tallies": e.tallies}
+        services = {"intercom": e.intercom, "orchestream": e.orchestream, "tallies": e.tallies,
+                    "multiview": e.multiview}
         used = [(k, name, ok, text) for k, name, ok, text in integration_status(e) if services[k].wanted]
         for k, pill in self.integ_pills.items():
             row = next((u for u in used if u[0] == k), None)

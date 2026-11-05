@@ -6,7 +6,8 @@ import time
 
 from . import adjust, hotkeys, netsend, webreq, winsys
 from .adjust import BUSES, VMIX_STEP, VMIX_TARGETS, WIN_MODES, WIN_TARGETS
-from .integrations import UNREACHABLE, bus_label, overlay_label
+from .integrations import (MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, UNREACHABLE,
+                           bus_label, overlay_label)
 from .webreq import error_text
 
 # Fonctions de transition de l'API vMix (FadeToBlack n'en est pas une : c'est un interrupteur, voir PRODUCTION)
@@ -28,7 +29,9 @@ MEDIA = [("playpause", "Lecture / pause"), ("next", "Piste suivante"), ("previou
 SCROLL_DIRS = [("vertical", "Verticale (haut / bas)"), ("horizontal", "Horizontale (gauche / droite)")]
 # action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
 INTEGRATION_OF = {"intercom.ptt": "intercom", "orchestream.overlay": "orchestream", "tally.reconnect": "tallies",
-                  "intercom": "intercom", "orchestream": "orchestream", "tally": "tallies"}
+                  "multiview.control": "multiview", "multiview.volume": "multiview",
+                  "intercom": "intercom", "orchestream": "orchestream", "tally": "tallies",
+                  "multiview": "multiview"}
 
 PRODUCTION = [("recording", "Enregistrement"), ("streaming", "Stream"), ("external", "Sortie externe"),
               ("multicorder", "MultiCorder"), ("fadetoblack", "Fondu au noir (FTB)"), ("snapshot", "Capture d'image")]
@@ -46,6 +49,7 @@ AUDIO_MODES = [("toggle", "Couper / rétablir"), ("off", "Couper"), ("on", "Rét
 PTT_MODES = [("hold", "Maintenu (push-to-talk)"), ("toggle", "Basculer"),
              ("on", "Ouvrir le micro"), ("off", "Fermer le micro"), ("alloff", "Couper tous les bus")]
 SHOW_MODES = [("toggle", "Basculer (afficher / masquer)"), ("show", "Afficher"), ("hide", "Masquer")]
+ON_OFF_MODES = [("toggle", "Basculer (marche / arrêt)"), ("on", "Démarrer"), ("off", "Arrêter")]
 NET_PROTOS = [("tcp", "TCP"), ("udp", "UDP")]
 
 OVERLAY_MODES = [("toggle", "Basculer (afficher / masquer)"), ("in", "Afficher"), ("out", "Masquer"),
@@ -150,6 +154,18 @@ ACTIONS: dict[str, dict] = {
                         "help": "Demande aux Tally32 de se reconnecter à vMix. Le retour d'état montre en "
                                 "direct les tallys hors ligne.",
                         "fields": [F("target", "Tally", "tally", "all")]},
+    "multiview.control": {"label": "py-multiview", "cat": "Intégrations", "color": "#0f2a24",
+                          "help": "Démarre ou arrête une partie de py-multiview : un flux, toute la "
+                                  "réception, l'émission OMT, le retour audio ou la fenêtre de retour. "
+                                  "L'état de la touche suit ce que fait py-multiview.",
+                          "fields": [F("target", "Cible", "choice", "sender", MULTIVIEW_TARGETS),
+                                     F("ref", "Lequel", "mv_item", "",
+                                       placeholder="nom ou numéro (1, 2…)",
+                                       when={"target": MULTIVIEW_NEEDS_REF}),
+                                     F("mode", "Mode", "choice", "toggle", ON_OFF_MODES)]},
+    "multiview.volume": {"label": "py-multiview : volume du retour", "cat": "Intégrations", "color": "#0f2a24",
+                         "help": "Règle le volume du retour audio de py-multiview.",
+                         "fields": [F("value", "Volume", "int", 50, (0, 100))]},
     "hotkey": {"label": "Raccourci clavier", "cat": "Clavier", "color": "#000033",
                "help": "Simule une combinaison de touches sur ce PC.",
                "fields": [F("keys", "Touches", "hotkey", ""),
@@ -381,6 +397,10 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
         engine.orchestream.command(a.get("overlay", "twizz"), a.get("mode", "toggle"))
     elif t == "tally.reconnect":
         engine.tallies.reconnect(a.get("target", "all"))
+    elif t == "multiview.control":
+        engine.multiview.command(a.get("target", "sender"), a.get("ref", ""), a.get("mode", "toggle"))
+    elif t == "multiview.volume":
+        engine.multiview.set_volume(a.get("value", 50))
     elif t == "hotkey":
         if a.get("keys"):
             (hotkeys.press if a.get("hold") else hotkeys.tap)(a["keys"])
@@ -560,6 +580,15 @@ def summary(a: dict, page_names: dict | None = None) -> str:
         return f"OSC {a.get('host') or '?'}:{a.get('port')} {a.get('address') or '?'} {a.get('args') or ''}".strip()
     if t == "tally.reconnect":
         return "Tallys · reconnecter à vMix" + ("" if a.get("target", "all") == "all" else f" ({a['target']})")
+    if t == "multiview.control":
+        target = a.get("target", "sender")
+        what = MULTIVIEW_TARGET_LABEL.get(target, target)
+        if target in MULTIVIEW_NEEDS_REF and a.get("ref"):
+            what = f"{what} « {a['ref']} »"
+        mode = dict(ON_OFF_MODES).get(a.get("mode"), "").split(" ")[0].lower()
+        return f"py-multiview · {what} ({mode})"
+    if t == "multiview.volume":
+        return f"py-multiview · retour audio à {a.get('value', 50)} %"
     if t == "hotkey":
         return f"Clavier · {a.get('keys') or '?'}" + (" (maintenu)" if a.get("hold") else "")
     if t == "http":

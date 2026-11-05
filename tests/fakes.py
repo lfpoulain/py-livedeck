@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import fake_vmix  # noqa: E402
@@ -388,4 +389,95 @@ class FakeTally:
                 pass
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+
+class FakeMultiview:
+    """API locale de py-multiview : GET /status, commandes POST à corps vide."""
+
+    def __init__(self, port):
+        self.streams = [{"index": 1, "id": "s-1", "name": "Caméra 1", "source": "srt", "running": False,
+                         "status": "stopped", "detail": "", "muted": False, "display": "Écran 2"},
+                        {"index": 2, "id": "s-2", "name": "Plateau", "source": "omt", "running": True,
+                         "status": "active", "detail": "", "muted": False, "display": "Écran 3"}]
+        self.sender = False
+        self.monitor = False
+        self.floating = False
+        self.volume = 100
+        self.calls = []
+        self.refuse = ""  # message d'un refus métier (409)
+        fake = self
+
+        def payload():
+            return {"app": "py-multiview", "version": "0.3.7", "connected": True,
+                    "reception": {"running": any(s["running"] for s in fake.streams),
+                                  "active": sum(s["running"] for s in fake.streams), "total": len(fake.streams)},
+                    "streams": fake.streams,
+                    "sender": {"running": fake.sender, "status": "active" if fake.sender else "stopped",
+                               "detail": "", "name": "Régie", "audio": "loopback", "fps": 25},
+                    "monitor": {"running": fake.monitor, "status": "active" if fake.monitor else "stopped",
+                                "detail": "", "source": "RÉGIE (Master)", "volume": fake.volume},
+                    "floating": {"running": fake.floating, "status": "active" if fake.floating else "stopped",
+                                 "detail": "", "source": "RÉGIE (Master)"},
+                    "routes": [{"index": 1, "id": "r-1", "name": "Multicast", "running": False,
+                                "status": "stopped"}]}
+
+        self.payload = payload
+
+        class MV(BaseHTTPRequestHandler):
+            def _send(self, code, data):
+                body = json.dumps(data, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _error(self, code, msg):
+                self._send(code, {"error": {"code": "REFUSED", "message": msg}})
+
+            def _find(self, ref):
+                return next((s for s in fake.streams if ref in (str(s["index"]), s["id"], s["name"])), None)
+
+            def do_GET(self):
+                if self.path == "/status":
+                    return self._send(200, payload())
+                self._send(404, {"error": {"code": "NOT_FOUND", "message": "routes : GET /status"}})
+
+            def do_POST(self):
+                parts = [unquote(p) for p in self.path.strip("/").split("/") if p]
+                fake.calls.append("/".join(parts))
+                if fake.refuse:
+                    return self._error(409, fake.refuse)
+                if len(parts) == 2 and parts[0] in ("sender", "monitor", "floating", "reception"):
+                    want = parts[1] == "on"
+                    if parts[0] == "reception":
+                        for s in fake.streams:
+                            s["running"] = want
+                            s["status"] = "active" if want else "stopped"
+                    else:
+                        setattr(fake, parts[0], want)
+                    return self._send(200, payload())
+                if len(parts) == 3 and parts[:2] == ["monitor", "volume"]:
+                    fake.volume = int(parts[2])
+                    return self._send(200, payload())
+                if len(parts) == 3 and parts[0] == "stream":
+                    s = self._find(parts[1])
+                    if s is None:
+                        return self._error(404, f"flux « {parts[1]} » inconnu")
+                    s["running"] = parts[2] == "on"
+                    s["status"] = "active" if s["running"] else "stopped"
+                    return self._send(200, payload())
+                if len(parts) == 4 and parts[0] == "stream" and parts[2] == "mute":
+                    s = self._find(parts[1])
+                    if s is None:
+                        return self._error(404, f"flux « {parts[1]} » inconnu")
+                    s["muted"] = parts[3] == "on"
+                    return self._send(200, payload())
+                self._error(404, "route inconnue")
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), MV)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()

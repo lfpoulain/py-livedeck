@@ -257,6 +257,7 @@ elles sont toutes surveillées.
 | **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
 | **orchestream** (overlays web) | Afficher / masquer / basculer, avec l'état suivi en direct (canal `overlay` d'orchestream-v2, ou flux `/api/overlay/events` de la v1) | Jaune quand l'overlay est affiché, liseré gris si l'état est inconnu |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
+| **py-multiview** (multiviewer SRT/OMT, `GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
 
 ### Régler py-intercom
 
@@ -301,6 +302,21 @@ un proxy d'entreprise ne peut plus bloquer le talkback.
     invités) répond « introuvable » : **Tester** te le dit et te propose l'adresse locale.
 - **Tally32** : un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur
   te demande de mettre à jour son firmware.
+
+### Régler py-multiview
+
+Indique l'adresse du poste py-multiview : `192.168.1.42` suffit, le port `5090` est ajouté tout seul.
+
+Côté py-multiview, il faut ouvrir l'API : **Préférences → Pilotage à distance → Ouvrir l'API locale**, en
+décochant *Ce poste uniquement* pour y accéder depuis cette machine.
+
+Une touche choisit sa **cible** — un flux, toute la réception, l'émission OMT, le retour audio, la fenêtre de
+retour, le son d'un flux ou une route multicast — et son **mode** : *Démarrer*, *Arrêter* ou *Basculer*.
+« Basculer » est résolu à partir de l'état lu, donc deux appuis rapides ne se croisent pas.
+
+Un flux se désigne par son **nom** ou par son **numéro** (`1`, `2`…) : la liste est proposée dès que LiveDeck
+a vu py-multiview au moins une fois, et reste saisissable à la main sinon. Nommer le flux plutôt que le
+numéroter garde la touche juste même si l'ordre change.
 
 ### Conversion depuis Companion
 

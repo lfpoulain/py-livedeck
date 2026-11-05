@@ -119,7 +119,7 @@ py-livedeck/
 │   ├── feedback.py         # retours d'état automatiques
 │   ├── vars.py             # texte dynamique $(vmix:…)
 │   ├── netsend.py          # TCP / UDP / OSC
-│   ├── integrations.py     # py-intercom, orchestream, Tally32
+│   ├── integrations.py     # py-intercom, orchestream, Tally32, py-multiview
 │   ├── companion_import.py # import Bitfocus Companion
 │   └── ui/                 # interface PySide6
 ├── tools/
@@ -146,6 +146,6 @@ python tests/test_core.py
 ```
 
 Ce script lance les tests de bout en bout : import Companion, vMix, Take, appui long, Stream Deck simulé,
-édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream et Tally32.
+édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream, Tally32 et py-multiview.
 Ils fonctionnent aussi avec `pytest`.
 À chaque push sur `main`, GitHub Actions les relance, et publie l'installateur quand la version change.

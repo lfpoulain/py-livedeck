@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 from .. import autostart
 from ..health import parse_targets
 from ..model import surface_of
-from ..integrations import (integration_status, overlay_label, overlay_list, probe_intercom, probe_orchestream,
-                            probe_tally)
+from ..integrations import (integration_status, overlay_label, overlay_list, probe_intercom, probe_multiview,
+                            probe_orchestream, probe_tally)
 from . import theme as T
 from .widgets import Seg, label
 
@@ -91,14 +91,14 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, engine.orchestream, engine.tallies):
+        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
         self._refresh_status()
 
     def done(self, r):
-        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies):
+        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview):
             svc.set_forced(False)
         super().done(r)
 
@@ -272,6 +272,17 @@ class SettingsDialog(QDialog):
         self.tallies.setFixedHeight(72)
         v.addWidget(self.tallies)
         self.tally_status = self._test_row(v, "tallies")
+
+        v.addSpacing(6)
+        v.addWidget(label("PY-MULTIVIEW  ·  MULTIVIEWER SRT/OMT", "H2"))
+        self.mv_url = QLineEdit((integ.get("multiview") or {}).get("url", ""))
+        self.mv_url.setPlaceholderText("192.168.1.42:5090")
+        self.mv_url.setToolTip("Adresse du poste py-multiview. Le port 5090 est ajouté s'il manque.\n"
+                               "Dans py-multiview : Préférences → Pilotage à distance → Ouvrir l'API locale, "
+                               "en décochant « Ce poste uniquement ».")
+        v.addWidget(self.mv_url)
+        self.mv_status = self._test_row(v, "multiview")
+
         v.addWidget(label("Une intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
                           "Intégrations) ; pendant que cette fenêtre est ouverte, elles sont toutes surveillées.",
                           "Hint", True))
@@ -293,6 +304,11 @@ class SettingsDialog(QDialog):
 
             def run():
                 return probe_orchestream(url)
+        elif key == "multiview":
+            mv_url = self.mv_url.text()
+
+            def run():
+                return probe_multiview(mv_url)
         else:
             devices = parse_targets(self.tallies.toPlainText())
 
@@ -324,7 +340,8 @@ class SettingsDialog(QDialog):
         self.vmix_status.setText(_dot(True) + f"Connecté à vMix {st.version}{lat}" if st.connected else
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
-        labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status}
+        labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
+                  "multiview": self.mv_status}
         for key, _, ok, text in integration_status(e):
             labels[key].setText(_dot(ok) + html.escape(text))
 
@@ -367,6 +384,7 @@ class SettingsDialog(QDialog):
             if overlays is not None:
                 integ["orchestream"]["overlays"] = overlays
             integ["tallies"] = tallies
+            integ["multiview"] = {**(integ.get("multiview") or {}), "url": self.mv_url.text().strip()}
         trial = copy.deepcopy(e.cfg)
         apply(trial)
         if trial != e.cfg:  # rien de modifié : pas d'étape « annuler » inutile

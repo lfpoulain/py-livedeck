@@ -28,7 +28,8 @@ from .deck_view import pil_to_pixmap
 from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
                       section, short_label, tame_combo)
 
-INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32"}
+INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32",
+               "multiview": "py-multiview"}
 
 
 def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:

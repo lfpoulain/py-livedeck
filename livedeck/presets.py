@@ -47,6 +47,11 @@ def _orch(overlay: str, name: str = "") -> dict:
                       actions=[new_action("orchestream.overlay", overlay=overlay)])
 
 
+def _mv(target: str, label: str, ref: str = "", bg: str = "#0f2a24") -> dict:
+    return new_button(label=label, bg=bg,
+                      actions=[new_action("multiview.control", target=target, ref=ref)])
+
+
 def _json_value() -> dict:
     return new_button(label="API", bg="#172554", feedbacks=[
         feedback.fb("http_json", url="", path="", op="always", value="", interval=5, label_fmt="Valeur\\n{value}"),
@@ -130,6 +135,16 @@ PRESETS: dict[str, tuple] = {
     "ov_speedizz": ("Intégrations", "Overlay Speedizz", "orchestream, état en direct", lambda: _orch("speedizz", "Speedizz")),
     "tallies": ("Intégrations", "Tallys", "Vert si tous connectés, reconnecte", lambda: new_button(
         label="Tallys", bg="#000000", actions=[new_action("tally.reconnect")])),
+    "mv_sender": ("Intégrations", "Émission OMT", "py-multiview, état en direct",
+                  lambda: _mv("sender", "Émission\nOMT")),
+    "mv_reception": ("Intégrations", "Réception multiview", "py-multiview, tous les flux",
+                     lambda: _mv("reception", "Réception")),
+    "mv_monitor": ("Intégrations", "Retour audio", "py-multiview, écoute du master",
+                   lambda: _mv("monitor", "Retour\naudio")),
+    "mv_floating": ("Intégrations", "Fenêtre de retour", "py-multiview, fenêtre flottante",
+                    lambda: _mv("floating", "Fenêtre\nretour")),
+    "mv_stream": ("Intégrations", "Un flux multiview", "py-multiview, à préciser",
+                  lambda: _mv("stream", "Flux 1", "1")),
     # -- molettes : la rotation règle, l'appui coupe ----------------------------------
     "knob_master": ("Molette", "Volume Master", "Tourner : volume · appuyer : couper",
                     lambda: _vol("master", "Master", "MasterAudio")),
@@ -281,6 +296,8 @@ def make(preset_id: str, engine=None) -> dict | None:
         return _talk(preset_id[5:])
     if preset_id.startswith("orch:"):
         return _orch(preset_id[5:], engine.orchestream.labels.get(preset_id[5:], "") if engine else "")
+    if preset_id.startswith("mv:"):
+        return _mv("stream", preset_id[3:], preset_id[3:])
     entry = PRESETS.get(preset_id)
     return entry[3]() if entry else None
 
@@ -299,6 +316,15 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
         out.append(("orch", "Overlay orchestream", "à régler : Réglages → Intégrations"))
     out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
                 else "Tally32 à régler : Réglages → Intégrations"))
+    if (integ.get("multiview") or {}).get("url"):
+        out += [("mv_sender", "Émission OMT", "py-multiview, état en direct"),
+                ("mv_reception", "Réception multiview", "py-multiview, tous les flux"),
+                ("mv_monitor", "Retour audio", "py-multiview, écoute du master"),
+                ("mv_floating", "Fenêtre de retour", "py-multiview, fenêtre flottante")]
+        out += [(f"mv:{name}", f"Flux {name}", "py-multiview, état en direct")
+                for name, _ in engine.multiview.choices("stream")]
+    else:
+        out.append(("mv_sender", "py-multiview", "à régler : Réglages → Intégrations"))
     return out
 
 
@@ -318,6 +344,8 @@ def needs_setup(preset_id: str, engine) -> str:
         return "" if (integ.get("orchestream") or {}).get("url") else "orchestream"
     if preset_id == "tallies":
         return "" if integ.get("tallies") else "tallies"
+    if preset_id.startswith("mv"):
+        return "" if (integ.get("multiview") or {}).get("url") else "multiview"
     return ""
 
 
