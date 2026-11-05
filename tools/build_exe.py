@@ -103,6 +103,11 @@ def main():
         "--add-binary", f"{hidapi};livedeck/lib",
         "--hidden-import", "pynput.keyboard._win32",
         "--hidden-import", "pynput.mouse._win32",
+        # pyserial choisit son implémentation au moment de l'exécution : sans cela, le Loupedeck
+        # fonctionne depuis les sources mais reste introuvable dans l'exe.
+        "--hidden-import", "serial.tools.list_ports",
+        "--hidden-import", "serial.tools.list_ports_windows",
+        "--hidden-import", "serial.serialwin32",
         "--exclude-module", "tkinter",
         "--distpath", str(DIST),
         "--workpath", str(BUILD / "work"),

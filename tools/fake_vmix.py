@@ -44,6 +44,10 @@ class FakeVmix:
         self.outputs = {o: None for o in OUTPUTS}  # sortie -> heure de début (None = arrêtée)
         self.ftb = False
         self.muted = {i["n"]: False for i in self.inputs}
+        self.volume = {i["n"]: 100.0 for i in self.inputs}
+        # mixage : master (et casque), bus A-G
+        self.audio = {"master": {"volume": 80.0, "muted": False, "headphones": 70.0},
+                      **{b: {"volume": 100.0, "muted": False} for b in "ABCDEFG"}}
         self.delay = 0.0
         self.hang = False
         self.functions: list[tuple[str, dict]] = []  # journal des commandes reçues
@@ -85,7 +89,8 @@ class FakeVmix:
             ins = []
             for i in self.inputs:
                 attrs = (f'key="{i["key"]}" number="{i["n"]}" type="{i["type"]}" title={quoteattr(i["title"])} '
-                         f'shortTitle={quoteattr(i["title"])} muted="{self.muted[i["n"]]}" volume="100" loop="False"')
+                         f'shortTitle={quoteattr(i["title"])} muted="{self.muted[i["n"]]}" '
+                         f'volume="{self.volume[i["n"]]:g}" loop="False"')
                 if i["type"] == "Video":
                     pos = self._pos(i)
                     attrs += (f' state="{"Running" if i["play"] is not None else "Paused"}" position="{pos}" '
@@ -113,7 +118,14 @@ class FakeVmix:
                      '<transition number="3" effect="Wipe" duration="1000"/>'
                      '<transition number="4" effect="CubeZoom" duration="1000"/></transitions>')
             m1 = self.mixes[1]
+            ma = self.audio["master"]
+            audio = (f'<audio><master volume="{ma["volume"]:g}" muted="{ma["muted"]}" meterF1="0" meterF2="0" '
+                     f'headphonesVolume="{ma["headphones"]:g}"/>'
+                     + "".join(f'<bus{b} volume="{self.audio[b]["volume"]:g}" muted="{self.audio[b]["muted"]}" '
+                               f'meterF1="0" meterF2="0" solo="False" sendToMaster="False"/>' for b in "ABCDEFG")
+                     + "</audio>")
             return (f"<vmix><version>27.0.0.49</version><edition>4K</edition><inputs>{''.join(ins)}</inputs>"
+                    f"{audio}"
                     f"<overlays>{ovs}</overlays><preview>{m1['preview']}</preview><active>{m1['active']}</active>"
                     f"<fadeToBlack>{self.ftb}</fadeToBlack>{trans}{outs}<playList>False</playList>{mixes}"
                     f"</vmix>").encode("utf-8")
@@ -204,6 +216,26 @@ class FakeVmix:
                     acts.append(f"ACTS OK Overlay{o_n} {o['program']} 1")
             elif low in ("audio", "audioon", "audiooff") and n:
                 self.muted[n] = {"audio": not self.muted[n], "audioon": False, "audiooff": True}[low]
+            elif low in ("setvolume", "setmastervolume", "setheadphonesvolume") or (
+                    low.startswith("setbus") and low.endswith("volume") and len(low) == 13):
+                try:
+                    v = max(0.0, min(100.0, float(q.get("Value", ""))))
+                except ValueError:
+                    return "ER Invalid Value"
+                if low == "setvolume":
+                    if n is None:
+                        return "ER Input parameter missing"
+                    self.volume[n] = v
+                elif low == "setmastervolume":
+                    self.audio["master"]["volume"] = v
+                elif low == "setheadphonesvolume":
+                    self.audio["master"]["headphones"] = v
+                else:
+                    self.audio[low[6].upper()]["volume"] = v
+            elif low == "setposition" and inp and inp["type"] == "Video":
+                inp["pos"] = max(0, min(inp["duration"], int(float(q.get("Value") or 0))))
+                if inp["play"] is not None:
+                    inp["play"] = time.monotonic()
             elif low == "settext" and inp:
                 keys = list(inp["texts"])
                 field = q.get("SelectedName")

@@ -4,7 +4,8 @@ from __future__ import annotations
 import copy
 import time
 
-from . import hotkeys, netsend, webreq
+from . import adjust, hotkeys, netsend, webreq, winsys
+from .adjust import BUSES, VMIX_STEP, VMIX_TARGETS, WIN_MODES, WIN_TARGETS
 from .integrations import UNREACHABLE, bus_label, overlay_label
 from .webreq import error_text
 
@@ -19,8 +20,12 @@ TRANSITION_CHOICES = [(t, f"Bouton transition {t[-1]} (réglé dans vMix)" if t.
 THEN_CHOICES = [("none", "Rien (il reste en preview)")] + TRANSITION_CHOICES
 
 CATEGORIES = {"Vidéo": "#fbbf24", "Audio": "#2dd4bf", "Production": "#fb7185", "Intégrations": "#f472b6",
-              "vMix avancé": "#60a5fa", "Clavier": "#a78bfa", "Web": "#38bdf8", "Réseau": "#34d399", "Deck": "#a3e635",
-              "Avancé": "#94a3b8"}
+              "vMix avancé": "#60a5fa", "Molette": "#5eead4", "Clavier": "#a78bfa", "Windows": "#818cf8",
+              "Web": "#38bdf8",
+              "Réseau": "#34d399", "Deck": "#a3e635", "Avancé": "#94a3b8"}
+MEDIA = [("playpause", "Lecture / pause"), ("next", "Piste suivante"), ("previous", "Piste précédente"),
+         ("mute", "Couper le son (touche média)")]
+SCROLL_DIRS = [("vertical", "Verticale (haut / bas)"), ("horizontal", "Horizontale (gauche / droite)")]
 # action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
 INTEGRATION_OF = {"intercom.ptt": "intercom", "orchestream.overlay": "orchestream", "tally.reconnect": "tallies",
                   "intercom": "intercom", "orchestream": "orchestream", "tally": "tallies"}
@@ -64,9 +69,19 @@ VMIX_FUNCTIONS = [
 ]
 
 
-def F(key, label, kind, default, options=None, placeholder=""):
+def F(key, label, kind, default, options=None, placeholder="", when=None):
+    """Champ d'une action. when : {champ: (valeurs…)} — le champ n'est montré que si l'action a l'une
+    de ces valeurs (ex. l'input n'apparaît que pour une cible qui en demande un)."""
     return {"key": key, "label": label, "kind": kind, "default": default, "options": options,
-            "placeholder": placeholder}
+            "placeholder": placeholder, "when": when}
+
+
+def shown(spec: dict, a: dict) -> bool:
+    """Le champ `spec` a-t-il un sens pour l'action `a` dans son état actuel ?"""
+    for k, vals in (spec.get("when") or {}).items():
+        if a.get(k) not in vals:
+            return False
+    return True
 
 
 ACTIONS: dict[str, dict] = {
@@ -103,6 +118,16 @@ ACTIONS: dict[str, dict] = {
                         "help": "Enregistrement, stream, sortie externe, MultiCorder, fondu au noir.",
                         "fields": [F("what", "Quoi", "choice", "recording", PRODUCTION),
                                    F("mode", "Mode", "choice", "toggle", TOGGLE_MODES)]},
+    "vmix.adjust": {"label": "Régler au cran (volume, lecture…)", "cat": "Audio", "color": "#0b2e2a",
+                    "help": "Fait pour les molettes : chaque cran monte ou baisse un volume, avance dans une vidéo, "
+                            "parcourt les inputs en preview… Le sens de rotation donne le sens du réglage ; sur "
+                            "une touche, une valeur négative fait baisser. La jauge et la valeur s'affichent.",
+                    "fields": [F("target", "Régler", "choice", "master", VMIX_TARGETS),
+                               F("input", "Input", "input", "",
+                                 when={"target": adjust.NEEDS_INPUT}),
+                               F("bus", "Bus", "choice", "A", BUSES, when={"target": ("bus",)}),
+                               F("mix", "Mix", "mix", 1, when={"target": ("preview",)}),
+                               F("amount", "Par cran", "step", 2)]},
     "vmix.function": {"label": "Fonction vMix", "cat": "vMix avancé", "color": "#1e293b",
                       "help": "N'importe quelle fonction de l'API vMix.",
                       "fields": [F("function", "Fonction", "function", ""),
@@ -129,6 +154,44 @@ ACTIONS: dict[str, dict] = {
                "help": "Simule une combinaison de touches sur ce PC.",
                "fields": [F("keys", "Touches", "hotkey", ""),
                           F("hold", "Maintenir tant que la touche est enfoncée", "bool", False)]},
+    "win.audio": {"label": "Son Windows (volume, micro, appli)", "cat": "Windows", "color": "#1e1b4b",
+                  "help": "Volume ou coupure du son de Windows, du micro par défaut ou d'une seule application "
+                          "(Spotify, navigateur, Teams…). Sur une molette, « Monter / baisser » suit le sens de "
+                          "rotation. Une application n'est visible que pendant qu'elle produit du son.",
+                  "fields": [F("target", "Quoi", "choice", "output", WIN_TARGETS),
+                             F("app", "Application", "winapp", "", placeholder="spotify.exe",
+                               when={"target": ("app",)}),
+                             F("mode", "Action", "choice", "adjust", WIN_MODES),
+                             F("amount", "Par cran", "step", 2, when={"mode": ("adjust",)}),
+                             F("level", "Volume", "percent", 50, when={"mode": ("set",)})]},
+    "win.media": {"label": "Lecture multimédia", "cat": "Windows", "color": "#1e1b4b",
+                  "help": "Touches multimédia de Windows : pilotent le lecteur actif (Spotify, navigateur…).",
+                  "fields": [F("what", "Touche", "choice", "playpause", MEDIA)]},
+    "win.launch": {"label": "Ouvrir un programme / fichier / site", "cat": "Windows", "color": "#1e1b4b",
+                   "help": "Comme un double-clic : un programme (.exe), un fichier, un dossier ou une adresse web. "
+                           "Les variables d'environnement sont acceptées (%USERPROFILE%\\Desktop…).",
+                   "fields": [F("target", "Programme, fichier ou adresse", "text", "",
+                                placeholder="C:\\Program Files\\OBS\\obs64.exe  ou  https://…"),
+                              F("args", "Arguments", "text", "", placeholder="--startrecording")]},
+    "win.focus": {"label": "Mettre une fenêtre au premier plan", "cat": "Windows", "color": "#1e1b4b",
+                  "help": "Active la première fenêtre dont le titre contient ce texte. Utile avant un raccourci "
+                          "clavier, pour qu'il arrive dans le bon logiciel.",
+                  "fields": [F("title", "Titre de la fenêtre (une partie suffit)", "text", "", placeholder="vMix")]},
+    "win.run": {"label": "Commande Windows", "cat": "Windows", "color": "#1e1b4b",
+                "help": "Lance une commande (comme dans l'invite de commandes), sans attendre qu'elle se termine.",
+                "fields": [F("command", "Commande", "text", "", placeholder="shutdown /a"),
+                           F("hidden", "Sans fenêtre", "bool", True)]},
+    "win.type": {"label": "Taper un texte", "cat": "Windows", "color": "#1e1b4b",
+                 "help": "Saisit le texte dans la fenêtre active, comme au clavier.",
+                 "fields": [F("text", "Texte", "multiline", "")]},
+    "win.scroll": {"label": "Molette de souris", "cat": "Windows", "color": "#1e1b4b",
+                   "help": "Fait défiler la fenêtre sous la souris : timeline, liste, page web. Sur une molette, "
+                           "le sens de rotation donne le sens du défilement.",
+                   "fields": [F("direction", "Sens", "choice", "vertical", SCROLL_DIRS),
+                              F("amount", "Lignes par cran", "step", 1)]},
+    "win.lock": {"label": "Verrouiller la session", "cat": "Windows", "color": "#1e1b4b",
+                 "help": "Verrouille Windows (comme Win+L). Les surfaces de contrôle restent actives.",
+                 "fields": []},
     "http": {"label": "Requête HTTP / curl", "cat": "Web", "color": "#172554",
              "help": "Appelle une URL (API, webhook, overlay web…).",
              "fields": [F("method", "Méthode", "choice", "POST",
@@ -187,6 +250,13 @@ def is_momentary(a: dict) -> bool:
 
 def momentary(acts) -> list[dict]:
     return [a for a in acts or [] if is_momentary(a)]
+
+
+def is_relative(a: dict) -> bool:
+    """Action « au cran » : le sens de rotation d'une molette décide du sens du réglage. Une telle
+    action, placée d'un seul côté d'une molette, s'applique donc dans les deux sens."""
+    t = a.get("type")
+    return t in ("vmix.adjust", "win.scroll") or (t == "win.audio" and a.get("mode", "adjust") == "adjust")
 
 
 def _mix(a) -> int | None:
@@ -323,6 +393,33 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
         engine.goto_page(ctx.get("deck"), a.get("page", "next"))
     elif t == "delay":
         time.sleep(max(0, int(a.get("ms") or 0)) / 1000)
+    elif t == "vmix.adjust":
+        adjust.vmix_adjust(engine, a, int(ctx.get("delta") or 1))
+    elif t == "win.audio":
+        adjust.win_audio(engine, a, int(ctx.get("delta") or 1))
+    elif t == "win.media":
+        hotkeys.tap(a.get("what") or "playpause")
+    elif t == "win.launch":
+        try:
+            winsys.launch(a.get("target", ""), a.get("args", ""))
+        except (OSError, ValueError) as e:
+            engine.log("error", f"Ouvrir « {a.get('target') or '?'} » : {e}")
+    elif t == "win.focus":
+        if not winsys.focus_window(a.get("title", "")):
+            engine.log("warn", f"Aucune fenêtre ouverte ne contient « {a.get('title') or '?'} »")
+    elif t == "win.run":
+        try:
+            winsys.run(a.get("command", ""), bool(a.get("hidden", True)))
+        except (OSError, ValueError) as e:
+            engine.log("error", f"Commande : {e}")
+    elif t == "win.type":
+        winsys.type_text(a.get("text", ""))
+    elif t == "win.scroll":
+        n = int(float(a.get("amount") or 1) * int(ctx.get("delta") or 1))
+        # vers le haut / la droite pour une rotation horaire, comme une molette de souris
+        winsys.scroll(n, 0) if a.get("direction") == "horizontal" else winsys.scroll(0, n)
+    elif t == "win.lock":
+        winsys.lock()
 
 
 def _ptt_press(engine, a: dict) -> None:
@@ -473,4 +570,45 @@ def summary(a: dict, page_names: dict | None = None) -> str:
         return f"Page → {label}"
     if t == "delay":
         return f"Pause {a.get('ms')} ms"
+    if t == "vmix.adjust":
+        tgt = a.get("target", "master")
+        unit = VMIX_STEP.get(tgt, (1, ""))[1]
+        what = {"input_volume": f"Volume {a.get('input') or '?'}", "master": "Volume Master",
+                "headphones": "Volume casque", "bus": f"Volume bus {a.get('bus', 'A')}",
+                "position": f"Lecture {a.get('input') or '?'}", "preview": f"Preview{mix}",
+                "list": f"Liste {a.get('input') or '?'}",
+                "countdown": f"Compte à rebours {a.get('input') or '?'}"}.get(tgt, tgt)
+        return f"{what} · {_signed(a.get('amount'))} {unit} par cran".strip()
+    if t == "win.audio":
+        who = {"output": "Son Windows", "mic": "Micro"}.get(a.get("target"), a.get("app") or "Application")
+        mode = a.get("mode", "adjust")
+        if mode == "adjust":
+            return f"{who} · {_signed(a.get('amount'))} % par cran"
+        if mode == "set":
+            return f"{who} · {a.get('level')} %"
+        return f"{who} · {dict(WIN_MODES).get(mode, mode).lower()}"
+    if t == "win.media":
+        return f"Média · {dict(MEDIA).get(a.get('what'), '?').lower()}"
+    if t == "win.launch":
+        return f"Ouvrir · {a.get('target') or '?'}"
+    if t == "win.focus":
+        return f"Fenêtre · {a.get('title') or '?'}"
+    if t == "win.run":
+        return f"Commande · {a.get('command') or '?'}"
+    if t == "win.type":
+        text = (a.get("text") or "").replace("\n", " ")
+        return f"Taper · {text[:24]}{'…' if len(text) > 24 else ''}"
+    if t == "win.scroll":
+        return f"Défilement {'horizontal' if a.get('direction') == 'horizontal' else 'vertical'} · " \
+               f"{_signed(a.get('amount'))} par cran"
+    if t == "win.lock":
+        return "Verrouiller Windows"
     return t or "?"
+
+
+def _signed(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{'+' if f > 0 else ''}{f:g}"

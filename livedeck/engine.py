@@ -7,16 +7,31 @@ import queue
 import threading
 import time
 
-from . import actions, feedback
+from . import actions, adjust, feedback, winsys
 from . import vars as textvars
 from .health import HealthMonitor, JsonPoller, parse_targets
 from .integrations import Intercom, Orchestream, Tallies, overlay_list
-from .model import (CONFIG_PATH, backup_config, config_text, has_backup_today, new_page, normalize_button,
-                    open_config, parse_key, save_config_text)
+from .model import (CONFIG_PATH, backup_config, config_text, control_key, has_backup_today, new_page,
+                    normalize_button, normalize_control, open_config, parse_control, parse_key,
+                    save_config_text)
 from .vmix import VmixClient
 
 log = logging.getLogger("livedeck")
 LONG_PRESS = 0.5  # secondes
+LIVE_CONDS = ("level", "win_audio")  # retours d'état qui changent sans événement : relus périodiquement
+
+
+def _with_delta(acts: list[dict], ticks: int) -> list[dict]:
+    """Remplace les jetons de rotation dans les actions d'une molette.
+
+    $(delta) garde le signe (−2, +3…), $(delta_abs) non : une commande vMix de volume veut
+    « SetVolume…Value=-2 » tandis qu'un « AudioPlus » répété veut un nombre de crans positif."""
+    out = copy.deepcopy(acts)
+    for a in out:
+        for key_, val in a.items():
+            if isinstance(val, str) and "$(delta" in val:
+                a[key_] = val.replace("$(delta_abs)", str(abs(ticks))).replace("$(delta)", str(ticks))
+    return out
 
 
 class _Runner:
@@ -63,6 +78,7 @@ class Engine:
         self._active: dict[tuple, dict] = {}  # touche physique (deck|"ui", case) -> bouton figé à l'appui
         self._holds: dict[tuple, list] = {}  # touche -> [début, jeton, déclenché, id bouton] (appui long)
         self._latched: dict[str, tuple] = {}  # interrupteur : actions maintenues en attente du 2e appui
+        self._rot: dict[tuple, float] = {}  # molettes : crans accumulés en attente du pas
         self._ids: set[str] = set()
         self.diagnostic = False
         self._undo: list = []
@@ -77,13 +93,15 @@ class Engine:
         self._inputs_sig = None
         self.health = HealthMonitor(on_change=lambda: self.emit("state"))
         self.jsonpoll = JsonPoller(on_change=lambda: self.emit("state"))
+        self.levels = adjust.Levels()  # réglages au cran : dernière valeur envoyée, sans attendre vMix
+        self.winaudio = winsys.CachedAudio(winsys.WinAudio())  # remplaçable dans les tests
         self.intercom = Intercom(lambda: self.emit("state"), self.log)
         self.orchestream = Orchestream(lambda: self.emit("state"), self.log)
         self.tallies = Tallies(lambda: self.emit("state"), self.log)
         self.decks = None
         if enable_decks:
-            from .deck import DeckManager
-            self.decks = DeckManager(self)
+            from .deck import DeckHub
+            self.decks = DeckHub(self)  # Stream Deck et Loupedeck derrière la même API
 
     # -- cycle de vie ---------------------------------------------------------
     def start(self) -> None:
@@ -187,7 +205,19 @@ class Engine:
 
     def button(self, page_id: str, k: str) -> dict | None:
         p = self.page(page_id)
-        return p["buttons"].get(k) if p else None
+        return self.resolve(p, k) if p else None
+
+    def resolve(self, page: dict, k: str) -> dict | None:
+        """Élément commandé par une case : touche de la grille, ou contrôle hors grille
+        (« c:knobTL ») pour les molettes, bandeaux et boutons physiques des Loupedeck."""
+        cid = parse_control(k)
+        if cid is not None:
+            return (page.get("controls") or {}).get(cid)
+        return page["buttons"].get(k) if self.in_grid(page, k) else None
+
+    def control(self, page_id: str, cid: str) -> dict | None:
+        p = self.page(page_id)
+        return (p.get("controls") or {}).get(cid) if p else None
 
     def page_names(self) -> dict[str, str]:
         return {p["id"]: p["name"] for p in self.pages}
@@ -307,12 +337,18 @@ class Engine:
         backup_config(self.config_path, tag)
 
     def set_button(self, page_id: str, k: str, b: dict | None, coalesce: str | None = None) -> None:
+        cid = parse_control(k)
+
         def apply(cfg):
             p = next(p for p in cfg["pages"] if p["id"] == page_id)
+            store = p.setdefault("controls", {}) if cid is not None else p["buttons"]
+            target = cid if cid is not None else k
             if b is None:
-                p["buttons"].pop(k, None)
+                store.pop(target, None)
+            elif cid is not None:
+                store[target] = normalize_control(b)
             else:
-                p["buttons"][k] = normalize_button(b)
+                store[target] = normalize_button(b)
         # regroupement « annuler » propre à chaque touche : taper sur A puis sur B = deux étapes
         self.mutate(apply, f"{page_id}/{k}/{coalesce}" if coalesce else None)
 
@@ -336,8 +372,8 @@ class Engine:
                 sp.pop(src[1], None)
         self.mutate(apply)
 
-    def add_page(self, name: str, cols: int, rows: int) -> str:
-        p = new_page(name, cols, rows)
+    def add_page(self, name: str, cols: int, rows: int, surface: str = "") -> str:
+        p = new_page(name, cols, rows, surface)
         self.mutate(lambda cfg: cfg["pages"].append(p))
         return p["id"]
 
@@ -398,8 +434,12 @@ class Engine:
         if down:
             with self._lock:
                 p = self.page(page_id)
-                b = p["buttons"].get(k) if p and self.in_grid(p, k) else None
+                b = self.resolve(p, k) if p else None
                 b = copy.deepcopy(b) if b else None
+            if deck and p:
+                # Même sans action : appuyer une touche vide sur l'appareil doit la sélectionner
+                # dans l'éditeur. C'est ainsi qu'on câble une surface, touche après touche.
+                self.emit("activity", (page_id, k, deck))
             if not b:
                 return
             with self._plock:
@@ -409,7 +449,8 @@ class Engine:
                 self._active[tok] = snap
                 self.pressed.add(b["id"])
                 self._down(snap, tok)
-            self.emit("activity", (page_id, k, deck))
+            if not deck or not p:  # déjà signalé plus haut pour un appui sur l'appareil
+                self.emit("activity", (page_id, k, deck))
             self._recheck_health(b)
         else:
             with self._plock:
@@ -417,6 +458,42 @@ class Engine:
                 if snap is None:
                     return
                 self._release(snap, tok)
+        self.emit("state")
+
+    def rotate(self, page_id: str, cid: str, delta: int, deck: str | None = None) -> None:
+        """Cran de molette. Les crans sont accumulés jusqu'au « pas » du contrôle : un pas de 4
+        sur une molette rapide évite d'inonder vMix de commandes. Le reste est gardé, donc une
+        rotation lente finit toujours par déclencher au lieu d'être perdue."""
+        with self._lock:
+            p = self.page(page_id)
+            c = copy.deepcopy((p.get("controls") or {}).get(cid)) if p else None
+        if deck and p:
+            # Même libre : tourner une molette la sélectionne dans l'éditeur (« suivre le deck »).
+            self.emit("activity", (page_id, control_key(cid), deck))
+        if not c or c.get("kind") != "rotary":
+            return
+        step = max(1, int(c.get("step") or 1))
+        tok = (deck or "ui", cid)
+        with self._plock:
+            acc = self._rot.get(tok, 0) + delta
+            if acc and (acc > 0) != (delta > 0):  # changement de sens : on repart de zéro
+                acc = delta
+            ticks = int(acc / step)
+            self._rot[tok] = acc - ticks * step
+        if not ticks:
+            return
+        acts = c.get("actions_cw" if ticks > 0 else "actions_ccw") or []
+        if not acts:
+            # Une action « au cran » (volume, défilement…) placée d'un seul côté vaut pour les deux sens :
+            # c'est la rotation qui décide de monter ou de baisser. Inutile de la configurer deux fois.
+            other = c.get("actions_ccw" if ticks > 0 else "actions_cw") or []
+            if other and all(actions.is_relative(a) for a in other):
+                acts = other
+        if not acts:
+            return
+        if not deck or not p:
+            self.emit("activity", (page_id, control_key(cid), deck))
+        self._run(c, _with_delta(acts, ticks), ("down", "up"), deck, {"delta": ticks})
         self.emit("state")
 
     def trigger(self, page_id: str, k: str, deck: str | None = None) -> None:
@@ -550,7 +627,7 @@ class Engine:
             self.emit("state")
         threading.Thread(target=watch, name="long-press", daemon=True).start()
 
-    def _run(self, b: dict, acts: list[dict], phases: tuple, deck) -> threading.Event | None:
+    def _run(self, b: dict, acts: list[dict], phases: tuple, deck, extra: dict | None = None) -> threading.Event | None:
         if not acts:
             return None
         with self._plock:
@@ -567,7 +644,7 @@ class Engine:
                     try:
                         if phase == "down":
                             self.log("action", f"{label or 'Bouton'} — {actions.summary(a, names)}")
-                        actions.execute(self, a, phase, {"deck": deck})
+                        actions.execute(self, a, phase, {"deck": deck, **(extra or {})})
                     except Exception as e:
                         self.log("error", f"{label or 'Bouton'} : {actions.summary(a, names)} → {e}")
         return runner.submit(job)
@@ -644,6 +721,12 @@ class Engine:
                     texts = [b.get("label") or ""] + [f.get("label") or "" for f in b.get("feedbacks") or []]
                     if any(textvars.has_tokens(t) for t in texts):
                         cur[b["id"]] = tuple(textvars.expand(t, self) for t in texts)
+                    # Niveaux (volume vMix, son et micro Windows) : ils changent aussi hors de LiveDeck,
+                    # sans qu'aucun événement ne le signale. On compare l'apparence obtenue.
+                    fbs = (feedback.auto(b) if b.get("auto_feedback", True) else []) + list(b.get("feedbacks") or [])
+                    if any((f.get("cond") or {}).get("type") in LIVE_CONDS for f in fbs):
+                        v = self.visual(b)
+                        cur[(b["id"], "v")] = tuple(sorted((v or {}).items()))
                 if cur != last:
                     last = cur
                     self.emit("state")
@@ -665,6 +748,8 @@ class Engine:
                         v[k] = f[k]
                 if extra.get("label") and not f.get("label"):
                     v["label"] = extra["label"]
+                if "progress" in extra:  # jauge d'un niveau (volume réglé par une molette)
+                    v["progress"] = extra["progress"]
         if textvars.has_tokens(v["label"]):
             v["label"] = textvars.expand(v["label"], self)
         v["warn"] = bool(self.unresolved_inputs(b))
@@ -717,9 +802,16 @@ class Engine:
         return free
 
     def all_buttons(self) -> list:
-        """(page, case, bouton) de toute la config, lus sous verrou (sûr depuis n'importe quel thread)."""
+        """(page, case, bouton) de toute la config, lus sous verrou (sûr depuis n'importe quel thread).
+
+        Inclut les contrôles hors grille (molettes, bandeaux, boutons des Loupedeck), repérés par
+        une case « c:<id> » : ils ont les mêmes retours d'état, textes dynamiques et surveillance
+        réseau que les touches."""
         with self._lock:
-            return [(p, k, b) for p in self.cfg["pages"] for k, b in p["buttons"].items()]
+            out = [(p, k, b) for p in self.cfg["pages"] for k, b in p["buttons"].items()]
+            out += [(p, control_key(cid), c) for p in self.cfg["pages"]
+                    for cid, c in (p.get("controls") or {}).items()]
+            return out
 
     def first_free(self, page_id: str) -> str | None:
         p = self.page(page_id)

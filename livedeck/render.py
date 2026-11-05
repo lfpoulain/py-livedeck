@@ -80,53 +80,89 @@ def _layout(draw, text, size_px, box_w, box_h):
 
 @lru_cache(maxsize=2048)
 def _render(size: int, bg: str, fg: str, label: str, text_px: int, icon: str,
-            bar: str, pressed: bool, warn: bool, progress: float) -> Image.Image:
-    s = size
+            bar: str, pressed: bool, warn: bool, progress: float, height: int = 0) -> Image.Image:
+    """Vignette carrée de `size` px, ou rectangulaire si `height` est donné (bandeaux du Loupedeck).
+    `s` reste la petite dimension : elle fixe l'échelle des marges, de la jauge et du cadre."""
+    w = size
+    h_px = height or size
+    s = min(w, h_px)
     bg_rgb = hex_rgb(bg)
     if pressed:
         bg_rgb = tuple(min(255, int(v + (255 - v) * 0.25)) for v in bg_rgb)
-    img = Image.new("RGB", (s, s), bg_rgb)
+    img = Image.new("RGB", (w, h_px), bg_rgb)
     draw = ImageDraw.Draw(img)
     bar_h = int(s * 0.12) if bar else 0
-    top, text_h = int(s * 0.06), s - int(s * 0.12) - bar_h
+    top, text_h = int(s * 0.06), h_px - int(s * 0.12) - bar_h
 
     if icon and Path(icon).exists():
         try:
             ic = Image.open(icon).convert("RGBA")
             box = int(s * (0.55 if label else 0.8))
             ic.thumbnail((box, box))
-            img.paste(ic, ((s - ic.width) // 2, top if label else (s - bar_h - ic.height) // 2), ic)
+            img.paste(ic, ((w - ic.width) // 2, top if label else (h_px - bar_h - ic.height) // 2), ic)
             top += box + int(s * 0.02)
-            text_h = s - top - bar_h - int(s * 0.04)
+            text_h = h_px - top - bar_h - int(s * 0.04)
         except OSError:
             pass
 
     if label:
-        f, lines, lh = _layout(draw, label, int(text_px * s / 72) if text_px else 0, int(s * 0.9), text_h)
+        f, lines, lh = _layout(draw, label, int(text_px * s / 72) if text_px else 0, int(w * 0.9), text_h)
         y = top + max(0, (text_h - lh * len(lines)) // 2)
         for line in lines:
-            draw.text((s / 2, y + lh / 2), line, font=f, fill=hex_rgb(fg, (255, 255, 255)), anchor="mm")
+            draw.text((w / 2, y + lh / 2), line, font=f, fill=hex_rgb(fg, (255, 255, 255)), anchor="mm")
             y += lh
 
     if bar:
-        draw.rectangle((0, s - bar_h, s, s), fill=hex_rgb(bar))
+        draw.rectangle((0, h_px - bar_h, w, h_px), fill=hex_rgb(bar))
     if pressed:
-        w = max(2, s // 24)
-        draw.rectangle((w // 2, w // 2, s - w // 2 - 1, s - w // 2 - 1), outline=(255, 255, 255), width=w)
+        b = max(2, s // 24)
+        draw.rectangle((b // 2, b // 2, w - b // 2 - 1, h_px - b // 2 - 1), outline=(255, 255, 255), width=b)
     if progress:
-        h = max(3, s // 16)
-        draw.rectangle((0, 0, s, h), fill=(20, 24, 31))
-        draw.rectangle((0, 0, int(s * progress), h), fill=(45, 212, 191))
+        ph = max(3, s // 16)
+        draw.rectangle((0, 0, w, ph), fill=(20, 24, 31))
+        draw.rectangle((0, 0, int(w * progress), ph), fill=(45, 212, 191))
     if warn:
         r = max(4, s // 14)
-        draw.ellipse((s - 3 * r, r, s - r, 3 * r), fill=(255, 159, 28))
+        draw.ellipse((w - 3 * r, r, w - r, 3 * r), fill=(255, 159, 28))
     return img
 
 
-def render(visual: dict | None, size: int) -> Image.Image:
+def render_box(visual: dict | None, width: int, height: int) -> Image.Image:
+    """Comme render(), mais pour une zone rectangulaire (bandeaux latéraux, écran de molette)."""
     if not visual:
-        return Image.new("RGB", (size, size), (0, 0, 0))
-    return _render(size, visual.get("bg", "#000000"), visual.get("fg", "#ffffff"),
+        return Image.new("RGB", (width, height), (0, 0, 0))
+    return _render(width, visual.get("bg", "#000000"), visual.get("fg", "#ffffff"),
                    visual.get("label", ""), int(visual.get("size") or 0), visual.get("icon", ""),
                    visual.get("bar") or "", bool(visual.get("pressed")), bool(visual.get("warn")),
-                   float(visual.get("progress") or 0))
+                   float(visual.get("progress") or 0), height)
+
+
+def render(visual: dict | None, size: int) -> Image.Image:
+    return render_box(visual, size, size)
+
+
+def render_strip(visuals, width: int = 60, height: int = 270) -> Image.Image:
+    """Bandeau latéral : les zones empilées, séparées par un filet sombre."""
+    img = Image.new("RGB", (width, height), (0, 0, 0))
+    n = max(1, len(visuals))
+    zh = height // n
+    for i, v in enumerate(visuals):
+        y = i * zh
+        img.paste(render_box(v, width, (height - y) if i == n - 1 else zh), (0, y))
+    draw = ImageDraw.Draw(img)
+    for i in range(1, n):
+        draw.line((0, i * zh, width, i * zh), fill=(0, 0, 0), width=2)
+    return img
+
+
+def render_wheel(visual: dict | None, size: int = 240) -> Image.Image:
+    """Écran rond de la molette centrale : le contenu est inscrit dans le disque visible."""
+    img = Image.new("RGB", (size, size), (0, 0, 0))
+    if not visual:
+        return img
+    inner = int(size * 0.72)
+    img.paste(render_box(visual, inner, inner), ((size - inner) // 2, (size - inner) // 2))
+    draw = ImageDraw.Draw(img)
+    ring = hex_rgb(visual.get("lit") or visual.get("bg") or "#1f2937")
+    draw.ellipse((2, 2, size - 3, size - 3), outline=ring, width=max(3, size // 40))
+    return img

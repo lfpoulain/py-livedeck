@@ -44,6 +44,7 @@ jobs:
     needs: tests
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
+    timeout-minutes: 30  # sans cela, une étape bloquée occupe le groupe de concurrence pendant 6 h
     env:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
@@ -98,10 +99,12 @@ jobs:
           test -f "$APP/LiveDeck.exe"
           test -f "$APP/unins000.exe"
           export LIVEDECK_HOME="$RUNNER_TEMP/livedeck-selftest"
-          "$APP/LiveDeck.exe" --selftest &
-          PID=$!
-          for i in $(seq 1 60); do [ -f "$LIVEDECK_HOME/selftest.txt" ] && break; sleep 1; done
-          kill $PID 2>/dev/null || true
+          # L'auto-test se ferme tout seul : on le lance au premier plan, borné dans le temps.
+          # Surtout PAS en tâche de fond : le processus garderait le tuyau de sortie de l'étape
+          # ouvert et l'étape ne se terminerait jamais, même après un « kill » — qui ne tue de
+          # toute façon pas un processus Windows de façon fiable depuis Git Bash.
+          timeout 180 "$APP/LiveDeck.exe" --selftest || echo "auto-test interrompu (code $?)"
+          taskkill //F //IM LiveDeck.exe //T > /dev/null 2>&1 || true
           cat "$LIVEDECK_HOME/selftest.txt"
           # l'exe installé démarre, embarque pynput et hidapi (USB des Stream Decks)
           grep -q "^OK LiveDeck ${{ steps.v.outputs.version }}" "$LIVEDECK_HOME/selftest.txt"

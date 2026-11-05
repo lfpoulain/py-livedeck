@@ -57,6 +57,23 @@ def _prod(label: str, what: str) -> dict:
     return new_button(label=label, bg="#330000", actions=[new_action("vmix.production", what=what)])
 
 
+def _knob(label: str, turn: dict, press: dict | None = None, bg: str = "#0b2e2a") -> dict:
+    """Réglage pour molette : la rotation (une seule liste, valable dans les deux sens) et un appui.
+    Posé sur une touche ordinaire, c'est l'appui qui sert, et la jauge s'affiche quand même."""
+    return new_button(label=label, bg=bg, kind="rotary", actions_cw=[turn], actions_ccw=[], step=1,
+                      actions=[press] if press else [])
+
+
+def _vol(target: str, label: str, mute: str, **kw) -> dict:
+    return _knob(label, new_action("vmix.adjust", target=target, amount=2, **kw),
+                 new_action("vmix.function", function=mute) if mute else None)
+
+
+def _win_vol(target: str, label: str, **kw) -> dict:
+    return _knob(label, new_action("win.audio", target=target, mode="adjust", amount=2, **kw),
+                 new_action("win.audio", target=target, mode="toggle", **kw), bg="#1e1b4b")
+
+
 # id : (catégorie, nom, description, fabrique)
 PRESETS: dict[str, tuple] = {
     "take": ("Vidéo", "Take", "1er appui preview, 2e antenne", lambda: input_button("", "take")),
@@ -113,6 +130,57 @@ PRESETS: dict[str, tuple] = {
     "ov_speedizz": ("Intégrations", "Overlay Speedizz", "orchestream, état en direct", lambda: _orch("speedizz", "Speedizz")),
     "tallies": ("Intégrations", "Tallys", "Vert si tous connectés, reconnecte", lambda: new_button(
         label="Tallys", bg="#000000", actions=[new_action("tally.reconnect")])),
+    # -- molettes : la rotation règle, l'appui coupe ----------------------------------
+    "knob_master": ("Molette", "Volume Master", "Tourner : volume · appuyer : couper",
+                    lambda: _vol("master", "Master", "MasterAudio")),
+    "knob_input": ("Molette", "Volume d'un input", "Tourner : volume · appuyer : couper",
+                   lambda: _knob("Volume", new_action("vmix.adjust", target="input_volume", amount=2),
+                                 new_action("vmix.audio", mode="toggle"))),
+    "knob_headphones": ("Molette", "Volume du casque", "Retour casque de vMix",
+                        lambda: _vol("headphones", "Casque", "")),
+    "knob_bus": ("Molette", "Volume d'un bus", "Tourner : volume · appuyer : couper le bus",
+                 lambda: _knob("Bus A", new_action("vmix.adjust", target="bus", bus="A", amount=2),
+                               new_action("vmix.function", function="BusXAudio", params="Value=A"))),
+    "knob_preview": ("Molette", "Parcourir la preview", "Tourner : input suivant · appuyer : CUT",
+                     lambda: _knob("Preview", new_action("vmix.adjust", target="preview", amount=1),
+                                   new_action("vmix.transition", effect="Cut"), bg="#003300")),
+    "knob_scrub": ("Molette", "Avance / retour vidéo", "1 s par cran · appuyer : lecture / pause",
+                   lambda: _knob("Lecture", new_action("vmix.adjust", target="position", amount=1),
+                                 new_action("vmix.function", function="PlayPause"), bg="#1e293b")),
+    "knob_list": ("Molette", "Photos / liste / PowerPoint", "Élément suivant ou précédent",
+                  lambda: _knob("Liste", new_action("vmix.adjust", target="list", amount=1), bg="#1e293b")),
+    "knob_countdown": ("Molette", "Régler un compte à rebours", "±10 s par cran · appuyer : départ",
+                       lambda: _knob("Compte à\nrebours", new_action("vmix.adjust", target="countdown", amount=10),
+                                     new_action("vmix.function", function="StartCountdown"), bg="#1e293b")),
+    "knob_win": ("Molette", "Volume de Windows", "Tourner : volume · appuyer : couper",
+                 lambda: _win_vol("output", "Windows")),
+    "knob_app": ("Molette", "Volume d'une application", "Spotify, navigateur… indépendamment",
+                 lambda: _win_vol("app", "Appli")),
+    "knob_scroll": ("Molette", "Molette de souris", "Défiler la fenêtre sous la souris",
+                    lambda: _knob("Défiler", new_action("win.scroll", amount=1), bg="#1e1b4b")),
+    # -- Windows -----------------------------------------------------------------------
+    "win_mic": ("Windows", "Couper le micro", "Micro par défaut, rouge quand coupé", lambda: new_button(
+        label="Micro", bg="#1e1b4b", actions=[new_action("win.audio", target="mic", mode="toggle")])),
+    "win_mute": ("Windows", "Couper le son", "Son de Windows, rouge quand coupé", lambda: new_button(
+        label="Son", bg="#1e1b4b", actions=[new_action("win.audio", target="output", mode="toggle")])),
+    "win_vol_up": ("Windows", "Volume +", "Son de Windows", lambda: new_button(
+        label="Vol +", bg="#1e1b4b", actions=[new_action("win.audio", target="output", mode="adjust", amount=5)])),
+    "win_vol_down": ("Windows", "Volume −", "Son de Windows", lambda: new_button(
+        label="Vol −", bg="#1e1b4b", actions=[new_action("win.audio", target="output", mode="adjust", amount=-5)])),
+    "win_play": ("Windows", "Lecture / pause", "Lecteur actif (Spotify…)", lambda: new_button(
+        label="▶ ❚❚", bg="#1e1b4b", actions=[new_action("win.media", what="playpause")])),
+    "win_next": ("Windows", "Piste suivante", "Lecteur actif", lambda: new_button(
+        label="▶▶", bg="#1e1b4b", actions=[new_action("win.media", what="next")])),
+    "win_launch": ("Windows", "Ouvrir un programme", "Logiciel, fichier, dossier ou site", lambda: new_button(
+        label="Ouvrir", bg="#1e1b4b", actions=[new_action("win.launch")])),
+    "win_focus": ("Windows", "Fenêtre au premier plan", "Puis un raccourci dans ce logiciel", lambda: new_button(
+        label="vMix", bg="#1e1b4b", actions=[new_action("win.focus", title="vMix")])),
+    "win_run": ("Windows", "Commande", "Script, .bat, commande", lambda: new_button(
+        label="CMD", bg="#1e1b4b", actions=[new_action("win.run")])),
+    "win_type": ("Windows", "Taper un texte", "Signature, nom d'invité…", lambda: new_button(
+        label="Texte", bg="#1e1b4b", actions=[new_action("win.type")])),
+    "win_lock": ("Windows", "Verrouiller Windows", "Maintenir ½ s, sécurisé", lambda: new_button(
+        label="Verrou", bg="#1e1b4b", confirm=True, actions=[new_action("win.lock")])),
     "ftb_safe": ("Production", "FTB sécurisé", "Maintenir ½ s pour noircir", lambda: new_button(
         label="FTB", bg="#330000", confirm=True, actions=[new_action("vmix.production", what="fadetoblack")])),
     "stream_stop": ("Production", "Arrêt du stream", "Maintenir ½ s, sécurisé", lambda: new_button(
@@ -122,6 +190,20 @@ PRESETS: dict[str, tuple] = {
 
 # presets qui attendent un input vMix : l'inspecteur ouvre tout de suite le choix de l'input
 NEEDS_INPUT = ("program", "preview", "take", "overlay", "audio")
+ROTARY_FIRST = ["Molette"]  # sur une molette, ces réglages passent en tête du choix
+
+
+def place(b: dict, k: str) -> dict:
+    """Adapte un bouton à l'endroit où on le pose. Une molette garde ses listes de rotation ; une
+    touche ou un bouton physique ne tourne pas, donc n'en garde que l'appui (la jauge reste)."""
+    from .loupedeck import control_kind
+    from .model import normalize_control, parse_control
+    cid = parse_control(k)
+    if cid is not None:
+        return normalize_control({**b, "kind": control_kind(cid)})
+    b = dict(b)
+    b.pop("kind", None)
+    return b
 
 
 def make(preset_id: str, engine=None) -> dict | None:
@@ -176,16 +258,19 @@ def needs_setup(preset_id: str, engine) -> str:
     return ""
 
 
-PICKER_ORDER = ["Vidéo", "Intégrations", "Production", "Audio", "Clavier", "Web", "Réseau", "Deck", "vMix avancé"]
+PICKER_ORDER = ["Vidéo", "Intégrations", "Production", "Audio", "Molette", "Windows", "Clavier", "Web", "Réseau",
+                "Deck", "vMix avancé"]
 
 
-def catalog(engine) -> list[tuple[str, list[tuple[str, str, str, str]]]]:
+def catalog(engine, rotary: bool = False) -> list[tuple[str, list[tuple[str, str, str, str]]]]:
     """Tout ce qu'une touche vide peut devenir, par catégorie, intégrations comprises :
-    [(catégorie, [(id, nom, description, intégration à régler ou "")])]."""
+    [(catégorie, [(id, nom, description, intégration à régler ou "")])].
+    rotary : on choisit pour une molette — les réglages au cran passent en tête."""
     groups = {cat: list(items) for cat, items in library(engine, with_inputs=True)}
     groups["Deck"] = [it for it in groups.get("Deck", []) if not it[0].startswith("page:")]  # pages : bibliothèque
+    order = ROTARY_FIRST + [c for c in PICKER_ORDER if c not in ROTARY_FIRST] if rotary else PICKER_ORDER
     return [(cat, [(pid, name, desc, needs_setup(pid, engine)) for pid, name, desc in groups[cat]])
-            for cat in PICKER_ORDER if groups.get(cat)]
+            for cat in order if groups.get(cat)]
 
 
 def library(engine, with_inputs: bool = False) -> list[tuple[str, list[tuple[str, str, str]]]]:
@@ -200,5 +285,6 @@ def library(engine, with_inputs: bool = False) -> list[tuple[str, list[tuple[str
     groups["Intégrations"] = _integrations(engine)
     groups["Deck"] = [(f"page:{p['id']}", f"→ {p['name']}", f"Afficher cette page ({p['cols']}×{p['rows']})")
                       for p in engine.pages] + groups.get("Deck", [])
-    order = ["Vidéo", "Production", "Audio", "Intégrations", "Clavier", "Web", "Réseau", "Deck", "vMix avancé"]
+    order = ["Vidéo", "Production", "Audio", "Molette", "Windows", "Intégrations", "Clavier", "Web", "Réseau", "Deck",
+             "vMix avancé"]
     return [(cat, groups[cat]) for cat in order if cat in groups]

@@ -322,3 +322,89 @@ class DeckManager:
                 except Exception:
                     h.cache.pop(idx, None)
                     break  # deck probablement débranché : le scan s'en chargera
+
+
+class DeckHub:
+    """Fait cohabiter plusieurs familles de surfaces (Stream Deck, Loupedeck) derrière l'API
+    d'un seul gestionnaire : l'interface, le diagnostic et le moteur n'en voient qu'un.
+
+    Les appels nommant un numéro de série sont diffusés à tous : seul le gestionnaire qui possède
+    cet appareil réagit, les autres n'ont simplement rien à faire."""
+
+    def __init__(self, engine, managers=None):
+        if managers is None:
+            managers = [DeckManager(engine)]
+            from .ldeck import LoupedeckManager
+            managers.append(LoupedeckManager(engine))
+        self.managers = list(managers)
+        self._diag_handler = None
+
+    # -- état agrégé ----------------------------------------------------------
+    @property
+    def error(self) -> str:
+        # Une famille absente n'est pas une panne tant qu'une autre fonctionne.
+        errs = [m.error for m in self.managers if m.error]
+        return "" if len(errs) < len(self.managers) else " ".join(errs)
+
+    @property
+    def stats(self) -> dict:
+        return {"images": sum(m.stats.get("images", 0) for m in self.managers)}
+
+    @property
+    def image_ms(self) -> float | None:
+        vals = [m.image_ms for m in self.managers if m.image_ms is not None]
+        return max(vals) if vals else None
+
+    @property
+    def diag_handler(self):
+        return self._diag_handler
+
+    @diag_handler.setter
+    def diag_handler(self, fn) -> None:
+        self._diag_handler = fn
+        for m in self.managers:
+            m.diag_handler = fn
+
+    def info(self) -> list[dict]:
+        return [d for m in self.managers for d in m.info()]
+
+    # -- diffusion ------------------------------------------------------------
+    def _all(self, name: str, *a, **kw) -> None:
+        for m in self.managers:
+            try:
+                getattr(m, name)(*a, **kw)
+            except Exception:  # une famille en panne n'empêche pas les autres de fonctionner
+                log.exception("decks : %s", name)
+
+    def start(self) -> None:
+        self._all("start")
+
+    def stop(self) -> None:
+        self._all("stop")
+
+    def request_refresh(self) -> None:
+        self._all("request_refresh")
+
+    def refresh(self, force: bool = False) -> None:
+        self._all("refresh", force)
+
+    def reassign_pages(self) -> None:
+        self._all("reassign_pages")
+
+    def restore(self) -> None:
+        self._all("restore")
+
+    def apply_settings(self, serial: str, page_changed: bool = False) -> None:
+        self._all("apply_settings", serial, page_changed)
+
+    def goto(self, serial: str, target: str) -> None:
+        self._all("goto", serial, target)
+
+    def identify(self, serial: str) -> None:
+        self._all("identify", serial)
+
+    def paint(self, serial: str, index: int, visual: dict | None) -> None:
+        self._all("paint", serial, index, visual)
+
+    def set_brightness(self, serial: str, value: int) -> None:
+        self._all("set_brightness", serial, value)

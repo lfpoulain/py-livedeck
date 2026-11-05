@@ -421,6 +421,33 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
         w.lineEdit().setPlaceholderText("Cut, SetText, Snapshot…")
         w.currentTextChanged.connect(on_change)
         return w
+    if kind == "winapp":
+        # Applications qui produisent du son en ce moment ; on peut aussi taper un nom d'exécutable.
+        w = tame_combo(QComboBox(), 10)
+        w.setEditable(True)
+        try:
+            names = [n for n, _, _ in engine.winaudio.apps()]
+        except Exception:
+            names = []
+        w.addItems(names)
+        w.setEditText(value or "")
+        w.lineEdit().setPlaceholderText(spec.get("placeholder") or "spotify.exe")
+        w.setToolTip("Applications qui produisent du son en ce moment. Une application absente de la liste "
+                     "peut être tapée : elle sera reconnue dès qu'elle jouera du son.")
+        w.currentTextChanged.connect(on_change)
+        return w
+    if kind in ("step", "percent"):
+        w = QSpinBox()
+        if kind == "percent":
+            w.setRange(0, 100)
+            w.setSuffix(" %")
+        else:  # pas d'une molette : le signe ne compte que sur une touche (négatif = baisser)
+            w.setRange(-1000, 1000)
+            w.setToolTip("Valeur d'un cran. Sur une molette, le sens de rotation donne le sens ; "
+                         "sur une touche, une valeur négative fait baisser.")
+        w.setValue(int(float(value if value not in (None, "") else (spec.get("default") or 0))))
+        w.valueChanged.connect(on_change)
+        return w
     if kind in ("int", "port", "seconds"):
         w = QSpinBox()
         if kind == "port":

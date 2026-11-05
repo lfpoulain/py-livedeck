@@ -1,2 +1,2 @@
-"""LiveDeck — contrôle vMix et Stream Deck, simplement."""
-__version__ = "1.5.0"
+"""LiveDeck — contrôle vMix depuis un Stream Deck ou un Loupedeck, simplement."""
+__version__ = "1.6.0"

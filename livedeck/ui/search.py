@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (QDialog, QFrame, QLineEdit, QListWidget, QListWid
                                QStyledItemDelegate, QVBoxLayout)
 
 from ..actions import summary
-from ..model import parse_key
+from ..loupedeck import CONTROL_LABELS
+from ..model import control_key, parse_control, parse_key
 from ..render import render
 from ..vmix import norm
 from . import theme as T
@@ -69,9 +70,11 @@ class _Delegate(QStyledItemDelegate):
         p.setFont(f2)
         p.setPen(QColor(T.MUTED))
         page = self.engine.page(page_id)
-        row, col = parse_key(k)
+        cid = parse_control(k)
+        where = (CONTROL_LABELS.get(cid, cid) if cid is not None
+                 else "rangée {}, colonne {}".format(*(n + 1 for n in parse_key(k))))
         first = summary(b["actions"][0], self.engine.page_names()) if b.get("actions") else "Aucune action"
-        sub = f"{page['name']}  ·  rangée {row + 1}, colonne {col + 1}  ·  {first}"
+        sub = f"{page['name']}  ·  {where}  ·  {first}"
         p.drawText(QRectF(x, r.y() + 26, w, 18), Qt.AlignLeft | Qt.AlignVCenter,
                    QFontMetricsF(f2).elidedText(sub, Qt.ElideRight, w))
         p.restore()
@@ -108,10 +111,16 @@ class SearchDialog(QDialog):
         lay.addWidget(self.count)
         self._items = []
         for page in engine.pages:
-            for k, b in sorted(page["buttons"].items(), key=lambda kv: parse_key(kv[0])):
+            # Les touches de la grille d'abord, dans l'ordre de lecture ; puis les contrôles
+            # hors grille (molettes, bandeaux, boutons des Loupedeck).
+            entries = [(k, b) for k, b in sorted(page["buttons"].items(), key=lambda kv: parse_key(kv[0]))]
+            entries += [(control_key(cid), c) for cid, c in (page.get("controls") or {}).items()]
+            for k, b in entries:
                 it = QListWidgetItem()
                 it.setData(ROLE, (page["id"], k))
-                self._items.append((it, haystack(engine, page, b), (b.get("label") or "").lower()))
+                extra = CONTROL_LABELS.get(parse_control(k) or "", "").lower()
+                self._items.append((it, haystack(engine, page, b) + " " + extra,
+                                    (b.get("label") or "").lower()))
                 self.list.addItem(it)
         self._filter("")
 

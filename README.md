@@ -2,7 +2,7 @@
 
 # 🎛️ LiveDeck
 
-**Pilote vMix avec tes Stream Decks, simplement.**
+**Pilote vMix avec tes Stream Decks et tes Loupedeck, simplement.**
 
 Une alternative légère à Bitfocus Companion : une seule fenêtre, ton Stream Deck à l'écran,
 des touches qui se câblent en un double-clic et des retours d'état sans rien régler.
@@ -46,7 +46,9 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 | 🔒 **Mode Live** | L'édition se verrouille pendant le direct, seul ▶ Tester reste actif. |
 | 🔎 **Recherche (Ctrl+F)** | Retrouve une touche sur toutes les pages ; la touche vide propose toutes les actions, avec recherche et catégories. |
 | 🩺 **Diagnostic** | Vérifie en une minute les écrans, chaque touche et les performances de tes Stream Decks. |
-| 🔌 **Plug & play** | Détection à chaud des Stream Decks, reconnexion automatique à vMix, inputs retrouvés par leur nom. |
+| 🎚️ **Loupedeck** | Loupedeck CT, Live, Live S et Razer Stream Controller, **en même temps que tes Stream Decks** et avec les mêmes pages. Molettes (rotation + appui), écran de la molette centrale, bandeaux latéraux, boutons ronds à diode RGB et vibration. |
+| 🔊 **Molettes & Windows** | Volumes vMix (input, Master, casque, bus) et Windows (son, micro, une application) au cran, avec jauge ; lecture multimédia, programmes, fenêtres, commandes. |
+| 🔌 **Plug & play** | Détection à chaud des Stream Decks et des Loupedeck, reconnexion automatique à vMix, inputs retrouvés par leur nom. |
 | 📥 **Import Companion** | Ta config `.companionconfig` est convertie en un clic, variables et intégrations comprises. |
 | 🖥️ **Discret** | Réduit près de l'horloge, démarrage automatique avec Windows, une seule instance. |
 

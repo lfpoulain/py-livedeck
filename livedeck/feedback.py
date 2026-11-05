@@ -4,7 +4,9 @@ from __future__ import annotations
 import re
 import urllib.parse
 
+from . import adjust
 from .actions import F
+from .adjust import WIN_TARGETS
 from .health import JSON_OPS, json_compare, json_path, json_text, parse_targets
 from .integrations import bus_label, overlay_label
 
@@ -48,6 +50,11 @@ CONDITIONS: dict[str, dict] = {
                "fields": [F("targets", "Cibles (Nom = IP ou URL, une par ligne)", "multiline", "",
                             placeholder="Caméra 1 = 192.168.1.50\nRégie = http://192.168.1.20/status"),
                           F("state", "Quand", "choice", "ko", [("ok", "Tous joignables"), ("ko", "Au moins un hors ligne")])]},
+    "win_audio": {"label": "Son Windows (coupé / actif)",
+                  "fields": [F("target", "Quoi", "choice", "mic", WIN_TARGETS),
+                             F("app", "Application", "winapp", "", placeholder="spotify.exe",
+                               when={"target": ("app",)}),
+                             F("state", "Quand", "choice", "muted", [("muted", "Coupé"), ("live", "Actif")])]},
     "http_json": {"label": "Valeur d'une API JSON",
                   "fields": [F("url", "URL (GET)", "text", "", placeholder="http://192.168.1.20/api/status"),
                              F("path", "Chemin dans la réponse", "text", "", placeholder="data.viewers  ou  items[0].state"),
@@ -83,7 +90,14 @@ def _preview(inp, mix=1):
 
 
 def auto(b: dict) -> list[dict]:
-    """Ce que le bouton doit afficher, déduit de ce qu'il fait."""
+    """Ce que le bouton doit afficher, déduit de ce qu'il fait.
+
+    Une molette peut cumuler : son appui coupe un input (fond rouge) et sa rotation règle un
+    volume (jauge et valeur). Les deux retours coexistent, la jauge ne touchant pas au fond."""
+    return _auto_press(b) + _auto_level(b)
+
+
+def _auto_press(b: dict) -> list[dict]:
     if b.get("mode") == "toggle":
         return [fb("toggle", YELLOW, BLACK)]
     acts = b.get("actions") or b.get("long_actions") or []
@@ -142,6 +156,24 @@ def auto(b: dict) -> list[dict]:
         if t == "hotkey" and a.get("hold"):
             return [fb("pressed", BLUE, WHITE)]
     return []
+
+
+def _auto_level(b: dict) -> list[dict]:
+    """Jauge et valeur de ce que règle la touche ou la molette (liste « rotation » d'abord)."""
+    for a in ((b.get("actions_cw") or []) + (b.get("actions_ccw") or []) + (b.get("actions") or [])
+              + (b.get("long_actions") or [])):
+        t = a.get("type")
+        if t == "vmix.adjust" and a.get("target") in ("input_volume", "master", "headphones", "bus"):
+            return [fb("level", source="vmix", **_level_args(a))]
+        if t == "win.audio":
+            args = {"target": a.get("target", "output"), "app": a.get("app", "")}
+            return [fb("level", source="win", **args),
+                    fb("win_audio", RED, WHITE, state="muted", **args)]
+    return []
+
+
+def _level_args(a: dict) -> dict:
+    return {k: a.get(k) for k in ("target", "input", "bus") if a.get(k) not in (None, "")}
 
 
 def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
@@ -206,6 +238,24 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         return not ok, {"label": "Hors ligne\n" + " ".join(down)} if down else {}
     if t == "flag":
         return st.connected and st.flags.get(cond.get("flag", "")), {}
+    if t == "level":
+        # Jauge en haut de la touche + valeur sous le libellé. Toujours « vraie » quand la valeur
+        # est connue, pour ne colorer rien d'autre que la jauge.
+        if cond.get("source") == "win":
+            got = adjust.win_value(engine, cond)
+            val = got[0] if got else None
+        else:
+            val = adjust.vmix_value(engine, cond)
+        if val is None:
+            return False, {}
+        base = (b.get("label") or "").strip()
+        return True, {"progress": max(0.0, min(1.0, val / 100)),
+                      "label": f"{base}\n{val:.0f} %" if base else f"{val:.0f} %"}
+    if t == "win_audio":
+        got = adjust.win_value(engine, cond)
+        if not got:
+            return False, {}
+        return got[1] == (cond.get("state", "muted") == "muted"), {}
     if t == "toggle":
         return bool(engine.toggles.get(b["id"])), {}
     if t == "pressed":
@@ -249,7 +299,12 @@ def describe(f: dict) -> str:
         "toggle": "interrupteur activé",
         "pressed": "bouton enfoncé",
         "health": "tous les équipements joignables" if c.get("state") == "ok" else "un équipement hors ligne",
+        "win_audio": ({"output": "le son de Windows", "mic": "le micro"}.get(c.get("target"), c.get("app") or
+                                                                          "l'application")
+                      + (" est coupé" if c.get("state", "muted") == "muted" else " est actif")),
     }.get(t, t)
+    if t == "level":
+        return "Jauge et valeur du niveau réglé"
     effect = "liseré" if f.get("bar") and not f.get("bg") else "fond"
     color = f.get("bar") if effect == "liseré" else f.get("bg")
     name = {RED: "rouge", GREEN: "vert", YELLOW: "jaune", BLUE: "bleu", "#2563eb": "bleu", "#237423": "vert",

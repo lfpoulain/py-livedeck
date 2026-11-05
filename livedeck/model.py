@@ -40,12 +40,17 @@ DECK_SIZES = {
     "Stream Deck + XL (9×4)": (9, 4),
     "Stream Deck Studio (16×2)": (16, 2),
     "Stream Deck Pedal (3 pédales)": (3, 1),
+    "Loupedeck CT / Live (4×3)": (4, 3),
+    "Loupedeck Live S (5×3)": (5, 3),
 }
 
 
 def deck_size(model: str) -> tuple[int, int]:
     """Grille (colonnes, rangées) d'après le nom d'un modèle (Companion, python-elgato-streamdeck…)."""
     low = (model or "").lower().replace("plus", "+")
+    # Loupedeck / Razer : pavé tactile 4×3, sauf la Live S et la Stream Controller X en 5×3.
+    if "loupedeck" in low or "stream controller" in low:
+        return (5, 3) if "live s" in low or low.rstrip().endswith(" x") else (4, 3)
     for test, size in ((lambda m: "+ xl" in m or "+xl" in m, (9, 4)), (lambda m: "studio" in m, (16, 2)),
                        (lambda m: "pedal" in m, (3, 1)), (lambda m: "xl" in m, (8, 4)),
                        (lambda m: "mini" in m, (3, 2)), (lambda m: "neo" in m or "+" in m, (4, 2))):
@@ -96,11 +101,57 @@ def normalize_button(b: dict) -> dict:
     return b
 
 
-def new_page(name: str, cols: int = 8, rows: int = 4) -> dict:
-    return {"id": new_id(), "name": name, "cols": cols, "rows": rows, "buttons": {}}
+def new_page(name: str, cols: int = 8, rows: int = 4, surface: str = "") -> dict:
+    """surface : « loupedeck » pour dessiner molettes, bandeaux et molette centrale ;
+    vide = déduit de l'appareil qui affiche la page (Stream Deck par défaut)."""
+    return {"id": new_id(), "name": name, "cols": cols, "rows": rows, "surface": surface,
+            "buttons": {}, "controls": {}}
 
 
-CONFIG_VERSION = 3  # 2 : intégrations natives ; 3 : FadeToBlack n'est plus une transition
+def surface_of(model: str) -> str:
+    """Nature de la surface d'après un nom de modèle (entrée de DECK_SIZES ou modèle détecté)."""
+    low = (model or "").lower()
+    return "loupedeck" if "loupedeck" in low or "stream controller" in low else "streamdeck"
+
+
+# Contrôles hors grille (molettes, bandeaux, boutons physiques du Loupedeck). Ils se comportent
+# comme des touches : mêmes actions, mêmes retours d'état, mêmes modes. Une molette ajoute deux
+# listes d'actions (un sens de rotation chacune) et un pas d'accélération.
+CONTROL_DEFAULTS = {
+    **{k: v for k, v in BUTTON_DEFAULTS.items()},
+    "kind": "button",      # button | rotary
+    "actions_cw": [],      # rotation horaire
+    "actions_ccw": [],     # rotation antihoraire
+    "step": 1,             # nombre de crans à accumuler avant de déclencher
+    "haptic": "court",     # retour vibratoire à l'appui ("" pour aucun)
+}
+CONTROL_PREFIX = "c:"     # une case « c:knobTL » désigne un contrôle, pas une case de la grille
+
+
+def control_key(cid: str) -> str:
+    return f"{CONTROL_PREFIX}{cid}"
+
+
+def parse_control(k: str) -> str | None:
+    """Identifiant du contrôle désigné par une case, ou None si c'est une case de grille."""
+    return k[len(CONTROL_PREFIX):] if k.startswith(CONTROL_PREFIX) else None
+
+
+def new_control(kind: str = "button", **kw) -> dict:
+    c = {"id": new_id(), **copy.deepcopy(CONTROL_DEFAULTS), "kind": kind}
+    c.update(kw)
+    return c
+
+
+def normalize_control(c: dict) -> dict:
+    for k, v in CONTROL_DEFAULTS.items():
+        c.setdefault(k, copy.deepcopy(v))
+    c.setdefault("id", new_id())
+    return c
+
+
+CONFIG_VERSION = 4  # 2 : intégrations natives ; 3 : FadeToBlack n'est plus une transition ;
+#                     4 : contrôles hors grille (molettes, bandeaux et boutons des Loupedeck)
 
 
 def _migrate_v3(cfg: dict) -> None:
@@ -145,8 +196,12 @@ def normalize_config(cfg: dict) -> dict:
         p.setdefault("cols", 8)
         p.setdefault("rows", 4)
         p.setdefault("buttons", {})
+        p.setdefault("controls", {})
+        p.setdefault("surface", "")
         for b in p["buttons"].values():
             normalize_button(b)
+        for c in p["controls"].values():
+            normalize_control(c)
     return cfg
 
 
@@ -169,6 +224,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     if old < 3:
         _migrate_v3(cfg)
         cfg["version"] = 3
+    if old < 4:
+        cfg["version"] = 4  # normalize_config a déjà ajouté le bloc « controls » vide de chaque page
     return cfg
 
 

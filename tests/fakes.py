@@ -282,6 +282,53 @@ class FakeKeys:
         return self
 
 
+class FakeAudio:
+    """Remplace Core Audio : aucun test ne doit toucher au vrai son de la machine (et la CI n'a pas de
+    carte son). Même interface que winsys.WinAudio."""
+
+    def __init__(self):
+        self.levels = {"output": 50.0, "mic": 100.0}
+        self.muted = {"output": False, "mic": False}
+        self.app_levels = {"spotify.exe": 60.0, "chrome.exe": 100.0}
+        self.app_muted = {"spotify.exe": False, "chrome.exe": False}
+        self.calls = []
+
+    def available(self) -> bool:
+        return True
+
+    def _app(self, app):
+        from livedeck.winsys import AudioError, WinAudio
+        for name in self.app_levels:
+            if WinAudio._match(name, app):
+                return name
+        raise AudioError(f"« {app} » ne produit pas de son en ce moment (aucune session audio)")
+
+    def get(self, target, app=""):
+        if target == "app":
+            n = self._app(app)
+            return self.app_levels[n], self.app_muted[n]
+        return self.levels[target], self.muted[target]
+
+    def set_level(self, target, value, app=""):
+        value = max(0.0, min(100.0, float(value)))
+        self.calls.append(("level", target, app, value))
+        if target == "app":
+            self.app_levels[self._app(app)] = value
+        else:
+            self.levels[target] = value
+        return value
+
+    def set_mute(self, target, muted, app=""):
+        self.calls.append(("mute", target, app, muted))
+        if target == "app":
+            self.app_muted[self._app(app)] = bool(muted)
+        else:
+            self.muted[target] = bool(muted)
+
+    def apps(self):
+        return sorted((n, v, self.app_muted[n]) for n, v in self.app_levels.items())
+
+
 class FakeJson:
     """API JSON quelconque (retour d'état « Valeur d'une API JSON »)."""
 

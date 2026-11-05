@@ -6,7 +6,8 @@
 
 ```mermaid
 flowchart LR
-    SD[Stream Decks<br/>USB · hidapi] <--> DM[deck.py<br/>DeckManager]
+    SD[Stream Decks<br/>USB · hidapi] <--> DM[deck.py<br/>DeckHub]
+    LD[Loupedeck<br/>USB série · WebSocket] <--> DM
     DM --> E[engine.py<br/>Engine]
     UI[ui/<br/>PySide6] <--> E
     E --> A[actions.py]
@@ -39,9 +40,13 @@ flowchart LR
 | Fichier | Rôle |
 |---|---|
 | `engine.py` | Cœur : configuration (verrou, annuler / rétablir, sauvegarde différée), exécution des touches, maintien et relâché, état en direct |
-| `model.py` | Format de la configuration, valeurs par défaut, migrations (version 3), modèles de Stream Deck, écriture atomique, sauvegardes, dossier `%APPDATA%\LiveDeck` |
+| `model.py` | Format de la configuration, valeurs par défaut, migrations (version 4), modèles de surfaces, contrôles hors grille (`page["controls"]`, case `c:<id>`), écriture atomique, sauvegardes, dossier `%APPDATA%\LiveDeck` |
 | `vmix.py` | Client TCP vMix : commandes, abonnements, lecture du XML (inputs, textes, durées, transitions), état optimiste (`expect`), détection d'un vMix figé, latence |
-| `deck.py` | Stream Decks : détection à chaud, pages par numéro de série, rendu en cache, appuis, identification, diagnostic |
+| `deck.py` | Stream Decks : détection à chaud, pages par numéro de série, rendu en cache, appuis, identification, diagnostic. `DeckHub` fait cohabiter les familles de surfaces derrière une seule API |
+| `loupedeck.py` | Pilote Loupedeck / Razer : découverte du port série, poignée de main « WebSocket », trames, écrans (RGB565), diodes RGB, vibration, décodage des molettes, du tactile et des boutons |
+| `ldeck.py` | Loupedeck : même rôle que `deck.py`, plus les contrôles hors grille (molettes, bandeaux, boutons physiques) |
+| `adjust.py` | Réglages au cran (volumes vMix, lecture, preview, son Windows) avec valeur optimiste, pour ne perdre aucun cran |
+| `winsys.py` | Windows : son par Core Audio en ctypes (sortie, micro, applications), fenêtres, programmes, souris, verrouillage |
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
@@ -99,7 +104,8 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
 ## Tests
 
 `tests/test_core.py` lance de vrais scénarios de bout en bout : faux vMix (`tools/fake_vmix.py`, Mix 1 à 4, titres,
-vidéos, vMix lent ou figé), faux Stream Deck, faux py-intercom, orchestream (v2 et v1), Tally32, API JSON et faux clavier
+vidéos, vMix lent ou figé), faux Stream Deck, faux Loupedeck (port série simulé : poignée de main, trames, molettes,
+tactile), faux py-intercom, orchestream (v2 et v1), Tally32, API JSON et faux clavier
 (`tests/fakes.py`), interface Qt hors écran. Rien ne sort de `127.0.0.1`, aucune vraie touche n'est simulée et le
 registre Windows n'est jamais touché.
 

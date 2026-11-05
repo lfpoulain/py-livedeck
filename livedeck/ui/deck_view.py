@@ -8,10 +8,11 @@ import time
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetricsF, QImage, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap)
-from PySide6.QtWidgets import QToolTip, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QToolTip, QVBoxLayout, QWidget
 
+from .. import loupedeck as ld
 from ..actions import INTEGRATION_OF, next_press, summary
-from ..model import key, parse_key
+from ..model import control_key, key, parse_control, parse_key, surface_of
 from ..render import render
 from . import theme as T
 
@@ -23,6 +24,139 @@ MODEL_NAMES = {(8, 4): "STREAM DECK XL", (5, 3): "STREAM DECK MK.2", (4, 2): "ST
                (3, 2): "STREAM DECK MINI", (9, 4): "STREAM DECK + XL", (16, 2): "STREAM DECK STUDIO",
                (3, 1): "STREAM DECK PEDAL"}
 GAP = 0.16  # écart entre touches, en fraction de touche
+
+# -- proportions réelles du Loupedeck CT, en largeur de touche -----------------------------------
+# Déduites de la géométrie des écrans de l'appareil : la dalle avant fait 480×270 px pour
+# 4×3 touches de 90 px, et l'écran de la molette 240×240 px. Une touche valant 1, la molette
+# fait donc 240/90 = 2,67 — elle est énorme, et c'est ce qui donne sa silhouette au CT.
+# Boîtier 150 × 160 mm (specs Loupedeck) : presque carré, un peu plus haut que large.
+L_KEY_GAP = 0.07      # la dalle est continue : un simple filet sépare les touches
+L_STRIP_W = 0.667     # bandeaux latéraux : 60 px
+L_KNOB_D = 0.95       # molettes ~20 mm, comme une touche
+L_KNOB_GAP, L_EDGE = 0.06, 0.12
+L_ROUND_D = 0.58      # les 8 boutons ronds et les 12 du bas
+L_WHEEL_D = 2.667     # écran de la molette : 240 px
+L_ROW_GAP, L_WHEEL_GAP = 0.45, 0.42
+L_TOP, L_BOTTOM = 0.35, 0.65
+BTN_GAP, BLOCK_GAP = 0.12, 0.22
+SIDE = 1.35           # colonne d'état de LiveDeck : à CÔTÉ de l'appareil, pas dedans
+# Bas de l'appareil : molette centrale au milieu, encadrée de deux blocs de 6 boutons ronds
+# (2 colonnes × 3 rangées chacun). L'ordre des identifiants du firmware se scinde justement en
+# deux groupes de six, colonne par colonne : home…fnL à gauche, a…e à droite.
+BOTTOM_L = ("home", "enter", "undo", "save", "keyboard", "fnL")   # lu par rangées
+BOTTOM_R = ("a", "b", "c", "d", "fnR", "e")
+
+
+class ControlBar(QWidget):
+    """Contrôles hors grille d'un Loupedeck (molettes, bandeaux, boutons physiques).
+
+    Ils ne tiennent pas dans la grille du deck : on les présente en pastilles, groupées, sous
+    la vue. Une pastille se sélectionne comme une touche et s'édite dans le même inspecteur."""
+
+    selected = Signal(str)
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.page_id: str | None = None
+        self.sel: str | None = None
+        self._chips: dict[str, QPushButton] = {}
+        self.v = QVBoxLayout(self)
+        self.v.setContentsMargins(0, 2, 0, 0)
+        self.v.setSpacing(4)
+        self.hide()
+
+    def profile(self):
+        """Modèle à présenter : celui d'un Loupedeck branché, sinon le plus complet (CT) dès
+        qu'une page utilise des contrôles."""
+        for d in (self.engine.decks.info() if self.engine.decks else []):
+            for pid, prof in ld.PROFILES.items():
+                if prof.name == d["model"]:
+                    return prof
+        p = self.engine.page(self.page_id)
+        return ld.PROFILES[0x0007] if p and p.get("controls") else None
+
+    def on_surface(self) -> bool:
+        """La vue du deck dessine-t-elle déjà la surface Loupedeck de cette page ?"""
+        p = self.engine.page(self.page_id)
+        if not p:
+            return False
+        if p.get("surface"):
+            return p["surface"] == "loupedeck"
+        return any(d["page"] == self.page_id and surface_of(d["model"]) == "loupedeck"
+                   for d in (self.engine.decks.info() if self.engine.decks else []))
+
+    def set_page(self, page_id: str | None) -> None:
+        self.page_id = page_id
+        self.refresh()
+
+    def select(self, k: str | None) -> None:
+        self.sel = k
+        for cid, chip in self._chips.items():
+            chip.setChecked(k == control_key(cid))
+
+    def refresh(self) -> None:
+        prof = self.profile()
+        if prof is None or self.on_surface():
+            # Quand la vue dessine la surface Loupedeck, les contrôles y sont déjà : une seconde
+            # liste de pastilles en dessous ne ferait que dupliquer et brouiller.
+            self.hide()
+            return
+        wanted = [c for c in ld.controls(prof)]
+        sig = (prof.name, tuple(c["id"] for c in wanted))
+        if sig != getattr(self, "_sig", None):
+            self._sig = sig
+            self._rebuild(prof, wanted)
+        page = self.engine.page(self.page_id)
+        controls = (page or {}).get("controls") or {}
+        for cid, chip in self._chips.items():
+            used = cid in controls
+            chip.setProperty("used", "1" if used else "0")
+            lab = ld.CONTROL_LABELS.get(cid, cid)
+            el = controls.get(cid)
+            text = (el.get("label") or "").split("\n")[0].strip() if el else ""
+            chip.setText(text or lab)
+            chip.setToolTip(f"{lab}{' · ' + text if text else ''}"
+                            + ("\nMolette : rotation dans les deux sens et appui"
+                               if ld.control_kind(cid) == "rotary" else "")
+                            + ("" if used else "\nLibre : clique pour lui donner une action"))
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+        self.select(self.sel)
+        self.show()
+
+    def _rebuild(self, prof, wanted) -> None:
+        while self.v.count():
+            it = self.v.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+            elif it.layout():
+                while it.layout().count():
+                    sub = it.layout().takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
+                it.layout().deleteLater()
+        self._chips = {}
+        groups: dict[str, list] = {}
+        for c in wanted:
+            groups.setdefault(c["group"], []).append(c)
+        for name, items in groups.items():
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            head = QLabel(name.upper())
+            head.setObjectName("H2")
+            head.setFixedWidth(96)
+            row.addWidget(head)
+            for c in items:
+                chip = QPushButton("")
+                chip.setObjectName("Chip")
+                chip.setCheckable(True)
+                chip.setCursor(Qt.PointingHandCursor)
+                chip.clicked.connect(lambda _=False, cid=c["id"]: self.selected.emit(control_key(cid)))
+                row.addWidget(chip)
+                self._chips[c["id"]] = chip
+            row.addStretch()
+            self.v.addLayout(row)
 
 
 def pil_to_pixmap(img, dpr: float = 1.0) -> QPixmap:
@@ -66,27 +200,121 @@ class DeckGrid(QWidget):
     def page(self):
         return self.engine.page(self.page_id)
 
+    @property
+    def surface(self) -> str:
+        """« loupedeck » ou « streamdeck ». La page peut l'imposer ; sinon on le déduit de
+        l'appareil qui l'affiche, pour que brancher un CT suffise à changer la vue."""
+        p = self.page
+        if not p:
+            return "streamdeck"
+        if p.get("surface"):
+            return p["surface"]
+        for d in (self.engine.decks.info() if self.engine.decks else []):
+            if d["page"] == self.page_id:
+                return surface_of(d["model"])
+        return "streamdeck"
+
     def _geom(self):
+        """(colonnes, rangées, côté d'une touche, écart, x0, y0, boîtier).
+
+        x0/y0 = coin du pavé de touches ; `body` = l'appareil dessiné. La colonne d'état de
+        LiveDeck est réservée en plus, à droite : elle ne fait pas partie de l'appareil et ne
+        doit donc pas en déformer les proportions."""
         p = self.page
         cols, rows = (p["cols"], p["rows"]) if p else (8, 4)
-        pad, side, foot = 0.42, 1.35, 0.5  # marges du boîtier, colonne d'état, pied (en touches)
-        wu = cols + (cols - 1) * GAP + 2 * pad + side
+        if self.surface == "loupedeck":
+            return self._geom_loupedeck(cols, rows)
+        pad, foot = 0.42, 0.5  # marges du boîtier, pied (en touches)
+        wu = cols + (cols - 1) * GAP + 2 * pad + SIDE
         hu = rows + (rows - 1) * GAP + pad + foot
         cell = min((self.width() - 8) / wu, (self.height() - 8) / hu, 138)
         body = QRectF((self.width() - wu * cell) / 2, (self.height() - hu * cell) / 2, wu * cell, hu * cell)
-        x0, y0 = body.x() + pad * cell, body.y() + pad * cell
-        return cols, rows, cell, cell * GAP, x0, y0, body
+        return cols, rows, cell, cell * GAP, body.x() + pad * cell, body.y() + pad * cell, body
+
+    def _geom_loupedeck(self, cols: int, rows: int):
+        gap = L_KEY_GAP
+        panel_w = 2 * L_STRIP_W + cols + (cols - 1) * gap          # dalle avant : bandeaux + touches
+        side_w = L_EDGE + L_KNOB_D + L_KNOB_GAP                    # colonne de molettes, chaque côté
+        wu_dev = 2 * side_w + panel_w
+        hu_dev = (L_TOP + rows + (rows - 1) * gap + L_ROW_GAP + L_ROUND_D
+                  + L_WHEEL_GAP + L_WHEEL_D + L_BOTTOM)
+        cell = min((self.width() - 8) / (wu_dev + SIDE), (self.height() - 8) / hu_dev, 138)
+        total_w = (wu_dev + SIDE) * cell
+        body = QRectF((self.width() - total_w) / 2, (self.height() - hu_dev * cell) / 2,
+                      wu_dev * cell, hu_dev * cell)
+        x0 = body.x() + (side_w + L_STRIP_W) * cell
+        y0 = body.y() + L_TOP * cell
+        return cols, rows, cell, cell * gap, x0, y0, body
 
     def _cell_rect(self, r, c, g=None) -> QRectF:
         cols, rows, cell, gap, x0, y0, _ = g or self._geom()
         return QRectF(x0 + c * (cell + gap), y0 + r * (cell + gap), cell, cell)
 
+    def _layout(self, g=None) -> dict:
+        """Toutes les zones cliquables : {case: (rectangle, nature)}.
+
+        Une seule source de vérité pour le dessin, le survol, le pointage et le glisser-déposer :
+        si la géométrie change, les deux suivent."""
+        g = g or self._geom()
+        cols, rows, cell, gap, x0, y0, body = g
+        out = {key(r, c): (self._cell_rect(r, c, g), "key") for r in range(rows) for c in range(cols)}
+        if self.surface != "loupedeck":
+            return out
+        keys_w = cols * cell + (cols - 1) * gap
+        keys_h = rows * cell + (rows - 1) * gap
+
+        # Bandeaux latéraux : trois zones chacun, collés au pavé (même dalle que les touches).
+        for side, sx in (("L", x0 - L_STRIP_W * cell), ("R", x0 + keys_w)):
+            zh = keys_h / ld.STRIP_ZONES
+            for z in range(ld.STRIP_ZONES):
+                out[control_key(f"strip{side}{z + 1}")] = (
+                    QRectF(sx, y0 + z * zh + 1, L_STRIP_W * cell - 1, zh - 2), "strip")
+
+        # Molettes : une par rangée de touches, de chaque côté, au bord du boîtier.
+        d = L_KNOB_D * cell
+        for side, kx in (("L", x0 - (L_STRIP_W + L_KNOB_GAP + L_KNOB_D) * cell),
+                         ("R", x0 + keys_w + (L_STRIP_W + L_KNOB_GAP) * cell)):
+            for i, pos in enumerate(("T", "C", "B")):
+                cy = y0 + i * (cell + gap) + cell / 2
+                out[control_key(f"knob{pos}{side}")] = (QRectF(kx, cy - d / 2, d, d), "knob")
+
+        # Les 8 boutons ronds : alignés sous toute la dalle, bandeaux compris (ils sont plus larges
+        # que le seul pavé de touches, sinon ils ne tiendraient pas côte à côte).
+        ry = y0 + keys_h + L_ROW_GAP * cell
+        rd = L_ROUND_D * cell
+        row_x, row_w = x0 - L_STRIP_W * cell, keys_w + 2 * L_STRIP_W * cell
+        step = row_w / 8
+        for i in range(8):
+            out[control_key(f"key{i}")] = (QRectF(row_x + i * step + (step - rd) / 2, ry, rd, rd), "round")
+
+        # Dernière bande : la grande molette au milieu, un bloc de 6 boutons de chaque côté.
+        by = ry + rd + L_WHEEL_GAP * cell
+        wd = L_WHEEL_D * cell
+        cx = x0 + keys_w / 2
+        out[control_key("wheel")] = (QRectF(cx - wd / 2, by, wd, wd), "wheel")
+        bd, bg = L_ROUND_D * cell, BTN_GAP * cell
+        block_w = 2 * bd + bg
+        block_h = 3 * bd + 2 * bg
+        for names, left in ((BOTTOM_L, True), (BOTTOM_R, False)):
+            bx = (cx - wd / 2 - BLOCK_GAP * cell - block_w) if left else (cx + wd / 2 + BLOCK_GAP * cell)
+            for i, cid in enumerate(names):
+                out[control_key(cid)] = (QRectF(bx + (i % 2) * (bd + bg),
+                                                by + (wd - block_h) / 2 + (i // 2) * (bd + bg),
+                                                bd, bd), "round")
+        return out
+
+    def draws(self, k: str) -> bool:
+        """La vue dessine-t-elle cette case ? (les contrôles n'apparaissent qu'en surface Loupedeck)"""
+        return bool(k) and k in self._layout()
+
     def key_at(self, pos) -> str | None:
-        g = self._geom()
-        for r in range(g[1]):
-            for c in range(g[0]):
-                if self._cell_rect(r, c, g).contains(pos):
-                    return key(r, c)
+        for k, (rect, kind) in self._layout().items():
+            if kind in ("knob", "round", "wheel"):
+                c = rect.center()
+                if (pos.x() - c.x()) ** 2 + (pos.y() - c.y()) ** 2 <= (rect.width() / 2) ** 2:
+                    return k
+            elif rect.contains(pos):
+                return k
         return None
 
     # -- état -----------------------------------------------------------------
@@ -147,16 +375,64 @@ class DeckGrid(QWidget):
         px = max(int(cell * dpr), 72)  # rendu à la taille du vrai deck, puis réduit : même mise en page
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         radius = cell * 0.13
-        for r in range(rows):
-            for c in range(cols):
-                k = key(r, c)
-                rect = self._cell_rect(r, c, g)
+        controls = page.get("controls") or {}
+        for k, (rect, kind) in self._layout(g).items():
+            if kind == "key":
                 b = page["buttons"].get(k)
                 if b:
                     self._paint_key(p, k, rect, radius, px, dpr, b)
                 else:
                     self._paint_empty(p, k, rect, radius, cell)
-        self._paint_status(p, body, cell, x0 + cols * (cell + gap), y0, rows * cell + (rows - 1) * gap)
+            else:
+                self._paint_control(p, k, rect, kind, cell, controls.get(parse_control(k)))
+        sx = (body.right() + 0.14 * cell if self.surface == "loupedeck"
+              else x0 + cols * (cell + gap))
+        self._paint_status(p, body, cell, sx, y0, rows * cell + (rows - 1) * gap)
+
+    def _paint_control(self, p: QPainter, k: str, rect: QRectF, kind: str, cell: float, el: dict | None):
+        """Molette, zone de bandeau, molette centrale ou bouton physique.
+
+        Un contrôle configuré prend ses couleurs et son libellé ; sinon il reste en creux, pour
+        qu'on voie d'un coup d'œil ce qui est libre sur l'appareil."""
+        v = self.engine.visual(el) if el else None
+        round_ = kind in ("knob", "round", "wheel")
+        bg = QColor(v["bg"]) if v and v.get("bg") else QColor("#171b22")
+        if v and v.get("lit"):
+            self._glow(p, rect, QColor(v["lit"]), rect.width() / 2 if round_ else cell * 0.08)
+        hover = k == self._hover and not self.live and not self.locked
+        p.setBrush(bg)
+        p.setPen(QPen(QColor("#394252" if el else "#262c37"), 1.2))
+        if round_:
+            p.drawEllipse(rect)
+            if kind == "knob":  # repère de rotation, pour distinguer une molette d'un bouton
+                p.setPen(QPen(QColor(T.MUTED if el else "#2f3542"), max(1.2, cell * 0.02)))
+                p.drawLine(rect.center().x(), rect.top() + cell * 0.06,
+                           rect.center().x(), rect.top() + cell * 0.17)
+        else:
+            p.drawRoundedRect(rect, cell * 0.07, cell * 0.07)
+        text = ""
+        if el:
+            text = (el.get("label") or "").replace("\n", " ").strip()
+            if v and v.get("label"):
+                text = v["label"].replace("\n", " ").strip()
+        if not text:
+            cid = parse_control(k) or ""
+            # Un bouton libre qui change de page le montre : sinon on le découvre en appuyant.
+            nav = ld.NAV_MARK.get(ld.DEFAULT_NAV.get(cid, "")) if not el else None
+            text = "+" if hover else (nav or ld.short_label(cid))
+        p.setPen(QColor(v["fg"]) if v and v.get("fg") else QColor(T.FAINT if hover else "#59616f"))
+        size = cell * (0.13 if kind == "wheel" else 0.095)
+        p.setFont(self._font(size))
+        p.drawText(rect.adjusted(2, 1, -2, -1), Qt.AlignCenter | Qt.TextWordWrap,
+                   QFontMetricsF(self._font(size)).elidedText(text, Qt.ElideRight, rect.width() * 1.9))
+        pen = self._outline(k)
+        if pen:
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            if round_:
+                p.drawEllipse(rect.adjusted(-2.5, -2.5, 2.5, 2.5))
+            else:
+                p.drawRoundedRect(rect.adjusted(-2.5, -2.5, 2.5, 2.5), cell * 0.09, cell * 0.09)
 
     def _paint_body(self, p: QPainter, body: QRectF, cell: float, page: dict):
         grad = QLinearGradient(body.topLeft(), body.bottomLeft())
@@ -170,7 +446,8 @@ class DeckGrid(QWidget):
         foot_y = body.bottom() - cell * 0.44
         p.setFont(self._font(cell * 0.1, True, cell * 0.035))
         p.setPen(QColor("#2f3542"))
-        name = MODEL_NAMES.get((page["cols"], page["rows"]), "STREAM DECK")
+        name = ("LOUPEDECK CT" if self.surface == "loupedeck"
+                else MODEL_NAMES.get((page["cols"], page["rows"]), "STREAM DECK"))
         p.drawText(QRectF(body.x() + cell * 0.42, foot_y, body.width() / 2, cell * 0.3), Qt.AlignLeft | Qt.AlignVCenter, name)
         decks = [d for d in (self.engine.decks.info() if self.engine.decks else []) if d["page"] == self.page_id]
         text = ("SUR  " + "  ·  ".join(d["model"].replace("Stream Deck ", "").upper() for d in decks)) if decks \
@@ -308,17 +585,32 @@ class DeckGrid(QWidget):
     def tooltip_text(self, k: str) -> str:
         """Ce que fait la touche, ce que fera le prochain appui et ce qui cloche (input introuvable…)."""
         page = self.page
-        b = page["buttons"].get(k) if page else None
-        r, c = parse_key(k)
+        cid = parse_control(k)
+        b = self.engine.resolve(page, k) if page else None
+        where = (ld.CONTROL_LABELS.get(cid, cid) if cid is not None
+                 else "Rangée {}, colonne {}".format(*(n + 1 for n in parse_key(k))))
         if not b:
-            return f"Rangée {r + 1}, colonne {c + 1} : vide" + ("" if self.live else "  ·  clic pour choisir une action")
+            hint = "" if self.live else "  ·  clic pour choisir une action"
+            if cid is not None and ld.control_kind(cid) == "rotary":
+                hint += "  ·  rotation dans les deux sens et appui"
+            nav = ld.DEFAULT_NAV.get(cid or "")
+            if nav:  # comportement par défaut : il doit être écrit, pas découvert en appuyant
+                hint = (f"  ·  tant qu'il est libre, il affiche la page "
+                        f"{'précédente' if nav == 'prev' else 'suivante'}" + hint)
+            return f"{where} : vide{hint}"
         e = self.engine
         names = e.page_names()
         title = (b.get("label") or "").replace("\n", " ").strip() or "Sans texte"
         lines = [f"<b>{html.escape(title)}</b>"]
         acts = b.get("actions") or []
+        if cid is not None:
+            lines.append(f"<span style='color:{T.MUTED}'>{html.escape(where)}</span>")
         if b.get("mode") == "toggle":
             lines.append(f"<span style='color:{T.MUTED}'>Interrupteur</span>")
+        for lst, how in (("actions_cw", "Rotation ⟳"), ("actions_ccw", "Rotation ⟲")):
+            if b.get(lst):
+                lines.append(f"{how} : {html.escape(summary(b[lst][0], names))}"
+                             + (f"  (tous les {b['step']} crans)" if int(b.get("step") or 1) > 1 else ""))
         lines += [f"▸ {html.escape(summary(a, names))}" for a in acts[:5]]
         if len(acts) > 5:
             lines.append(f"▸ … {len(acts) - 5} autres étapes")
@@ -411,8 +703,17 @@ class DeckGrid(QWidget):
         if not self.live and not self.locked and any(e.mimeData().hasFormat(m) for m in (MIME_CELL, MIME_INPUTS, MIME_PRESET)):
             e.acceptProposedAction()
 
+    @staticmethod
+    def _accepts(k: str | None, md) -> bool:
+        """Un contrôle est lié à un organe physique : on n'y déplace pas une touche et on n'y
+        dépose pas une rangée d'inputs (qui s'étale sur la grille). Un preset, si."""
+        if not k:
+            return False
+        return parse_control(k) is None or md.hasFormat(MIME_PRESET)
+
     def dragMoveEvent(self, e):
         k = self.key_at(e.position())
+        k = k if self._accepts(k, e.mimeData()) else None
         if k != self._drop:
             self._drop = k
             self.update()
@@ -432,9 +733,9 @@ class DeckGrid(QWidget):
         k = self.key_at(e.position())
         self._drop = None
         self.update()
-        if not k:
-            return
         md = e.mimeData()
+        if not self._accepts(k, md):
+            return
         if md.hasFormat(MIME_CELL):
             src = bytes(md.data(MIME_CELL)).decode()
             if src != k:
@@ -453,7 +754,8 @@ class DeckGrid(QWidget):
             return super().keyPressEvent(e)
         moves = {Qt.Key_Left: (0, -1), Qt.Key_Right: (0, 1), Qt.Key_Up: (-1, 0), Qt.Key_Down: (1, 0)}
         if e.key() in moves:
-            r, c = parse_key(self.sel) if self.sel else (0, -1)
+            # Les flèches parcourent la grille ; depuis un contrôle hors grille on y revient.
+            r, c = parse_key(self.sel) if self.sel and parse_control(self.sel) is None else (0, -1)
             dr, dc = moves[e.key()]
             self.select(key(max(0, min(page["rows"] - 1, r + dr)), max(0, min(page["cols"] - 1, c + dc))))
             return
@@ -465,6 +767,8 @@ class DeckGrid(QWidget):
     def next_key(self, k: str) -> str | None:
         """Touche suivante (à droite, puis rangée suivante) pour le remplissage rapide."""
         page = self.page
+        if parse_control(k) is not None:
+            return None  # un contrôle n'a pas de « suivant » dans la grille
         r, c = parse_key(k)
         c += 1
         if c >= page["cols"]:

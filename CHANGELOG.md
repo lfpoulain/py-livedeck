@@ -1,5 +1,44 @@
 # Journal des versions
 
+## 1.6.0 — 2026-11-05
+
+### Loupedeck
+- **Les Loupedeck fonctionnent à côté de tes Stream Decks**, avec les mêmes pages, les mêmes actions et les
+  mêmes retours d'état : Loupedeck CT, CT V1, Live, Live S, Razer Stream Controller et Stream Controller X.
+  Rien à régler : branche l'appareil, il apparaît dans Réglages comme un deck de plus. Les deux familles
+  peuvent afficher des pages différentes en même temps.
+- **Pavé tactile** : les 12 vignettes sont des touches de page ordinaires. Un doigt qui glisse hors d'une
+  vignette la relâche quand même (sinon un bus intercom maintenu restait ouvert).
+- **Molettes** : rotation dans les deux sens et appui, chacun avec sa liste d'actions. Un **pas** évite
+  d'inonder vMix sur une rotation rapide, sans perdre les crans restants. Dans une action, `$(delta)` vaut le
+  nombre de crans avec son signe et `$(delta_abs)` sans.
+- **Molette centrale du CT** : son écran rond affiche le libellé et le retour d'état ; la toucher équivaut à
+  l'enfoncer.
+- **Bandeaux latéraux** : trois zones affichables par bandeau, qui se câblent comme des touches.
+- **Boutons physiques** : les 8 boutons ronds (dont la **diode RGB** suit le retour d'état), ainsi que Home,
+  Annuler, Clavier, Entrée, Enregistrer, Fn gauche/droite et A à E. Sans action affectée, Fn gauche et Fn
+  droite changent de page.
+- **Vibration** à l'appui, réglable par contrôle (une dalle tactile ne donne sinon aucun retour).
+- Les contrôles hors grille s'éditent dans le même inspecteur, sous la vue du deck.
+- Le logiciel Loupedeck officiel doit être fermé : il garde le port série de l'appareil.
+
+### Molettes : réglages au cran
+- Nouvelle action **Régler au cran** : volume d'un input, du Master, du casque ou d'un bus A-G, avance /
+  retour dans une vidéo, parcours des inputs en preview, photos / liste / PowerPoint, compte à rebours.
+- La jauge et la valeur s'affichent sur la molette et suivent les changements faits dans vMix.
+- Une rotation rapide ne perd aucun cran : vMix ne renvoie son état que quelques fois par seconde, LiveDeck
+  repart donc de la dernière valeur envoyée.
+- Un réglage au cran se pose d'un seul côté : c'est le sens de rotation qui décide de monter ou de baisser.
+- Catégorie **Molette** dans la bibliothèque (Volume Master, Volume d'un input, Parcourir la preview,
+  Avance / retour vidéo…), proposée en premier quand on configure une molette.
+
+### Windows
+- **Son** : volume et coupure du son de Windows, du micro par défaut, ou d'une seule application (Spotify,
+  navigateur, Teams…). Touche rouge quand c'est coupé, jauge du volume.
+- **Lecture multimédia**, **ouvrir un programme / fichier / site**, **fenêtre au premier plan** (avant un
+  raccourci clavier), **commande Windows**, **taper un texte**, **molette de souris**, **verrouiller la session**.
+- Aucune dépendance ajoutée : le son passe directement par l'API audio de Windows.
+
 ## 1.5.0 — 2026-11-05
 
 ### Verrou de direct

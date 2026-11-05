@@ -9,15 +9,17 @@ import threading
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
-                               QWidget)
+                               QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 from .. import feedback, presets
-from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_action, next_press, summary,
+from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_action, next_press, shown, summary,
                        to_take)
+from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
 from ..integrations import integration_status, probe_intercom, probe_orchestream, probe_tally
-from ..model import normalize_button, parse_key
+from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
+from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..render import render
 from ..webreq import parse_curl
 from . import theme as T
@@ -200,7 +202,9 @@ class Inspector(QFrame):
         if (page_id, k) != (self.page_id, self.key):
             self.side, self.step = "actions", 0
         self.page_id, self.key = page_id, k
-        self.b = normalize_button(copy.deepcopy(b)) if b else None
+        cid = parse_control(k) if k else None
+        self.b = (normalize_control(copy.deepcopy(b)) if cid is not None
+                  else normalize_button(copy.deepcopy(b))) if b else None
         self._last = self._sig(b)
         self.rebuild()
 
@@ -301,13 +305,19 @@ class Inspector(QFrame):
             row.addWidget(self.preview, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(6)
-        r, c = parse_key(self.key)
+        cid = parse_control(self.key)
         self.h1 = wrap(label("", "H1"))
         self._title()
         col.addWidget(self.h1)
         chips = FlowLayout(spacing=6)
         page = self.engine.page(self.page_id)
-        chips.addWidget(label(f"Rangée {r + 1} · Col. {c + 1}", "Chip"))
+        if cid is not None:
+            chips.addWidget(label(CONTROL_LABELS.get(cid, cid), "Chip"))
+            if control_kind(cid) == "rotary":
+                chips.addWidget(label("Molette", "Chip"))
+        else:
+            r, c = parse_key(self.key)
+            chips.addWidget(label(f"Rangée {r + 1} · Col. {c + 1}", "Chip"))
         if page:
             chips.addWidget(label(page["name"], "Chip"))
         if self.b and self.b.get("mode") == "toggle":
@@ -344,7 +354,7 @@ class Inspector(QFrame):
         chips_box = QWidget()
         chips = FlowLayout(chips_box, spacing=4)
         self._chips = {}
-        groups = presets.catalog(self.engine)
+        groups = presets.catalog(self.engine, rotary=self._is_rotary())
         for cat in [""] + [c for c, _ in groups]:
             b = QPushButton(cat or "Tout")
             b.setObjectName("Chip")
@@ -385,7 +395,7 @@ class Inspector(QFrame):
         """Groupes affichés après filtre (catégorie choisie + recherche sur nom, description, catégorie)."""
         words = [w for w in self._pick_text.lower().split() if w]
         out = []
-        for cat, items in presets.catalog(self.engine):
+        for cat, items in presets.catalog(self.engine, rotary=self._is_rotary()):
             if self._pick_cat and cat != self._pick_cat:
                 continue
             keep = [it for it in items if all(w in f"{cat} {it[0]} {it[1]} {it[2]}".lower() for w in words)]
@@ -424,14 +434,20 @@ class Inspector(QFrame):
                 grid.addWidget(b, i // 2, i % 2)
             self.pick_lay.addLayout(grid)
 
+    def _is_rotary(self) -> bool:
+        cid = parse_control(self.key) if self.key else None
+        return cid is not None and control_kind(cid) == "rotary"
+
     def _create(self, pid: str):
         b = presets.make(pid, self.engine)
         if not b:
             return
-        self.b = b
-        self.side, self.step = "actions", 0
+        self.b = presets.place(b, self.key) if self.key else b
+        # Une molette s'ouvre sur sa rotation : c'est ce qu'on vient de choisir de régler.
+        rotary = self.b.get("kind") == "rotary" and self.b.get("actions_cw")
+        self.side, self.step = ("actions_cw" if rotary else "actions"), 0
         self.commit(rebuild=True)
-        if pid in presets.NEEDS_INPUT:  # Take, Program… : on demande tout de suite l'input
+        if pid in presets.NEEDS_INPUT or pid == "knob_input":  # on demande tout de suite l'input
             QTimer.singleShot(0, self.focus_input)
 
     def focus_input(self, popup: bool = True):
@@ -647,6 +663,38 @@ class Inspector(QFrame):
         self.b[k] = v
         self.commit(coalesce)
 
+    def _rotary_options(self):
+        """Réglages propres aux molettes : pas d'accélération et retour vibratoire."""
+        if self.side in ("actions_cw", "actions_ccw"):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addWidget(label("Déclencher tous les", "Hint"))
+            spin = QSpinBox()
+            spin.setRange(1, 20)
+            spin.setValue(max(1, int(self.b.get("step") or 1)))
+            spin.setToolTip("Nombre de crans à tourner avant de déclencher la liste. Monte-le pour ne pas "
+                            "inonder vMix sur une rotation rapide ; les crans restants ne sont pas perdus.")
+            spin.valueChanged.connect(lambda v: self._set("step", int(v)))
+            row.addWidget(spin)
+            row.addWidget(label("crans", "Hint"))
+            row.addStretch()
+            self.v.addLayout(row)
+            self.v.addWidget(wrap(label("Dans une action, <b>$(delta)</b> vaut le nombre de crans avec son "
+                                        "signe, <b>$(delta_abs)</b> sans le signe.", "Hint")))
+        hap = QHBoxLayout()
+        hap.setSpacing(6)
+        hap.addWidget(label("Vibration à l'appui", "Hint"))
+        combo = QComboBox()
+        names = [("", "aucune")] + [(k, k) for k in HAPTIC]
+        for value, text in names:
+            combo.addItem(text, value)
+        cur = self.b.get("haptic", "court")
+        combo.setCurrentIndex(max(0, [v for v, _ in names].index(cur) if cur in dict(names) else 0))
+        combo.currentIndexChanged.connect(lambda i: self._set("haptic", combo.itemData(i)))
+        hap.addWidget(combo)
+        hap.addStretch()
+        self.v.addLayout(hap)
+
     # -- actions --------------------------------------------------------------
     def _actions(self):
         mode = Seg([("press", "Appui"), ("toggle", "Interrupteur")], self.b["mode"])
@@ -654,16 +702,27 @@ class Inspector(QFrame):
         mode.changed.connect(self._set_mode)
         self.v.addLayout(section("Actions", mode))
         toggle = self.b["mode"] == "toggle"
-        if toggle and self.side == "long_actions" or not toggle and self.side == "actions_off":
-            self.side = "actions"
-        sides = ([("actions", "À l'activation"), ("actions_off", "À la désactivation")] if toggle
-                 else [("actions", "Appui court"), ("long_actions", "Appui long")])
+        rotary = self.b.get("kind") == "rotary"
+        if rotary:
+            # Une molette a trois listes : son appui, et un sens de rotation chacun.
+            sides = [("actions", "Appui"), ("actions_cw", "Rotation ⟳"), ("actions_ccw", "Rotation ⟲")]
+            if self.side not in dict(sides):
+                self.side = "actions"
+        else:
+            if toggle and self.side == "long_actions" or not toggle and self.side == "actions_off":
+                self.side = "actions"
+            if self.side in ("actions_cw", "actions_ccw"):
+                self.side = "actions"
+            sides = ([("actions", "À l'activation"), ("actions_off", "À la désactivation")] if toggle
+                     else [("actions", "Appui court"), ("long_actions", "Appui long")])
         side = Seg(sides, self.side)
         side.changed.connect(self._set_side)
-        if not toggle:
+        if not toggle and not rotary:
             side.buttons["long_actions"].setText("Appui long" + (f"  ·  {len(self.b['long_actions'])}"
                                                                 if self.b["long_actions"] else ""))
         self.v.addWidget(side)
+        if rotary:
+            self._rotary_options()
         confirm = QCheckBox("Sécurité : maintenir ½ s")
         confirm.setToolTip("Évite un appui accidentel (FTB, arrêt du stream…) : il faut maintenir la touche ½ s "
                            "pour déclencher. Une jauge se remplit sur la touche.")
@@ -763,9 +822,11 @@ class Inspector(QFrame):
                 continue  # durée : seulement utile si le 2e appui envoie à l'antenne
             if a["type"] == "intercom.ptt" and a.get("mode") == "alloff" and fs["key"] in ("bus", "fallback_keys"):
                 continue  # « couper tous les bus » : ni bus ni raccourci de secours
+            if not shown(fs, a):
+                continue  # champ sans objet pour la cible ou le mode choisis
             w = make_field(self.engine, fs, a.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names())
-            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text"):
+            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp"):
                 if fs["kind"] != "bool":
                     f.addRow(label(short_label(fs), "Muted"))
                 f.addRow(w)
@@ -873,8 +934,14 @@ class Inspector(QFrame):
                 self.label_edit.blockSignals(True)
                 self.label_edit.setPlainText(new_label)
                 self.label_edit.blockSignals(False)
+        if a["type"] == "vmix.adjust" and k == "target":
+            # Le pas par défaut dépend de la cible : 2 % pour un volume, 1 input pour la preview…
+            a["amount"] = VMIX_STEP.get(v, (1,))[0]
         if k in ("then", "bus", "mode") and a["type"] in ("vmix.preview", "intercom.ptt"):
             self.commit(rebuild=True)  # champs affichés / état d'intégration qui en dépendent
+            return
+        if any(k in (fs.get("when") or {}) for fs in ACTIONS.get(a["type"], {}).get("fields", [])):
+            self.commit(rebuild=True)  # d'autres champs apparaissent ou disparaissent selon celui-ci
             return
         self.commit(coalesce=f"{self.side}.{self.step}.{k}")
 
@@ -937,6 +1004,8 @@ class Inspector(QFrame):
         lay.addLayout(head)
         fl = form()
         for fs in spec["fields"]:
+            if not shown(fs, cond):
+                continue
             w = make_field(self.engine, fs, cond.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_cond(i, k, v))
             if fs["kind"] in ("input", "multiline", "text"):  # texte : toute la largeur (URL, chemin JSON…)
@@ -957,7 +1026,12 @@ class Inspector(QFrame):
         return frame
 
     def _set_cond(self, i: int, k: str, v):
-        self.b["feedbacks"][i]["cond"][k] = v
+        cond = self.b["feedbacks"][i]["cond"]
+        cond[k] = v
+        fields = CONDITIONS.get(cond.get("type"), {}).get("fields", [])
+        if any(k in (fs.get("when") or {}) for fs in fields):
+            self.commit(rebuild=True)  # un champ dépendant apparaît ou disparaît
+            return
         self.commit(coalesce=f"fb.{i}.{k}")
 
     def _set_fb(self, i: int, k: str, v, coalesce: str | None = None):

@@ -47,6 +47,8 @@ class VmixState:
         self.flags: dict[str, bool] = {t.lower(): False for t in FLAG_TAGS}
         self.durations: dict[str, int] = {}  # recording / streaming… : secondes écoulées (si vMix les donne)
         self.transitions: list[dict] = []  # boutons de transition 1-4 : {"effect", "duration"}
+        # Mixage : « master » (avec « headphones ») et bus « A » à « G » -> {"volume", "muted"}
+        self.audio: dict[str, dict] = {}
         self._by_number: dict[int, dict] = {}
         self._by_key: dict[str, dict] = {}
         self._by_title: dict[str, dict] = {}
@@ -360,6 +362,24 @@ class VmixClient:
                 durations[tag.lower()] = integer(el.get("duration")) or 0
         transitions = [{"effect": t.get("effect", ""), "duration": integer(t.get("duration")) or 0}
                        for t in root.findall("transitions/transition")]
+        # <audio><master volume="100" muted="False" headphonesVolume="74.8"/><busA volume=… muted=…/>…
+        audio = {}
+        for el in root.findall("audio/*"):
+            tag = el.tag
+            name = "master" if tag == "master" else (tag[3:].upper() if tag.startswith("bus") and len(tag) == 4 else "")
+            if not name:
+                continue
+            try:
+                vol = float(el.get("volume")) if el.get("volume") not in (None, "") else None
+            except ValueError:
+                vol = None
+            entry = {"volume": vol, "muted": (el.get("muted") or "").lower() == "true"}
+            if name == "master" and el.get("headphonesVolume") not in (None, ""):
+                try:
+                    entry["headphones"] = float(el.get("headphonesVolume"))
+                except ValueError:
+                    pass
+            audio[name] = entry
         version = (root.findtext("version") or st.version).strip()
         mixes = self._apply_expect(mixes)
 
@@ -370,7 +390,7 @@ class VmixClient:
                tuple(sorted(flags.items())))
         st.version = version
         # position, volume, durées : relues à chaque XML (textes dynamiques) mais sans tout redessiner
-        st.durations, st.transitions = durations, transitions
+        st.durations, st.transitions, st.audio = durations, transitions, audio
         st.set_inputs(inputs)
         if sig != self._sig:
             self._sig = sig

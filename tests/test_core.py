@@ -4,11 +4,14 @@
 
 Rien ne sort du PC : tous les serveurs sont simulés sur 127.0.0.1.
 """
+import json
 import os
+import struct
 import sys
 import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # hors écran, Qt n'a pas de polices sans ce dossier : les mesures de mise en page seraient fausses
@@ -28,25 +31,30 @@ autostart.set_enabled = lambda on: None
 
 from livedeck.actions import new_action  # noqa: E402
 from livedeck.companion_import import import_companion  # noqa: E402
-from livedeck.deck import DeckHandle, DeckManager  # noqa: E402
+from livedeck.deck import DeckHandle, DeckHub, DeckManager  # noqa: E402
 from livedeck.engine import Engine  # noqa: E402
+from livedeck import loupedeck as ld  # noqa: E402
+from livedeck.ldeck import LoupedeckHandle, LoupedeckManager  # noqa: E402
 from livedeck import vmix as vmix_mod  # noqa: E402
 from livedeck.feedback import GREEN, RED, auto  # noqa: E402
-from livedeck.model import (backup_config, config_text, deck_size, default_config, load_config,  # noqa: E402
-                           new_button, new_page)
+from livedeck.model import (DECK_SIZES, backup_config, config_text, control_key, deck_size,  # noqa: E402
+                           default_config, load_config, new_button, new_control, new_page, surface_of)
+from livedeck.ui.deck_view import BOTTOM_L, BOTTOM_R, ControlBar, DeckGrid  # noqa: E402
 from livedeck.ui import theme  # noqa: E402
 from livedeck.ui.diagnostic import DiagnosticDialog  # noqa: E402
 from livedeck.ui.main_window import MainWindow  # noqa: E402
-from livedeck.ui.search import SearchDialog  # noqa: E402
+from livedeck.ui.search import ROLE, SearchDialog  # noqa: E402
 from livedeck.ui.settings import SettingsDialog  # noqa: E402
 from livedeck.ui.widgets import InputCombo  # noqa: E402
 from livedeck.vars import expand  # noqa: E402
 from livedeck.vmix import VmixClient, _encode_query  # noqa: E402
 from livedeck.webreq import parse_curl  # noqa: E402
-from livedeck import integrations as integ, netsend, webreq  # noqa: E402
+from livedeck import integrations as integ, netsend, webreq, winsys  # noqa: E402
+from livedeck import presets  # noqa: E402
+from livedeck.actions import ACTIONS, execute, is_relative, shown, summary  # noqa: E402
 from livedeck.feedback import OFF_BG, fb  # noqa: E402
 from livedeck.health import json_compare, json_path  # noqa: E402
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QMimeData, QPointF, Qt  # noqa: E402
 from PySide6.QtWidgets import QLabel, QPlainTextEdit  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "demo.companionconfig"
@@ -77,6 +85,7 @@ def engine(tmp_path, cfg=None, start=True) -> Engine:
     """Moteur sans Stream Deck réel, branché sur le faux vMix (intégrations coupées par défaut)."""
     vmix_server()
     e = Engine(Path(tmp_path) / "config.json", enable_decks=False)
+    e.winaudio = winsys.CachedAudio(fakes.FakeAudio())  # jamais le vrai son de la machine
     if cfg is None:
         cfg, _ = import_companion(FIXTURE, integrations=True)
         cfg["integrations"] = {"intercom": {"host": "127.0.0.1", "port": 18199}, "orchestream": {"url": ""},
@@ -134,6 +143,119 @@ def mock_deck(e, serial="DEMOSD0000001"):
     dm.handles[d.id()] = h
     h.page_id = dm._initial_page(h)
     return dm, d, h
+
+
+class MockLoupedeckPort:
+    """Imite le port série d'un Loupedeck CT : poignée de main « WebSocket », trames 0x82,
+    réponses aux commandes et injection d'événements physiques."""
+
+    def __init__(self, serial="FAKECT0000001", firmware=(1, 2, 3), junk=b""):
+        # junk : rebut laissé par une session précédente mal refermée (acquittements, trame de fermeture)
+        self.is_open, self._pending = True, bytearray(junk)
+        self.written, self.commands = bytearray(), []
+        self.serial_no, self.firmware = serial, firmware
+        self.flushed = 0
+
+    # -- API pyserial utilisée par le pilote ---------------------------------
+    def reset_input_buffer(self):
+        self.flushed += 1
+        self._pending.clear()
+
+    def reset_output_buffer(self):
+        self.flushed += 1
+
+    def close(self):
+        self.is_open = False
+
+    def read(self, n=1):
+        if not self._pending:
+            time.sleep(0.01)  # comme le timeout de pyserial : la boucle de lecture ne tourne pas à vide
+            return b""
+        out, self._pending = bytes(self._pending[:n]), self._pending[n:]
+        return out
+
+    def write(self, data):
+        self.written += data
+        if data.startswith(b"GET /index.html"):
+            self.written.clear()
+            self._pending += b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"
+            return len(data)
+        self._decode_written()
+        return len(data)
+
+    def _decode_written(self):
+        """Extrait les commandes envoyées par LiveDeck et répond à SERIAL / VERSION."""
+        buf = self.written
+        while True:
+            i = buf.find(b"\x82")
+            if i < 0 or len(buf) < i + 2:
+                return
+            n = buf[i + 1]
+            if n == 0xFF:  # gros message : longueur sur 4 octets
+                if len(buf) < i + 14:
+                    return
+                size = int.from_bytes(bytes(buf[i + 6:i + 10]), "big")
+                head = i + 14
+            else:
+                size, head = n - 0x80, i + 6
+            if len(buf) < head + size:
+                return
+            body = bytes(buf[head:head + size])
+            del buf[:head + size]
+            if len(body) < 3:
+                continue
+            cmd, tid, data = body[1], body[2], body[3:]
+            self.commands.append((cmd, data))
+            if cmd == ld.CMD_SERIAL:
+                self.emit(ld.CMD_SERIAL, self.serial_no.encode(), tid)
+            elif cmd == ld.CMD_VERSION:
+                self.emit(ld.CMD_VERSION, bytes(self.firmware), tid)
+
+    # -- injection d'événements physiques ------------------------------------
+    def emit(self, cmd, data=b"", tid=1):
+        body = bytes([3 + len(data), cmd, tid]) + data
+        self._pending += bytes([0x82, len(body)]) + body
+
+    def button(self, name, down=True):
+        self.emit(ld.CMD_BUTTON, bytes([ld.BUTTON_CODES[name], 0x00 if down else 0x01]))
+
+    def rotate(self, name, delta=1):
+        self.emit(ld.CMD_ROTATE, bytes([ld.BUTTON_CODES[name]]) + int(delta).to_bytes(1, "big", signed=True))
+
+    def touch(self, x, y, finger=1, end=False, wheel=False):
+        cmd = ((ld.CMD_TOUCH_END_CT if end else ld.CMD_TOUCH_CT) if wheel
+               else (ld.CMD_TOUCH_END if end else ld.CMD_TOUCH))
+        self.emit(cmd, b"\x00" + int(x).to_bytes(2, "big") + int(y).to_bytes(2, "big") + bytes([finger]))
+
+
+def mock_loupedeck(e, serial="FAKECT0000001", junk=b""):
+    """Un Loupedeck CT simulé, branché sur un LoupedeckManager comme s'il venait d'être détecté."""
+    port = MockLoupedeckPort(serial, junk=junk)
+    lm = LoupedeckManager(e)
+    with mock.patch("serial.Serial", return_value=port):
+        dev = ld.Loupedeck("COM-TEST", 0x0007, serial, on_event=lm._on_event)
+        dev.connect()
+    h = LoupedeckHandle(dev)
+    lm.handles["COM-TEST"] = h
+    h.page_id = lm._initial_page(h)
+    return lm, port, h
+
+
+def held_keys(since=0):
+    """Raccourcis clavier encore maintenus (press sans release) depuis l'index donné du journal."""
+    held = []
+    for kind, combo in KEYS.log[since:]:
+        if kind == "press":
+            held.append(combo)
+        elif kind == "release" and combo in held:
+            held.remove(combo)
+    return held
+
+
+def key_xy(index, cols=4, size=90, keys_x=60):
+    """Centre de la vignette `index` du pavé central, en coordonnées de la dalle."""
+    row, col = divmod(index, cols)
+    return keys_x + col * size + size // 2, row * size + size // 2
 
 
 # -- import Companion -----------------------------------------------------------
@@ -1727,6 +1849,1045 @@ def test_orchestream_v1_still_supported(tmp_path):
     from livedeck.integrations import probe_orchestream
     assert "v1" in probe_orchestream("127.0.0.1:18252")[1]
     e.stop()
+
+
+# -- Loupedeck ------------------------------------------------------------------
+def test_loupedeck_protocol(tmp_path):
+    """Poignée de main, trames et décodage des contrôles, y compris après une session mal refermée."""
+    e = engine(tmp_path, start=False)
+    # Rebut typique laissé dans le tampon : acquittements puis trame de fermeture WebSocket.
+    junk = b"\x82\x03\x03\x02@\x82\x03\x03\x02A\x88\x02\x03\xe8"
+    lm, port, h = mock_loupedeck(e, junk=junk)
+    assert port.flushed, "les tampons doivent être vidés avant la poignée de main"
+    assert h.dev.connected and h.serial == "FAKECT0000001"
+    assert wait(lambda: h.dev.firmware == "1.2.3", 3), h.dev.firmware
+    assert (h.cols, h.rows, h.size) == (4, 3, 90)
+
+    got = []
+    h.dev.on_event = got.append
+    port.button("key3")
+    port.button("key3", down=False)
+    port.rotate("knobBR", -3)
+    port.touch(*key_xy(6))
+    port.touch(120, 120, wheel=True)
+    assert wait(lambda: len(got) >= 5, 3), got
+    assert got[0] == {"type": "button", "id": "key3", "down": True, "serial": h.serial}
+    assert got[1]["down"] is False
+    assert got[2] == {"type": "rotate", "id": "knobBR", "delta": -3, "serial": h.serial}
+    assert got[3]["target"] == {"screen": "center", "key": 6, "row": 1, "col": 2}, got[3]
+    assert got[4]["target"] == {"screen": "wheel"}, got[4]
+    # Les bandeaux latéraux encadrent le pavé central sur la même dalle physique.
+    assert h.dev.target(20, 100) == {"screen": "left"}
+    assert h.dev.target(450, 100) == {"screen": "right"}
+    assert h.dev.panels() == {b"\x00M": (480, 270), b"\x00W": (240, 240)}
+    e.stop()
+
+
+def test_loupedeck_touch_release_follows_finger(tmp_path):
+    """Un doigt qui glisse hors de la vignette doit quand même la relâcher : sinon un bouton
+    intercom « maintenu » laisserait le micro ouvert en direct."""
+    e, pid, logs = one_page(tmp_path, {
+        "0,0": new_button(label="Cam 1", actions=[new_action("vmix.preview", input="Cam 1")]),
+        "1,2": new_button(label="Talk", actions=[new_action("hotkey", keys="shift+z", hold=True)])})
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = pid
+    since = len(KEYS.log)
+
+    # 1) appui franc sur une vignette : appuyé puis relâché normalement
+    port.touch(*key_xy(0), finger=7)
+    assert wait(lambda: e.pressed, 3), "l'appui n'est pas remonté au moteur"
+    port.touch(*key_xy(0), finger=7, end=True)
+    assert wait(lambda: not e.pressed, 3), "le relâché n'est pas remonté"
+
+    # 2) le doigt part d'une vignette « maintenue » et se lève sur le bandeau droit
+    port.touch(*key_xy(6), finger=8)
+    assert wait(lambda: held_keys(since) == ["shift+z"], 3), "le raccourci maintenu n'a pas démarré"
+    port.touch(455, 20, finger=8, end=True)          # relâché AILLEURS que sur la vignette
+    assert wait(lambda: not held_keys(since), 3), "touche clavier restée enfoncée après un glissement"
+    assert wait(lambda: not e.pressed, 3), f"bouton resté enfoncé : {e.pressed}"
+    assert not e._active, f"appui bloqué dans le moteur : {list(e._active)}"
+    assert not h.fingers, h.fingers
+
+    # 3) un doigt qui n'a jamais touché le pavé ne déclenche rien
+    port.touch(20, 50, finger=9)
+    port.touch(20, 90, finger=9, end=True)
+    time.sleep(0.2)
+    assert not e.pressed and not e._active
+    e.stop()
+
+
+def test_loupedeck_pages_and_hub(tmp_path):
+    """Le CT affiche une page comme un Stream Deck, navigue avec fnL/fnR, et le DeckHub
+    présente les deux familles derrière une seule API."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("CT A", cols=4, rows=3), new_page("CT B", cols=4, rows=3),
+                      new_page("XL", cols=8, rows=4)]
+    e.cfg["pages"][0]["buttons"]["0,1"] = new_button(label="Cam 2")
+    e.start()
+    lm, port, h = mock_loupedeck(e)
+    a, b = e.cfg["pages"][0]["id"], e.cfg["pages"][1]["id"]
+    assert h.page_id == a, "le CT doit prendre la première page à sa taille (4×3), pas la page XL"
+
+    lm.refresh()
+    assert lm.stats["images"] == 12, lm.stats          # 12 vignettes dessinées
+    drawn = [c for c in port.commands if c[0] == ld.CMD_FRAMEBUFF]
+    assert len(drawn) == 12 and all(d[1][:2] == b"\x00M" for d in drawn), len(drawn)
+    assert sum(1 for c in port.commands if c[0] == ld.CMD_DRAW) == 1, "une seule bascule d'écran"
+    # Aucun contrôle n'est configuré : les bandeaux et la molette, déjà noirs, ne reçoivent rien.
+    assert not [c for c in drawn if c[1][:2] == b"\x00W"]
+    before = len(drawn)
+    lm.refresh()                                       # rien n'a changé : le cache évite tout renvoi
+    assert len([c for c in port.commands if c[0] == ld.CMD_FRAMEBUFF]) == before
+
+    port.button("fnR")                                 # page suivante
+    assert wait(lambda: h.page_id == b, 3), h.page_id
+    port.button("fnL")
+    assert wait(lambda: h.page_id == a, 3), h.page_id
+    assert [p["id"] for p in e.pages if (p["cols"], p["rows"]) == (8, 4)], "la page XL reste disponible"
+
+    # Le hub agrège Stream Deck et Loupedeck sans que l'interface voie la différence.
+    dm, d, sdh = mock_deck(e)
+    hub = DeckHub(e, [dm, lm])
+    e.decks = hub
+    models = {i["model"] for i in hub.info()}
+    assert models == {"Stream Deck Original", "Loupedeck CT"}, models
+    assert hub.error == "", hub.error
+    assert hub.stats["images"] >= 12
+    hub.set_brightness(h.serial, 40)                   # diffusé : seul le propriétaire réagit
+    assert wait(lambda: any(c[0] == ld.CMD_BRIGHTNESS for c in port.commands), 3)
+    hub.diag_handler = lambda *a: None
+    assert dm.diag_handler is not None and lm.diag_handler is not None
+    hub.diag_handler = None
+    e.stop()
+
+
+def test_loupedeck_unplug_releases_keys(tmp_path):
+    """Appareil débranché pendant un appui maintenu : la touche clavier doit être relâchée."""
+    e, pid, logs = one_page(tmp_path, {
+        "0,0": new_button(label="Talk", actions=[new_action("hotkey", keys="shift+z", hold=True)])})
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = pid
+    since = len(KEYS.log)
+    port.touch(*key_xy(0), finger=3)
+    assert wait(lambda: held_keys(since) == ["shift+z"], 3), "le raccourci maintenu n'a pas démarré"
+    port.is_open = False                               # câble arraché
+    h.dev._fail()
+    with mock.patch.object(ld, "discover", return_value=[]):
+        lm._scan()
+    assert not lm.handles, "l'appareil disparu doit être retiré"
+    assert wait(lambda: not held_keys(since), 3), "touche clavier restée enfoncée après débranchement"
+    e.stop()
+
+
+def test_loupedeck_model_sizes():
+    assert deck_size("Loupedeck CT") == (4, 3)
+    assert deck_size("Loupedeck Live") == (4, 3)
+    assert deck_size("Loupedeck Live S") == (5, 3)
+    assert deck_size("Razer Stream Controller") == (4, 3)
+    assert deck_size("Razer Stream Controller X") == (5, 3)
+    assert deck_size("Stream Deck XL") == (8, 4), "les modèles Elgato ne changent pas"
+    assert deck_size("Stream Deck +") == (4, 2)
+    assert set(ld.PROFILES) == {0x0003, 0x0004, 0x0006, 0x0007, 0x0D06, 0x0D09}
+    ct = ld.PROFILES[0x0007]
+    assert (ct.cols, ct.rows, ct.keys) == (4, 3, 12)
+    assert ct.displays["wheel"]["big_endian"] is True, "l'écran de la molette est gros-boutiste"
+    assert len(ct.buttons) == 20 and len(ct.knobs) == 6
+    # Loupedeck annonce « 20 boutons RGB » : les 8 ronds + les 12 du bas, pas les molettes.
+    leds = {c["id"] for c in ld.controls(ct) if c.get("led")}
+    assert leds == set(ct.buttons) and len(leds) == 20, leds
+    assert not any(ld.has_led(k) for k in ("knobTL", "wheel")), "une molette n'a pas de diode"
+    # « keyboard » commence par « key » sans être un bouton rond.
+    assert not ld.is_round("keyboard") and ld.is_round("key7")
+    assert ld.control_kind("wheel") == "rotary" and ld.control_kind("key0") == "button"
+    groups = {c["id"]: c["group"] for c in ld.controls(ct)}
+    assert groups["keyboard"] == "Boutons" and groups["key0"] == "Boutons ronds"
+    assert len([c for c in ld.controls(ct) if c["group"] == "Bandeaux"]) == 6
+
+
+def test_loupedeck_controls_actions(tmp_path):
+    """Molettes, bandeaux et boutons physiques déclenchent de vraies actions, avec accélération."""
+    e = engine(tmp_path, start=False)
+    page = new_page("CT", cols=4, rows=3)
+    page["controls"] = {
+        "knobTR": new_control("rotary", label="Volume", step=3,
+                              actions_cw=[new_action("vmix.function", function="AudioPlus",
+                                                     params="Input=Magneto&Value=$(delta_abs)")],
+                              actions_ccw=[new_action("vmix.function", function="AudioMinus",
+                                                      params="Input=Magneto&Value=$(delta_abs)")],
+                              actions=[new_action("vmix.function", function="AudioOff", params="Input=Magneto")]),
+        "stripL2": new_control("button", label="Bandeau",
+                               actions=[new_action("vmix.function", function="Fade")]),
+        "key2": new_control("button", label="Rond 3",
+                            actions=[new_action("vmix.function", function="Cut")]),
+        "wheel": new_control("rotary", label="Master",
+                             actions_cw=[new_action("vmix.function", function="SetMasterVolume",
+                                                    params="Value=$(delta)")],
+                             actions_ccw=[new_action("vmix.function", function="SetMasterVolume",
+                                                     params="Value=$(delta)")]),
+    }
+    e.cfg["pages"] = [page]
+    e.start()
+    lm, port, h = mock_loupedeck(e)
+    sent = vmix_server()
+    names = lambda since: [n for n, _ in sent.functions[since:]]  # noqa: E731
+
+    # 1) Le pas de 3 : deux crans ne déclenchent rien, le troisième oui, et le reste est gardé.
+    before = len(sent.functions)
+    port.rotate("knobTR", 1)
+    port.rotate("knobTR", 1)
+    time.sleep(0.4)
+    assert not names(before), "le pas de 3 doit retenir les deux premiers crans"
+    port.rotate("knobTR", 1)
+    assert wait(lambda: names(before), 3), "le 3e cran doit déclencher"
+    assert sent.functions[before][0] == "AudioPlus", sent.functions[before]
+    assert sent.functions[before][1].get("Value") == "1", sent.functions[before]
+
+    # 2) Sens inverse : l'autre liste, et $(delta_abs) sans le signe.
+    before = len(sent.functions)
+    for _ in range(3):
+        port.rotate("knobTR", -1)
+    assert wait(lambda: names(before), 3)
+    assert sent.functions[before][0] == "AudioMinus", sent.functions[before]
+    assert sent.functions[before][1].get("Value") == "1", "delta_abs ne doit pas porter le signe"
+
+    # 3) $(delta) garde le signe sur la molette centrale (pas de 1).
+    before = len(sent.functions)
+    port.rotate("wheel", -1)
+    assert wait(lambda: names(before), 3)
+    assert sent.functions[before][0] == "SetMasterVolume"
+    assert sent.functions[before][1].get("Value") == "-1", sent.functions[before]
+
+    # 4) Appui sur la molette : la liste « actions », comme une touche.
+    before = len(sent.functions)
+    port.button("knobTR")
+    port.button("knobTR", down=False)
+    assert wait(lambda: "AudioOff" in names(before), 3), names(before)
+
+    # 5) Zone de bandeau : le y décide de la zone touchée (3 zones de 90 px).
+    assert ld.strip_zone("L", 10) == "stripL1" and ld.strip_zone("L", 135) == "stripL2"
+    assert ld.strip_zone("R", 260) == "stripR3"
+    before = len(sent.functions)
+    port.touch(20, 135, finger=2)                      # bandeau gauche, zone du milieu
+    port.touch(20, 135, finger=2, end=True)
+    assert wait(lambda: "Fade" in names(before), 3), names(before)
+
+    # 6) Bouton rond physique
+    before = len(sent.functions)
+    port.button("key2")
+    port.button("key2", down=False)
+    assert wait(lambda: "Cut" in names(before), 3), names(before)
+
+    # 7) Un bouton sans contrôle affecté garde la navigation par défaut
+    e.cfg["pages"].append(new_page("CT 2", cols=4, rows=3))
+    port.button("fnR")
+    assert wait(lambda: h.page_id == e.cfg["pages"][1]["id"], 3), h.page_id
+    e.stop()
+
+
+def test_loupedeck_controls_render(tmp_path):
+    """Bandeaux, molette centrale et diodes RGB suivent le retour d'état, sans renvoi inutile."""
+    e = engine(tmp_path, start=False)
+    page = new_page("CT", cols=4, rows=3)
+    page["controls"] = {
+        "stripR1": new_control("button", label="PGM", bg="#dc2626"),
+        "wheel": new_control("rotary", label="Master", bg="#0d9488"),
+        "key0": new_control("button", label="Rond", bg="#2563eb"),
+    }
+    e.cfg["pages"] = [page]
+    e.start()
+    lm, port, h = mock_loupedeck(e)
+    lm.refresh()
+    fb = [c for c in port.commands if c[0] == ld.CMD_FRAMEBUFF]
+    assert any(c[1][:2] == b"\x00W" for c in fb), "l'écran de la molette doit être dessiné"
+    right = [c for c in fb if c[1][:2] == b"\x00M" and c[1][2:10] == struct.pack(">HHHH", 420, 0, 60, 270)]
+    assert right, "le bandeau droit doit être dessiné à x=420 sur 60×270"
+    # La diode du bouton rond prend la couleur du contrôle.
+    leds = [c for c in port.commands if c[0] == ld.CMD_COLOR]
+    assert any(c[1] == bytes([ld.BUTTON_CODES["key0"], 0x25, 0x63, 0xEB]) for c in leds), leds
+    n = len(port.commands)
+    lm.refresh()                                        # rien n'a changé : aucun octet de plus
+    assert len(port.commands) == n, "le cache des zones doit éviter tout renvoi"
+    e.stop()
+
+
+def test_loupedeck_control_editing(tmp_path):
+    """Un contrôle s'édite comme une touche : même inspecteur, même annulation, même stockage."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("CT", cols=4, rows=3)]
+    e.start()
+    pid = e.cfg["pages"][0]["id"]
+    k = control_key("knobCL")
+
+    # Le moteur écrit dans « controls », pas dans la grille.
+    e.set_button(pid, k, new_control("rotary", label="Gain"))
+    assert e.cfg["pages"][0]["controls"]["knobCL"]["label"] == "Gain"
+    assert k not in e.cfg["pages"][0]["buttons"], "un contrôle ne doit pas polluer la grille"
+    assert e.button(pid, k)["label"] == "Gain", "le moteur doit résoudre « c:knobCL »"
+    assert (pid, k) in [(p["id"], kk) for p, kk, _ in e.all_buttons()], "absent de all_buttons()"
+
+    w = MainWindow(e)
+    w.page_id = pid
+    w.controls.set_page(pid)
+    assert w.controls.isVisible() or w.controls.profile() is not None
+    w._select_control(k)
+    assert w.inspector.key == k and w.inspector.b["kind"] == "rotary"
+    # Les trois listes d'une molette sont proposées, pas « appui long ».
+    w.inspector.side = "actions_cw"
+    w.inspector.rebuild()
+    w.inspector.b["actions_cw"] = [new_action("vmix.function", function="AudioPlus")]
+    w.inspector.commit()
+    assert e.cfg["pages"][0]["controls"]["knobCL"]["actions_cw"][0]["function"] == "AudioPlus"
+    e.undo()
+    assert not e.cfg["pages"][0]["controls"]["knobCL"]["actions_cw"], "annuler doit fonctionner"
+    # Supprimer le contrôle le retire du bloc controls.
+    e.set_button(pid, k, None)
+    assert "knobCL" not in e.cfg["pages"][0]["controls"]
+    w.close()
+    e.stop()
+
+
+def test_loupedeck_selection_and_shortcuts(tmp_path):
+    """Un contrôle sélectionné se comporte comme une touche pour les raccourcis d'édition.
+
+    Avant correctif, la fenêtre lisait `grid.sel` partout : Ctrl+Z vidait l'inspecteur et
+    copier/coller/supprimer ne faisaient rien, sans message."""
+    e = engine(tmp_path, start=False)
+    page = new_page("CT", cols=4, rows=3)
+    page["buttons"]["0,0"] = new_button(label="Cam 1")
+    page["controls"] = {"knobTL": new_control("rotary", label="Gain"),
+                        "knobBR": new_control("rotary", label="Replay")}
+    e.cfg["pages"] = [page]
+    e.start()
+    pid = page["id"]
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    w.controls.set_page(pid)
+    kt, kb = control_key("knobTL"), control_key("knobBR")
+
+    # Les deux sélections s'excluent et `sel` désigne toujours la bonne.
+    w.grid.select("0,0")
+    assert w.sel == "0,0" and w.controls.sel is None
+    w._select_control(kt)
+    assert w.sel == kt and w.grid.sel is None, (w.sel, w.grid.sel)
+    assert w._selected()["label"] == "Gain"
+
+    # Ctrl+Z doit garder le contrôle dans l'inspecteur, pas le vider.
+    w.inspector.load(pid, kt)
+    e.set_button(pid, kt, {**e.button(pid, kt), "label": "Gain 2"})
+    w.undo()
+    assert w.inspector.key == kt, "annuler ne doit pas vider l'inspecteur d'un contrôle"
+    assert w.inspector.b and w.inspector.b["label"] == "Gain", w.inspector.b
+
+    # Copier un contrôle puis le coller sur un autre : la nature (molette) est conservée.
+    w._select_control(kt)
+    w.copy()
+    assert w.clipboard and w.clipboard["label"] == "Gain"
+    w._select_control(kb)
+    w.paste()
+    assert e.cfg["pages"][0]["controls"]["knobBR"]["label"] == "Gain"
+    assert e.cfg["pages"][0]["controls"]["knobBR"]["kind"] == "rotary", "coller doit garder la molette"
+    assert e.cfg["pages"][0]["controls"]["knobBR"]["id"] != e.cfg["pages"][0]["controls"]["knobTL"]["id"]
+
+    # Supprimer agit bien sur le contrôle, et pas sur la grille.
+    w._select_control(kb)
+    w.delete_selected()
+    assert "knobBR" not in e.cfg["pages"][0]["controls"]
+    assert e.cfg["pages"][0]["buttons"]["0,0"]["label"] == "Cam 1", "la grille ne doit pas bouger"
+
+    # Dupliquer n'a pas de sens pour un organe physique : on le dit au lieu de ne rien faire.
+    w._select_control(kt)
+    before = json.dumps(e.cfg, sort_keys=True)
+    w.duplicate_selected()
+    assert json.dumps(e.cfg, sort_keys=True) == before, "dupliquer ne doit rien changer"
+
+    # Échap libère les deux sélections.
+    w.clear_selection()
+    assert w.sel is None
+    w.close()
+    e.stop()
+
+
+def test_loupedeck_search_finds_controls(tmp_path):
+    """Ctrl+F trouve les contrôles comme les touches, et les sélectionne correctement."""
+    e = engine(tmp_path, start=False)
+    page = new_page("CT", cols=4, rows=3)
+    page["buttons"]["0,0"] = new_button(label="Cam 1")
+    page["controls"] = {"knobTL": new_control("rotary", label="Gain micro")}
+    e.cfg["pages"] = [page]
+    e.start()
+    pid = page["id"]
+    dlg = SearchDialog(e, None)
+    keys = [dlg.list.item(i).data(ROLE) for i in range(dlg.list.count())]
+    assert (pid, control_key("knobTL")) in keys, keys
+    assert (pid, "0,0") in keys, keys
+    # Recherche par libellé du contrôle…
+    dlg._filter("gain micro")
+    shown = [dlg.list.item(i).data(ROLE) for i in range(dlg.list.count())
+             if not dlg.list.item(i).isHidden()]
+    assert shown == [(pid, control_key("knobTL"))], shown
+    # …et par le nom de l'organe physique.
+    dlg._filter("molette haut gauche")
+    shown = [dlg.list.item(i).data(ROLE) for i in range(dlg.list.count())
+             if not dlg.list.item(i).isHidden()]
+    assert shown == [(pid, control_key("knobTL"))], shown
+    dlg.close()
+
+    # Le choix d'un contrôle depuis la recherche le sélectionne sans toucher la grille.
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    w.controls.set_page(pid)
+    w.select(control_key("knobTL"))
+    assert w.sel == control_key("knobTL") and w.grid.sel is None
+    w.close()
+    e.stop()
+
+
+def test_loupedeck_surface_view(tmp_path):
+    """La vue dessine la surface Loupedeck (molettes, bandeaux, molette centrale) et la détecte
+    toute seule quand un Loupedeck affiche la page. Le Stream Deck, lui, ne change pas."""
+    e = engine(tmp_path, start=False)
+    sd = new_page("XL", cols=8, rows=4)
+    ct = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    auto = new_page("Auto", cols=4, rows=3)                 # surface déduite de l'appareil
+    e.cfg["pages"] = [sd, ct, auto]
+    e.start()
+    g = DeckGrid(e)
+    g.resize(1100, 800)
+
+    # Stream Deck : rien n'a changé, uniquement des touches de grille.
+    g.set_page(sd["id"])
+    assert g.surface == "streamdeck"
+    kinds = {}
+    for _, (_, kind) in g._layout().items():
+        kinds[kind] = kinds.get(kind, 0) + 1
+    assert kinds == {"key": 32}, kinds
+
+    # Loupedeck imposé par la page : toute la surface est cliquable.
+    g.set_page(ct["id"])
+    assert g.surface == "loupedeck"
+    lay = g._layout()
+    kinds = {}
+    for _, (_, kind) in lay.items():
+        kinds[kind] = kinds.get(kind, 0) + 1
+    # 8 boutons ronds sous le pavé + 2 blocs de 6 de part et d'autre de la molette centrale.
+    assert kinds == {"key": 12, "strip": 6, "knob": 6, "round": 20, "wheel": 1}, kinds
+    for cid in ("knobTL", "knobBR", "wheel", "stripL1", "stripR3", "key0", "key7", "fnL", "e"):
+        assert control_key(cid) in lay, cid
+
+    # La molette centrale est bien centrée, avec 6 boutons à sa gauche et 6 à sa droite.
+    wheel = lay[control_key("wheel")][0]
+    keys_mid = (lay["0,0"][0].left() + lay["0,3"][0].right()) / 2
+    assert abs(wheel.center().x() - keys_mid) < 2, (wheel.center().x(), keys_mid)
+    # Proportions de l'appareil réel : la molette fait 240 px pour des touches de 90 px.
+    key_w = lay["0,0"][0].width()
+    assert abs(wheel.width() / key_w - 240 / 90) < 0.05, (wheel.width(), key_w)
+    strip = lay[control_key("stripL2")][0]
+    assert abs(strip.width() / key_w - 60 / 90) < 0.05, (strip.width(), key_w)
+    # Boîtier presque carré (150 × 160 mm), colonne d'état de LiveDeck exclue.
+    body = g._geom()[6]
+    assert 0.88 < body.width() / body.height() < 1.0, (body.width(), body.height())
+    assert body.right() < lay[control_key("knobTR")][0].right() + key_w, "les molettes sont au bord"
+    left = [c for c in BOTTOM_L if lay[control_key(c)][0].center().x() < wheel.left()]
+    right = [c for c in BOTTOM_R if lay[control_key(c)][0].center().x() > wheel.right()]
+    assert len(left) == 6 and len(right) == 6, (left, right)
+    # Chaque bloc fait bien 2 colonnes × 3 rangées.
+    for names in (BOTTOM_L, BOTTOM_R):
+        xs = {round(lay[control_key(c)][0].center().x()) for c in names}
+        ys = {round(lay[control_key(c)][0].center().y()) for c in names}
+        assert len(xs) == 2 and len(ys) == 3, (names, xs, ys)
+
+    # Le pointage retrouve chaque nature au bon endroit (centre du rectangle).
+    for cid in ("knobTL", "wheel", "stripR2", "key3", "save"):
+        assert g.key_at(lay[control_key(cid)][0].center()) == control_key(cid), cid
+    assert g.key_at(lay["0,0"][0].center()) == "0,0"
+    # Un clic hors d'une molette ronde, mais dans son rectangle, ne la sélectionne pas.
+    r = lay[control_key("knobTL")][0]
+    assert g.key_at(r.topLeft() + QPointF(1, 1)) != control_key("knobTL")
+
+    # Aucun chevauchement entre zones : un clic ne peut pas être ambigu.
+    rects = [(k, v[0]) for k, v in lay.items()]
+    for i, (k1, r1) in enumerate(rects):
+        for k2, r2 in rects[i + 1:]:
+            inter = r1.intersected(r2)
+            assert inter.width() <= 1 or inter.height() <= 1, f"{k1} et {k2} se chevauchent"
+
+    # Détection automatique : un CT branché qui affiche la page suffit.
+    g.set_page(auto["id"])
+    assert g.surface == "streamdeck", "sans appareil, on reste sur la vue Stream Deck"
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = auto["id"]
+    e.decks = DeckHub(e, [lm])
+    assert g.surface == "loupedeck", "un Loupedeck affichant la page doit changer la vue"
+
+    # Le dessin ne lève pas et les info-bulles des contrôles non plus.
+    auto["controls"] = {"knobTL": new_control("rotary", label="Gain",
+                                              actions_cw=[new_action("vmix.function", function="AudioPlus")],
+                                              step=4)}
+    g.grab()
+    tip = g.tooltip_text(control_key("knobTL"))
+    assert "Gain" in tip and "Rotation" in tip and "4 crans" in tip, tip
+    assert "Molette haut droite" in g.tooltip_text(control_key("knobTR")), "libellé de l'organe libre"
+    g.grab()
+
+    # Une molette n'accepte ni un déplacement de touche ni une rangée d'inputs.
+    md = QMimeData()
+    md.setData("application/x-livedeck-inputs", b"[]")
+    assert not g._accepts(control_key("knobTL"), md)
+    assert g._accepts("0,0", md)
+    md2 = QMimeData()
+    md2.setData("application/x-livedeck-preset", b"take")
+    assert g._accepts(control_key("knobTL"), md2), "un preset peut être déposé sur une molette"
+    e.stop()
+
+
+def test_selected_control_outlined_in_view(tmp_path):
+    """Le contrôle suivi ou sélectionné doit être entouré de blanc dans la vue, comme une touche.
+
+    Avant correctif, sélectionner un contrôle vidait `grid.sel` : la vue ne savait plus quoi
+    entourer, et rien ne montrait ce qu'on éditait."""
+    e = engine(tmp_path, start=False)
+    ct = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    sd = new_page("XL", cols=8, rows=4)
+    e.cfg["pages"] = [ct, sd]
+    e.start()
+    w = MainWindow(e)
+    w.page_id = ct["id"]
+    w.grid.set_page(ct["id"])
+    w.controls.set_page(ct["id"])
+    k = control_key("knobTL")
+    assert w.grid.draws(k) and w.grid.draws("0,0")
+
+    w._select_control(k, silent=True)                  # comme « suivre le deck »
+    assert w.grid.sel == k, "la vue doit porter la sélection pour pouvoir l'entourer"
+    assert w.grid._outline(k) is not None, "pas de liseré autour du contrôle suivi"
+    assert w.grid._outline(k).color().name() == "#ffffff", w.grid._outline(k).color().name()
+    assert w.sel == k and w.inspector.key == k
+    # Une touche de la grille reprend la main proprement.
+    w.grid.select("0,0")
+    assert w.sel == "0,0" and w.grid._outline(k) is None
+
+    # Un appui sur l'appareil éclaire aussi le contrôle (flash), puisque la vue le dessine.
+    w.follow.setChecked(True)
+    w._activity(ct["id"], k, "CT")
+    assert w.grid.sel == k and k in w.grid._flash, w.grid._flash
+
+    # Page Stream Deck : le contrôle n'est pas dessiné, la sélection revient aux pastilles.
+    w.page_id = sd["id"]
+    w.grid.set_page(sd["id"])
+    w.controls.set_page(sd["id"])
+    assert not w.grid.draws(k)
+    w._select_control(k, silent=True)
+    assert w.controls.sel == k and w.grid.sel is None and w.sel == k
+    w.close()
+    e.stop()
+
+
+def test_free_nav_buttons_are_visible(tmp_path):
+    """Fn G / Fn D libres changent de page : la vue et l'info-bulle doivent le dire, sinon on le
+    découvre en appuyant — et ça passe pour un comportement bizarre."""
+    e = engine(tmp_path, start=False)
+    ct = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    e.cfg["pages"] = [ct, new_page("CT 2", cols=4, rows=3, surface="loupedeck")]
+    e.start()
+    g = DeckGrid(e)
+    g.resize(1000, 900)
+    g.set_page(ct["id"])
+    tip = g.tooltip_text(control_key("fnR"))
+    assert "page suivante" in tip, tip
+    assert "page précédente" in g.tooltip_text(control_key("fnL"))
+    assert ld.DEFAULT_NAV == {"fnL": "prev", "fnR": "next"}
+    assert ld.NAV_MARK["next"] == "▶"
+    # Un bouton qui n'a pas ce rôle n'affiche rien de tel.
+    assert "page" not in g.tooltip_text(control_key("save")).lower()
+    # Dès qu'on lui donne une action, la navigation s'efface au profit de celle-ci.
+    e.set_button(ct["id"], control_key("fnR"), new_control("button", label="REC"))
+    assert "page suivante" not in g.tooltip_text(control_key("fnR"))
+    g.grab()
+    e.stop()
+
+
+def test_loupedeck_controlbar_hidden_on_surface(tmp_path):
+    """Les pastilles ne doivent pas doubler la surface quand celle-ci dessine déjà les contrôles."""
+    e = engine(tmp_path, start=False)
+    ct = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    ct["controls"] = {"knobTL": new_control("rotary", label="Gain")}
+    plain = new_page("XL", cols=8, rows=4)
+    plain["controls"] = {"knobTL": new_control("rotary", label="Gain")}
+    e.cfg["pages"] = [ct, plain]
+    e.start()
+    bar = ControlBar(e)
+    bar.set_page(ct["id"])
+    assert bar.on_surface() and bar.isHidden(), "la surface dessine déjà les molettes"
+    bar.set_page(plain["id"])
+    assert not bar.on_surface(), "page Stream Deck : les contrôles n'ont pas de place sur la vue"
+    e.stop()
+
+
+def test_page_model_sets_surface(tmp_path):
+    """Choisir un modèle Loupedeck doit aussi basculer la vue, sinon le réglage n'a aucun effet
+    visible et l'utilisateur croit que ça n'a pas marché."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("P", cols=8, rows=4)]
+    e.start()
+    w = MainWindow(e)
+    w.page_id = e.cfg["pages"][0]["id"]
+    w.grid.set_page(w.page_id)
+    w._set_page_model(*DECK_SIZES["Loupedeck CT / Live (4×3)"], surface_of("Loupedeck CT / Live (4×3)"))
+    p = e.page(w.page_id)
+    assert (p["cols"], p["rows"], p["surface"]) == (4, 3, "loupedeck"), p
+    assert w.grid.surface == "loupedeck"
+    w._set_page_model(*DECK_SIZES["Stream Deck XL (8×4)"], surface_of("Stream Deck XL (8×4)"))
+    assert e.page(w.page_id)["surface"] == "streamdeck"
+    assert w.grid.surface == "streamdeck"
+    assert surface_of("Razer Stream Controller") == "loupedeck"
+    assert surface_of("Stream Deck MK.2") == "streamdeck"
+    w.close()
+    e.stop()
+
+
+def test_follow_deck_selects_empty_keys(tmp_path):
+    """« Suivre le deck » doit sélectionner même une touche ou une molette SANS action : c'est
+    ainsi qu'on câble une surface, en appuyant l'organe qu'on veut configurer."""
+    e = engine(tmp_path, start=False)
+    page = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    page["buttons"]["0,0"] = new_button(label="Cam 1")        # une seule touche câblée
+    e.cfg["pages"] = [page]
+    e.start()
+    pid = page["id"]
+    seen = []
+    e.listeners.append(lambda kind, p: seen.append(p) if kind == "activity" else None)
+
+    # Touche de grille vide, appuyée sur l'appareil.
+    e.press(pid, "2,3", True, deck="DECK1")
+    e.press(pid, "2,3", False, deck="DECK1")
+    assert (pid, "2,3", "DECK1") in seen, seen
+    # Une touche câblée ne doit pas être signalée deux fois.
+    seen.clear()
+    e.press(pid, "0,0", True, deck="DECK1")
+    e.press(pid, "0,0", False, deck="DECK1")
+    assert seen.count((pid, "0,0", "DECK1")) == 1, seen
+    # Un appui depuis l'écran (sans deck) ne doit rien changer au comportement existant.
+    seen.clear()
+    e.press(pid, "1,1", True)
+    assert not seen, "une touche vide cliquée à l'écran ne déclenche pas d'activité"
+
+    # Contrôles Loupedeck libres : bouton, molette tournée, bouton rond.
+    lm, port, h = mock_loupedeck(e)
+    h.page_id = pid
+    seen.clear()
+    port.button("key5")
+    assert wait(lambda: (pid, control_key("key5"), h.serial) in seen, 3), seen
+    port.rotate("knobCR", 1)
+    assert wait(lambda: (pid, control_key("knobCR"), h.serial) in seen, 3), seen
+    port.touch(20, 135, finger=4)                              # zone libre d'un bandeau
+    assert wait(lambda: (pid, control_key("stripL2"), h.serial) in seen, 3), seen
+
+    # fnL / fnR libres gardent la navigation : ils ne sélectionnent pas.
+    e.cfg["pages"].append(new_page("CT 2", cols=4, rows=3, surface="loupedeck"))
+    seen.clear()
+    port.button("fnR")
+    assert wait(lambda: h.page_id == e.cfg["pages"][1]["id"], 3)
+    assert not any(k == control_key("fnR") for _, k, _ in seen), seen
+
+    # L'éditeur suit : la molette libre devient la sélection courante.
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    w.controls.set_page(pid)
+    w.follow.setChecked(True)
+    w._activity(pid, control_key("knobTL"), h.serial)
+    assert w.sel == control_key("knobTL") and w.inspector.key == control_key("knobTL")
+    w._activity(pid, "2,3", h.serial)
+    assert w.sel == "2,3" and w.controls.sel is None, "retour sur la grille : le contrôle est libéré"
+    w.close()
+    e.stop()
+
+
+# -- Réglages au cran (molettes) et Windows ------------------------------------
+def _reset_vmix_audio():
+    s = vmix_server()
+    with s.state_lock:
+        s.audio["master"].update(volume=80.0, headphones=70.0)
+        for b in "ABCDEFG":
+            s.audio[b]["volume"] = 100.0
+        for n in s.volume:
+            s.volume[n] = 100.0
+    return s
+
+
+def _knob_page(e, controls):
+    page = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    page["controls"] = controls
+    e.cfg["pages"] = [page]
+    return page["id"]
+
+
+def test_vmix_audio_state_parsed(tmp_path):
+    """Le master, le casque et les bus A-G sont lus dans le XML de vMix."""
+    _reset_vmix_audio()
+    e = engine(tmp_path)
+    st = e.vmix.state
+    assert wait(lambda: st.audio.get("master"), 3), st.audio
+    assert st.audio["master"]["volume"] == 80.0 and st.audio["master"]["headphones"] == 70.0, st.audio
+    assert set(st.audio) == {"master", *"ABCDEFG"}, st.audio
+    assert st.audio["C"] == {"volume": 100.0, "muted": False}
+    e.stop()
+
+
+def test_adjust_rapid_ticks_are_not_lost(tmp_path):
+    """Rotation rapide : chaque cran compte, même si vMix n'a pas encore renvoyé son état.
+
+    Sans la « valeur optimiste », chaque cran relirait 80 et le volume finirait à 82 au lieu de 90."""
+    s = _reset_vmix_audio()
+    e = engine(tmp_path)
+    assert wait(lambda: e.vmix.state.audio.get("master"), 3)
+    pid = _knob_page(e, {"knobTL": new_control(
+        "rotary", label="Master", actions_cw=[new_action("vmix.adjust", target="master", amount=2)])})
+    for _ in range(5):
+        e.rotate(pid, "knobTL", 1, deck="CT")          # 5 crans d'affilée, sans attendre
+    assert wait(lambda: s.audio["master"]["volume"] == 90.0, 3), s.audio["master"]
+    # Sens inverse avec la MÊME liste : l'action au cran vaut pour les deux sens.
+    for _ in range(3):
+        e.rotate(pid, "knobTL", -1, deck="CT")
+    assert wait(lambda: s.audio["master"]["volume"] == 84.0, 3), s.audio["master"]
+    # Butée : jamais au-delà de 100.
+    for _ in range(20):
+        e.rotate(pid, "knobTL", 1, deck="CT")
+    assert wait(lambda: s.audio["master"]["volume"] == 100.0, 3), s.audio["master"]
+    n = len(s.functions)
+    e.rotate(pid, "knobTL", 1, deck="CT")                # déjà à 100 : rien n'est envoyé
+    time.sleep(0.3)
+    assert not [f for f in s.functions[n:] if f[0] == "SetMasterVolume"], s.functions[n:]
+    e.stop()
+
+
+def test_adjust_targets(tmp_path):
+    """Chaque cible envoie la bonne commande vMix, avec la bonne valeur."""
+    s = _reset_vmix_audio()
+    e = engine(tmp_path)
+    st = e.vmix.state
+    assert wait(lambda: st.audio.get("master"), 3)
+    first = st.inputs[0]["title"]
+    video = next(i for i in st.inputs if i.get("duration"))
+    pid = _knob_page(e, {
+        "knobTL": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="input_volume",
+                                                               input=first, amount=5)]),
+        "knobCL": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="bus", bus="C", amount=3)]),
+        "knobBL": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="headphones", amount=4)]),
+        "knobTR": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="preview", amount=1)]),
+        "knobCR": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="list",
+                                                               input=first, amount=1)]),
+        "knobBR": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="countdown",
+                                                               input=first, amount=10)]),
+        "wheel": new_control("rotary", actions_cw=[new_action("vmix.adjust", target="position",
+                                                              input=video["title"], amount=2)]),
+    })
+
+    def last(name, since):
+        return next((q for f, q in reversed(s.functions[since:]) if f == name), None)
+
+    n = len(s.functions)
+    e.rotate(pid, "knobTL", -2, deck="CT")              # input : 100 − 2×5
+    assert wait(lambda: last("SetVolume", n), 3)
+    assert last("SetVolume", n)["Value"] == "90", last("SetVolume", n)
+    e.rotate(pid, "knobCL", -1, deck="CT")
+    assert wait(lambda: last("SetBusCVolume", n), 3)
+    assert last("SetBusCVolume", n)["Value"] == "97"
+    e.rotate(pid, "knobBL", 1, deck="CT")
+    assert wait(lambda: last("SetHeadphonesVolume", n), 3)
+    assert last("SetHeadphonesVolume", n)["Value"] == "74"
+
+    # Preview : input suivant, bloqué aux extrémités (jamais de saut du dernier au premier).
+    with s.state_lock:
+        s.mixes[1]["preview"] = 2
+    assert wait(lambda: st.preview(1) == 2, 3)
+    e.rotate(pid, "knobTR", 1, deck="CT")
+    assert wait(lambda: last("PreviewInput", n), 3)
+    assert last("PreviewInput", n)["Input"] == "3", last("PreviewInput", n)
+    m = len(s.functions)
+    e.rotate(pid, "knobTR", -50, deck="CT")
+    assert wait(lambda: last("PreviewInput", m), 3)
+    assert last("PreviewInput", m)["Input"] == str(min(i["number"] for i in st.inputs))
+
+    # Liste : NextItem / PreviousItem répétés autant que de crans.
+    m = len(s.functions)
+    e.rotate(pid, "knobCR", -3, deck="CT")
+    assert wait(lambda: len([f for f, _ in s.functions[m:] if f == "PreviousItem"]) == 3, 3), s.functions[m:]
+
+    # Compte à rebours : relatif natif, signe conservé.
+    m = len(s.functions)
+    e.rotate(pid, "knobBR", -1, deck="CT")
+    assert wait(lambda: last("AdjustCountdown", m), 3)
+    assert last("AdjustCountdown", m)["Value"] == "-10"
+
+    # Position : borne à 0, en millisecondes.
+    m = len(s.functions)
+    e.rotate(pid, "wheel", -100, deck="CT")
+    assert wait(lambda: last("SetPosition", m), 3)
+    assert last("SetPosition", m)["Value"] == "0", last("SetPosition", m)
+    e.stop()
+
+
+def test_relative_fallback_only_for_relative_actions(tmp_path):
+    """Une action quelconque placée d'un seul côté NE doit PAS se déclencher dans l'autre sens :
+    seul un réglage au cran a un sens dans les deux directions."""
+    s = _reset_vmix_audio()
+    e = engine(tmp_path)
+    pid = _knob_page(e, {"knobTL": new_control(
+        "rotary", actions_cw=[new_action("vmix.function", function="Cut")])})
+    n = len(s.functions)
+    e.rotate(pid, "knobTL", -1, deck="CT")
+    time.sleep(0.3)
+    assert not [f for f, _ in s.functions[n:] if f == "Cut"], "un Cut ne doit pas partir à l'envers"
+    e.rotate(pid, "knobTL", 1, deck="CT")
+    assert wait(lambda: [f for f, _ in s.functions[n:] if f == "Cut"], 3)
+    assert is_relative(new_action("vmix.adjust")) and is_relative(new_action("win.scroll"))
+    assert is_relative(new_action("win.audio", mode="adjust"))
+    assert not is_relative(new_action("win.audio", mode="toggle")), "couper n'est pas un réglage au cran"
+    e.stop()
+
+
+def test_level_feedback_gauge(tmp_path):
+    """La molette affiche la jauge et la valeur de ce qu'elle règle, et suit un changement fait
+    dans vMix (sans action de LiveDeck)."""
+    s = _reset_vmix_audio()
+    e = engine(tmp_path)
+    assert wait(lambda: e.vmix.state.audio.get("master"), 3)
+    pid = _knob_page(e, {"knobTL": new_control(
+        "rotary", label="Master", actions_cw=[new_action("vmix.adjust", target="master", amount=2)],
+        actions=[new_action("vmix.function", function="MasterAudio")])})
+    c = e.control(pid, "knobTL")
+    v = e.visual(c)
+    assert v["progress"] == 0.8 and v["label"] == "Master\n80 %", v
+    with s.state_lock:
+        s.audio["master"]["volume"] = 35.0                 # changé dans vMix
+    states = []
+    e.listeners.append(lambda kind, p: states.append(kind) if kind == "state" else None)
+    assert wait(lambda: e.visual(e.control(pid, "knobTL"))["label"] == "Master\n35 %", 4)
+    assert wait(lambda: "state" in states, 3), "le rafraîchissement doit signaler le nouveau niveau"
+    e.stop()
+
+
+def test_win_audio_actions(tmp_path):
+    """Son Windows : monter / baisser au cran, fixer, couper ; application absente signalée."""
+    e = engine(tmp_path)
+    fake = e.winaudio.backend
+    logs = []
+    e.listeners.append(lambda kind, p: logs.append(p) if kind == "log" else None)
+    pid = _knob_page(e, {
+        "knobTL": new_control("rotary", label="Win", actions_cw=[new_action("win.audio", target="output",
+                                                                            mode="adjust", amount=5)],
+                              actions=[new_action("win.audio", target="output", mode="toggle")]),
+        "knobTR": new_control("rotary", actions_cw=[new_action("win.audio", target="app", app="spotify",
+                                                               mode="adjust", amount=10)]),
+        "key0": new_control("button", actions=[new_action("win.audio", target="mic", mode="toggle")]),
+        "key1": new_control("button", actions=[new_action("win.audio", target="output", mode="set", level=25)]),
+        "key2": new_control("button", actions=[new_action("win.audio", target="app", app="absent.exe",
+                                                          mode="toggle")]),
+    })
+    for _ in range(4):
+        e.rotate(pid, "knobTL", 1, deck="CT")
+    assert wait(lambda: fake.levels["output"] == 70.0, 3), fake.levels   # 50 + 4 × 5, aucun cran perdu
+    e.rotate(pid, "knobTR", -1, deck="CT")                  # « spotify » sans .exe : reconnu
+    assert wait(lambda: fake.app_levels["spotify.exe"] == 50.0, 3), fake.app_levels
+    tap(e, pid, control_key("key0"))
+    assert wait(lambda: fake.muted["mic"] is True, 3)
+    tap(e, pid, control_key("key0"))
+    assert wait(lambda: fake.muted["mic"] is False, 3)
+    tap(e, pid, control_key("key1"))
+    assert wait(lambda: fake.levels["output"] == 25.0, 3)
+    tap(e, pid, control_key("key2"))
+    assert wait(lambda: any("absent.exe" in str(p) for p in logs), 3), logs
+
+    # Retours d'état : jauge du volume Windows, et rouge quand c'est coupé.
+    v = e.visual(e.control(pid, "knobTL"))
+    assert v["progress"] == 0.25 and "25 %" in v["label"], v
+    fake.muted["output"] = True                             # coupé ailleurs (clavier, barre des tâches)
+    e.winaudio._cache.clear()
+    assert e.visual(e.control(pid, "knobTL"))["bg"] == RED
+    mic = e.visual(e.control(pid, "key0"))
+    assert "progress" in mic and mic["bg"] != RED, "micro actif : pas de rouge"
+    e.stop()
+
+
+def test_win_actions_wiring(tmp_path):
+    """Les utilitaires Windows reçoivent les bons arguments (sans rien lancer réellement)."""
+    e = engine(tmp_path, start=False)
+    calls = []
+    saved = {n: getattr(winsys, n) for n in ("launch", "run", "focus_window", "scroll", "type_text", "lock")}
+    winsys.launch = lambda t, a="": calls.append(("launch", t, a))
+    winsys.run = lambda c, hidden=True: calls.append(("run", c, hidden))
+    winsys.focus_window = lambda t: calls.append(("focus", t)) or None   # aucune fenêtre trouvée
+    winsys.scroll = lambda dx, dy: calls.append(("scroll", dx, dy))
+    winsys.type_text = lambda t: calls.append(("type", t))
+    winsys.lock = lambda: calls.append(("lock",))
+    logs = []
+    e.listeners.append(lambda kind, p: logs.append(p) if kind == "log" else None)
+    try:
+        execute(e, new_action("win.launch", target="obs64.exe", args="--startrecording"), "down", {})
+        execute(e, new_action("win.run", command="echo ok", hidden=False), "down", {})
+        execute(e, new_action("win.focus", title="vMix"), "down", {})
+        execute(e, new_action("win.scroll", amount=3), "down", {"delta": -2})
+        execute(e, new_action("win.scroll", direction="horizontal", amount=1), "down", {"delta": 1})
+        execute(e, new_action("win.type", text="Bonjour"), "down", {})
+        execute(e, new_action("win.lock"), "down", {})
+        execute(e, new_action("win.media", what="next"), "down", {})
+    finally:
+        for n, f in saved.items():
+            setattr(winsys, n, f)
+    assert calls == [("launch", "obs64.exe", "--startrecording"), ("run", "echo ok", False), ("focus", "vMix"),
+                     ("scroll", 0, -6), ("scroll", 1, 0), ("type", "Bonjour"), ("lock",)], calls
+    assert ("tap", "next") in KEYS.log, "la touche média passe par la simulation clavier"
+    assert any("vMix" in str(p) for p in logs), "fenêtre introuvable : il faut le dire"
+
+
+def test_new_actions_catalog():
+    """Champs, valeurs par défaut et résumés des nouvelles actions."""
+    # Deux champs « Par cran » / « Volume » : des clés distinctes, sinon le second écraserait le premier.
+    a = new_action("win.audio")
+    assert a["amount"] == 2 and a["level"] == 50, a
+    keys = [f["key"] for f in ACTIONS["win.audio"]["fields"]]
+    assert len(keys) == len(set(keys)), f"clés en double : {keys}"
+    # L'input n'apparaît que pour une cible qui en demande un.
+    spec = {f["key"]: f for f in ACTIONS["vmix.adjust"]["fields"]}
+    assert not shown(spec["input"], new_action("vmix.adjust", target="master"))
+    assert shown(spec["input"], new_action("vmix.adjust", target="input_volume"))
+    assert shown(spec["bus"], new_action("vmix.adjust", target="bus"))
+    assert not shown(spec["bus"], new_action("vmix.adjust", target="master"))
+    for t in [t for t in ACTIONS if t.startswith("win.") or t == "vmix.adjust"]:
+        s = summary(new_action(t))
+        assert s and s != t, (t, s)
+    assert summary(new_action("vmix.adjust", target="bus", bus="B", amount=-3)) == "Volume bus B · -3 % par cran"
+    assert summary(new_action("win.audio", target="app", app="spotify.exe", amount=5)) == \
+        "spotify.exe · +5 % par cran"
+
+
+def test_knob_presets_placement(tmp_path):
+    """Un preset de molette garde sa rotation sur une molette, et devient une touche normale ailleurs."""
+    e = engine(tmp_path, start=False)
+    for pid, (cat, name, desc, make) in presets.PRESETS.items():
+        b = make()
+        assert b and b.get("id"), pid
+    knob = presets.make("knob_master", e)
+    on_knob = presets.place(knob, control_key("knobTL"))
+    assert on_knob["kind"] == "rotary" and on_knob["actions_cw"][0]["type"] == "vmix.adjust"
+    on_key = presets.place(knob, "0,0")
+    assert "kind" not in on_key, "une touche ordinaire ne doit pas proposer de rotation"
+    assert on_key["actions"][0]["function"] == "MasterAudio", "l'appui (couper) reste"
+    on_btn = presets.place(knob, control_key("key3"))
+    assert on_btn["kind"] == "button"
+    # Sur une molette, les réglages au cran sont proposés en premier.
+    assert presets.catalog(e, rotary=True)[0][0] == "Molette"
+    assert presets.catalog(e)[0][0] != "Molette"
+    assert any(c == "Windows" for c, _ in presets.catalog(e))
+
+
+def test_knob_preset_in_inspector(tmp_path):
+    """Choisir « Volume Master » sur une molette l'ouvre sur sa rotation, et changer la cible
+    remet un pas adapté (1 input pour la preview, pas 2)."""
+    e = engine(tmp_path, start=False)
+    pid = _knob_page(e, {})
+    e.start()
+    w = MainWindow(e)
+    w.page_id = pid
+    w.grid.set_page(pid)
+    w._select_control(control_key("knobTL"))
+    w.inspector._create("knob_master")
+    assert w.inspector.side == "actions_cw", w.inspector.side
+    c = e.control(pid, "knobTL")
+    assert c["kind"] == "rotary" and c["actions_cw"][0]["target"] == "master"
+    w.inspector.step = 0
+    w.inspector._set_field("target", "preview")
+    assert e.control(pid, "knobTL")["actions_cw"][0]["amount"] == 1, "pas de 1 input pour la preview"
+    w.inspector._set_field("target", "master")
+    assert e.control(pid, "knobTL")["actions_cw"][0]["amount"] == 2
+    w.close()
+    e.stop()
+
+
+def test_loupedeck_open_failure_logged_once(tmp_path):
+    """Un échec passager à l'ouverture reste silencieux ; un échec qui dure (logiciel Loupedeck qui
+    garde le port) est signalé une seule fois, et non toutes les 2 secondes."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("CT", cols=4, rows=3)]
+    lm = LoupedeckManager(e)
+    logs = []
+    e.listeners.append(lambda kind, p: logs.append(p) if kind == "log" else None)
+    found = [{"path": "COM-X", "vid": 0x2EC2, "pid": 0x0007, "serial": "S1", "model": "Loupedeck CT"}]
+    fails = {"n": 0}
+
+    def broken(self, timeout=2.0):
+        fails["n"] += 1
+        raise OSError("accès refusé")
+
+    def errors():
+        return [p for p in logs if "COM-X" in str(p)]
+
+    with mock.patch.object(ld, "discover", return_value=found), \
+            mock.patch.object(ld.Loupedeck, "connect", broken):
+        lm._scan()
+        assert not errors(), "un premier échec passager ne doit pas alarmer"
+        for _ in range(10):                              # 20 s de tentatives
+            lm._scan()
+    assert fails["n"] == 11, "on continue de réessayer"
+    assert len(errors()) == 1, f"signalé une seule fois, pas {len(errors())} : {errors()}"
+    assert "logiciel Loupedeck" in str(errors()[0]), "le message doit dire quoi faire"
+    # Débranché puis rebranché : un nouvel échec persistant est de nouveau signalé.
+    with mock.patch.object(ld, "discover", return_value=[]):
+        lm._scan()
+    with mock.patch.object(ld, "discover", return_value=found), \
+            mock.patch.object(ld.Loupedeck, "connect", broken):
+        lm._scan()
+        lm._scan()
+    assert len(errors()) == 2, errors()
+    e.stop()
+
+
+def test_winaudio_cache():
+    """Le cache évite de rappeler Core Audio à chaque touche, et s'oublie après une écriture."""
+    fake = fakes.FakeAudio()
+    reads = []
+    orig = fake.get
+    fake.get = lambda t, app="": reads.append(t) or orig(t, app)
+    c = winsys.CachedAudio(fake)
+    for _ in range(10):
+        c.get("output")
+    assert len(reads) == 1, reads
+    c.set_level("output", 12)
+    assert c.get("output")[0] == 12.0 and len(reads) == 2, "une écriture doit invalider le cache"
+    assert c.peek("app", "absent.exe") is None, "peek ne lève jamais"
+
+
+def test_loupedeck_migration_v3_to_v4(tmp_path):
+    """Une configuration v3 (Stream Deck seuls) se charge sans perte et gagne le bloc controls."""
+    import json
+    old = {"version": 3, "vmix": {"host": "127.0.0.1", "port": 8099}, "decks": {}, "options": {},
+           "pages": [{"id": "p", "name": "Régie", "cols": 5, "rows": 3, "buttons": {
+               "0,0": {"id": "a", "label": "Cam 1", "actions": [{"type": "vmix.preview", "input": "Cam 1"}]}}}]}
+    path = Path(tmp_path) / "config.json"
+    path.write_text(json.dumps(old), encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg["version"] == 4
+    assert cfg["pages"][0]["controls"] == {}, "le bloc controls doit exister et être vide"
+    b = cfg["pages"][0]["buttons"]["0,0"]
+    assert b["label"] == "Cam 1" and b["actions"][0]["input"] == "Cam 1", "la touche ne doit pas bouger"
+    assert b["mode"] == "press" and b["auto_feedback"] is True, "les défauts doivent être complétés"
+
+
+def test_loupedeck_rgb565():
+    from PIL import Image
+    px = ld.rgb565(Image.new("RGB", (1, 1), (255, 0, 0)))
+    assert px == b"\x00\xf8", px.hex()                      # petit-boutiste
+    assert ld.rgb565(Image.new("RGB", (1, 1), (255, 0, 0)), big_endian=True) == b"\xf8\x00"
+    assert ld.rgb565(Image.new("RGB", (1, 1), (0, 0, 255))) == b"\x1f\x00"
+    assert len(ld.rgb565(Image.new("RGB", (90, 90)))) == 90 * 90 * 2
+    # découpage du flux : trame partielle gardée pour le tour suivant
+    buf = bytearray(b"\x82\x03\x03\x02@\x82\x05\x05\x00")
+    assert ld.split_frames(buf) == [b"\x03\x02@"]
+    assert bytes(buf) == b"\x82\x05\x05\x00"
+
 
 if __name__ == "__main__":
     import tempfile

@@ -19,9 +19,11 @@ from .. import __version__, presets
 from ..actions import to_take
 from ..companion_import import import_companion
 from ..integrations import integration_status, merge_integrations
-from ..model import CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config, parse_key
+from ..loupedeck import control_kind
+from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config,
+                     parse_control, parse_key, surface_of)
 from . import theme as T
-from .deck_view import DeckGrid
+from .deck_view import ControlBar, DeckGrid
 from .diagnostic import DiagnosticDialog
 from .dialogs import LEGEND, FillRowDialog, ImportOptionsDialog, ShortcutsDialog
 from .inspector import Inspector
@@ -189,6 +191,7 @@ class MainWindow(QMainWindow):
         self._shortcuts()
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
+        self.controls.set_page(self.page_id)
         self._refresh_live()
         self._lockable += [self.library, self.inspector]
         if self._saved_lock():  # verrou gardé d'un lancement à l'autre (relance en plein direct)
@@ -321,7 +324,7 @@ class MainWindow(QMainWindow):
         center.addLayout(row)
 
         self.grid = DeckGrid(self.engine)
-        self.grid.selected.connect(lambda k: self.inspector.load(self.page_id, k or None))
+        self.grid.selected.connect(self._select_cell)
         self.grid.pressed.connect(lambda k, down: self.engine.press(self.page_id, k, down))
         self.grid.moved.connect(lambda s, d, c: self.engine.move_button((self.page_id, s), (self.page_id, d), c))
         self.grid.inputs_dropped.connect(self._drop_inputs)
@@ -330,6 +333,10 @@ class MainWindow(QMainWindow):
         self.grid.test_key.connect(lambda k: self.engine.trigger(self.page_id, k))
         self.grid.blocked.connect(lambda: self.toast(HINT_LOCK, error=True))
         center.addWidget(self.grid, 1)
+        # Molettes, bandeaux et boutons physiques des Loupedeck : hors grille, donc sous la vue.
+        self.controls = ControlBar(self.engine)
+        self.controls.selected.connect(self._select_control)
+        center.addWidget(self.controls)
         self.hint = label(HINT, "Hint", True)
         self.hint.setAlignment(Qt.AlignCenter)
         self.hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -377,7 +384,7 @@ class MainWindow(QMainWindow):
                         (QKeySequence.Copy, self.copy), (QKeySequence.Paste, self.paste),
                         (QKeySequence.Cut, self.cut), ("Ctrl+D", self.duplicate_selected),
                         (QKeySequence.Delete, self.delete_selected), ("F5", lambda: self.set_live(not self.grid.live)),
-                        (Qt.Key_Escape, lambda: self.grid.select(None)), (QKeySequence.Find, self.open_search),
+                        (Qt.Key_Escape, self.clear_selection), (QKeySequence.Find, self.open_search),
                         ("Ctrl+PgDown", lambda: self._goto_page("next")), ("Ctrl+PgUp", lambda: self._goto_page("prev")),
                         ("F1", self.open_help), ("F2", self._edit_label)):
             # verrouillé : seuls l'aide et le changement de page restent actifs
@@ -408,8 +415,10 @@ class MainWindow(QMainWindow):
             if not self.engine.page(self.page_id):
                 self.page_id = self.engine.pages[0]["id"]
                 self.grid.set_page(self.page_id)
+                self.controls.set_page(self.page_id)
             self._rebuild_tabs()
             self.grid.update()
+            self.controls.refresh()
             self.inspector.on_config()
             self.library.presets.refresh()
         elif kind == "log":
@@ -418,18 +427,64 @@ class MainWindow(QMainWindow):
             self._update_pills()
             self._rebuild_tabs()
             self.grid.update()
+            self.controls.refresh()
         elif kind == "page":
             self._goto_page(payload)
         elif kind == "activity":
             self._activity(*payload)
 
+    @property
+    def sel(self) -> str | None:
+        """Case en cours d'édition : une touche de la grille, ou un contrôle hors grille
+        (« c:knobTL »). Les deux sélections s'excluent, il n'y en a jamais qu'une."""
+        return self.controls.sel or self.grid.sel
+
+    def select(self, k: str | None) -> None:
+        """Sélectionne une case quelle que soit sa nature (utilisé par la recherche)."""
+        if k and parse_control(k) is not None:
+            self._select_control(k)
+        else:
+            self.grid.select(k)
+
+    def clear_selection(self) -> None:
+        self.controls.select(None)
+        self.grid.select(None)
+
+    def _select_cell(self, k: str):
+        """Sélection d'une touche de la grille : elle libère celle d'un contrôle Loupedeck."""
+        self.controls.select(None)
+        self.inspector.load(self.page_id, k or None)
+
+    def _select_control(self, k: str, silent: bool = False):
+        """Sélection d'un contrôle hors grille : la grille et l'inspecteur suivent.
+
+        silent : sélection provoquée par l'appareil (« suivre le deck »), pas par un clic. Elle ne
+        doit pas répéter l'avertissement du verrou à chaque appui."""
+        if self.locked and not silent:
+            self.toast(HINT_LOCK, error=True)
+            return
+        if self.grid.draws(k):
+            # La vue dessine ce contrôle : la sélection vit dans la vue, qui l'entoure de blanc
+            # comme une touche. Sans cela, rien ne montrerait ce qui est suivi ou édité.
+            self.controls.select(None)
+            self.grid.select(k, emit=False)
+        else:  # page Stream Deck : le contrôle n'est qu'une pastille sous la vue
+            self.grid.select(None, emit=False)
+            self.controls.select(k)
+        self.inspector.load(self.page_id, k)
+
     def _activity(self, page_id: str, k: str, deck: str | None):
+        control = parse_control(k) is not None  # molette ou bouton hors grille : pas de case à éclairer
         if deck and self.follow.isChecked() and not self.grid.live:
             if page_id != self.page_id:
                 self._goto_page(page_id)
-            if k != self.grid.sel:
+            if control:
+                if k != self.sel:
+                    self._select_control(k, silent=True)
+            elif k != self.grid.sel:
+                self.controls.select(None)
                 self.grid.select(k)
-        if page_id == self.page_id:
+        if page_id == self.page_id and (not control or self.grid.draws(k)):
             self.grid.flash(k)
 
     def _refresh_live(self):
@@ -556,16 +611,27 @@ class MainWindow(QMainWindow):
             self._update_pills()
     # -- pages ----------------------------------------------------------------
     def _rebuild_tabs(self):
-        on_deck = {d["page"] for d in (self.engine.decks.info() if self.engine.decks else [])}
+        """Onglets des pages. Avec plusieurs familles de surfaces, « Régie » seul ne suffit plus :
+        chaque onglet dit sur quel appareil la page est affichée, et de quelle surface elle est."""
+        decks = self.engine.decks.info() if self.engine.decks else []
+        on_deck = {}
+        for d in decks:
+            on_deck.setdefault(d["page"], []).append(d["model"])
         self.tabs.blockSignals(True)
         while self.tabs.count():
             self.tabs.removeTab(0)
         for p in self.engine.pages:
-            i = self.tabs.addTab(("●  " if p["id"] in on_deck else "") + p["name"])
+            models = on_deck.get(p["id"], [])
+            loupe = (p.get("surface") or (surface_of(models[0]) if models else "")) == "loupedeck"
+            i = self.tabs.addTab(("●  " if models else "") + p["name"]
+                                 + ("   ⟳" if loupe else ""))  # ⟳ = surface à molettes
             self.tabs.setTabData(i, p["id"])
-            self.tabs.setTabToolTip(i, f"{p['name']} — grille {p['cols']}×{p['rows']}"
-                                    + (" — affichée sur un Stream Deck" if p["id"] in on_deck else "")
-                                    + "\nClic droit : renommer, taille, dupliquer, supprimer")
+            kind = "Loupedeck" if loupe else "Stream Deck"
+            self.tabs.setTabToolTip(
+                i, f"{p['name']} — {kind}, grille {p['cols']}×{p['rows']}"
+                + (f"\nAffichée sur : {', '.join(sorted(set(models)))}" if models
+                   else "\nAffichée sur aucun appareil")
+                + "\nClic droit : renommer, taille, surface, dupliquer, supprimer")
             if p["id"] == self.page_id:
                 self.tabs.setCurrentIndex(i)
         self.tabs.blockSignals(False)
@@ -575,6 +641,7 @@ class MainWindow(QMainWindow):
         if pid and pid != self.page_id:
             self.page_id = pid
             self.grid.set_page(pid)
+            self.controls.set_page(pid)
             self.inspector.load(None, None)
 
     def _goto_page(self, target: str):
@@ -587,9 +654,16 @@ class MainWindow(QMainWindow):
     def _page_menu(self) -> QMenu:
         m = QMenu(self)
         m.addAction("Renommer…", self.rename_page)
-        size = m.addMenu("Taille de la grille")
+        size = m.addMenu("Modèle d'appareil")
         for name, (c, r) in DECK_SIZES.items():
-            size.addAction(name, lambda c=c, r=r: self.engine.update_page(self.page_id, cols=c, rows=r))
+            size.addAction(name, lambda c=c, r=r, n=name: self._set_page_model(c, r, surface_of(n)))
+        surf = m.addMenu("Surface affichée")
+        cur = self.engine.page(self.page_id).get("surface") or ""
+        for value, text in (("", "Automatique (selon l'appareil)"), ("streamdeck", "Stream Deck"),
+                            ("loupedeck", "Loupedeck (molettes, bandeaux, molette centrale)")):
+            a = surf.addAction(text, lambda v=value: self.engine.update_page(self.page_id, surface=v))
+            a.setCheckable(True)
+            a.setChecked(cur == value)
         m.addAction("Dupliquer la page", self.duplicate_page)
         takes = [k for k, b in self.engine.page(self.page_id)["buttons"].items() if to_take(b)]
         if takes:
@@ -603,18 +677,27 @@ class MainWindow(QMainWindow):
         rm.setEnabled(len(self.engine.pages) > 1)
         return m
 
+    def _set_page_model(self, cols: int, rows: int, surface: str) -> None:
+        """Changer de modèle change aussi la surface dessinée : passer une page en Loupedeck CT
+        sans voir apparaître ses molettes n'aurait aucun sens."""
+        self.engine.update_page(self.page_id, cols=cols, rows=rows, surface=surface)
+
     def add_page(self):
         names = list(DECK_SIZES)
         info = self.engine.decks.info() if self.engine.decks else []
-        default = next((i for i, n in enumerate(names) if info and DECK_SIZES[n] == (info[0]["cols"], info[0]["rows"])), 0)
-        size, ok = QInputDialog.getItem(self, "Nouvelle page", "Modèle de Stream Deck :", names, default, False)
+        # Proposer d'emblée le modèle d'un appareil branché, Loupedeck compris.
+        default = next((i for i, n in enumerate(names)
+                        for d in info if DECK_SIZES[n] == (d["cols"], d["rows"])
+                        and surface_of(n) == surface_of(d["model"])), 0)
+        size, ok = QInputDialog.getItem(self, "Nouvelle page", "Modèle d'appareil :", names, default, False)
         if not ok:
             return
         name, ok = QInputDialog.getText(self, "Nouvelle page", "Nom de la page :", text=f"Page {len(self.engine.pages) + 1}")
         if ok and name.strip():
-            self.page_id = self.engine.add_page(name.strip(), *DECK_SIZES[size])
+            self.page_id = self.engine.add_page(name.strip(), *DECK_SIZES[size], surface=surface_of(size))
             self._rebuild_tabs()
             self.grid.set_page(self.page_id)
+            self.controls.set_page(self.page_id)
 
     def rename_page(self):
         p = self.engine.page(self.page_id)
@@ -727,7 +810,9 @@ class MainWindow(QMainWindow):
     def _drop_preset(self, k: str, pid: str):
         b = presets.make(pid, self.engine)
         if b:
+            b = presets.place(b, k)  # molette : garde la rotation ; touche : n'en garde que l'appui
             self.engine.set_button(self.page_id, k, b)
+            self.select(k)
             self.inspector.load(self.page_id, k, force=True)
 
     def _drop_inputs(self, k: str, titles: list[str]):
@@ -842,7 +927,7 @@ class MainWindow(QMainWindow):
             self.toast(f"Touche envoyée sur « {self.engine.page(pid)['name']} », rangée {r + 1} colonne {c + 1}")
 
     def _selected(self):
-        return self.engine.button(self.page_id, self.grid.sel) if self.grid.sel else None
+        return self.engine.button(self.page_id, self.sel) if self.sel else None
 
     def copy(self):
         b = self._selected()
@@ -860,21 +945,34 @@ class MainWindow(QMainWindow):
     def paste(self):
         if not self._editable():
             return
-        if self.clipboard and self.grid.sel:
-            self.engine.set_button(self.page_id, self.grid.sel, {**copy.deepcopy(self.clipboard), "id": new_id()})
-            self.inspector.load(self.page_id, self.grid.sel, force=True)
+        k = self.sel
+        if self.clipboard and k:
+            b = {**copy.deepcopy(self.clipboard), "id": new_id()}
+            cid = parse_control(k)
+            if cid is not None:  # coller sur une molette lui garde ses deux sens de rotation
+                b["kind"] = control_kind(cid)
+            self.engine.set_button(self.page_id, k, b)
+            self.inspector.load(self.page_id, k, force=True)
 
     def delete_selected(self):
         if not self._editable():
             return
         if self._selected():
-            self.engine.set_button(self.page_id, self.grid.sel, None)
-            self.toast("Touche effacée  ·  Ctrl+Z pour annuler")
+            k = self.sel
+            self.engine.set_button(self.page_id, k, None)
+            self.toast(("Contrôle effacé" if parse_control(k) is not None else "Touche effacée")
+                       + "  ·  Ctrl+Z pour annuler")
 
     def duplicate_selected(self):
         if not self._editable():
             return
         b = self._selected()
+        if b and parse_control(self.sel) is not None:
+            # Un contrôle est lié à un organe physique : le dupliquer n'a de sens que vers un autre,
+            # ce que l'utilisateur fait en collant. On le dit au lieu de ne rien faire.
+            self.toast("Un contrôle ne se duplique pas : copie-le (Ctrl+C) puis colle-le sur un autre.",
+                       error=True)
+            return
         free = self.engine.first_free(self.page_id)
         if b and free:
             r, c = parse_key(self.grid.sel)
@@ -888,14 +986,14 @@ class MainWindow(QMainWindow):
         if not self._editable():
             return
         if self.engine.undo():
-            self.inspector.load(self.page_id, self.grid.sel, force=True)
+            self.inspector.load(self.page_id, self.sel, force=True)
             self.toast("Annulé")
 
     def redo(self):
         if not self._editable():
             return
         if self.engine.redo():
-            self.inspector.load(self.page_id, self.grid.sel, force=True)
+            self.inspector.load(self.page_id, self.sel, force=True)
             self.toast("Rétabli")
 
     # -- fichiers -------------------------------------------------------------
@@ -944,6 +1042,7 @@ class MainWindow(QMainWindow):
         self.page_id = self.engine.pages[0]["id"]
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
+        self.controls.set_page(self.page_id)
         self.inspector.load(None, None)
         for line in report:
             self.engine.log("info", line)
@@ -1012,6 +1111,7 @@ class MainWindow(QMainWindow):
         self.page_id = self.engine.pages[0]["id"]
         self._rebuild_tabs()
         self.grid.set_page(self.page_id)
+        self.controls.set_page(self.page_id)
 
     def open_settings(self, tab: str = "general"):
         if self.locked:
@@ -1046,8 +1146,9 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.chosen:
             page_id, k = dlg.chosen
             self._goto_page(page_id)
-            self.grid.select(k)
-            self.grid.flash(k)
+            self.select(k)
+            if parse_control(k) is None:
+                self.grid.flash(k)  # un contrôle hors grille n'a pas de case à faire clignoter
 
     # -- fenêtre / barre des tâches -------------------------------------------
     def bring_to_front(self):
