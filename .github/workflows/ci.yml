@@ -89,27 +89,32 @@ jobs:
         if: steps.v.outputs.new == 'true'
         run: python tools/build_exe.py --version ${{ steps.v.outputs.version }}
 
-      - name: Vérification de l'installateur
+      - name: Vérification de l'application packagée
         if: steps.v.outputs.new == 'true'
         shell: bash
         run: |
-          # installation silencieuse, puis auto-test de l'exe installé
-          APP="$RUNNER_TEMP/livedeck-app"
-          ./dist/LiveDeck-${{ steps.v.outputs.version }}-win64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$(cygpath -w "$APP")"
-          test -f "$APP/LiveDeck.exe"
-          test -f "$APP/unins000.exe"
+          # On teste dist/LiveDeck/LiveDeck.exe, et NON l'installateur : celui-ci ne fait que
+          # recopier ce dossier, les fichiers posés sur le disque sont donc les mêmes.
+          # Surtout, on ne lance pas l'installateur ici : c'est une application graphique, et sur
+          # un runner sans session interactive elle attend une boîte de dialogue que personne ne
+          # peut fermer — l'étape est restée bloquée 4 h en 1.5.0, puis 30 min en 1.6.0, sans
+          # jamais écrire une seule ligne de sortie.
           export LIVEDECK_HOME="$RUNNER_TEMP/livedeck-selftest"
-          # L'auto-test se ferme tout seul : on le lance au premier plan, borné dans le temps.
-          # Surtout PAS en tâche de fond : le processus garderait le tuyau de sortie de l'étape
-          # ouvert et l'étape ne se terminerait jamais, même après un « kill » — qui ne tue de
-          # toute façon pas un processus Windows de façon fiable depuis Git Bash.
-          timeout 180 "$APP/LiveDeck.exe" --selftest || echo "auto-test interrompu (code $?)"
+          # L'auto-test se ferme tout seul ; on le borne et on ne le met PAS en tâche de fond :
+          # un processus d'arrière-plan garde le tuyau de sortie ouvert et l'étape ne finit jamais.
+          timeout 180 ./dist/LiveDeck/LiveDeck.exe --selftest || echo "auto-test interrompu (code $?)"
           taskkill //F //IM LiveDeck.exe //T > /dev/null 2>&1 || true
           cat "$LIVEDECK_HOME/selftest.txt"
-          # l'exe installé démarre, embarque pynput et hidapi (USB des Stream Decks)
+          # l'exe démarre et embarque pynput, hidapi (Stream Decks) et pyserial (Loupedeck)
           grep -q "^OK LiveDeck ${{ steps.v.outputs.version }}" "$LIVEDECK_HOME/selftest.txt"
           grep -q "^clavier=ok" "$LIVEDECK_HOME/selftest.txt"
+          grep -q "^loupedeck=ok" "$LIVEDECK_HOME/selftest.txt"
           grep -Eq "^decks=[0-9]+ deck" "$LIVEDECK_HOME/selftest.txt"
+          # l'installateur a bien été produit, et ce n'est pas une coquille vide
+          SETUP="dist/LiveDeck-${{ steps.v.outputs.version }}-win64-setup.exe"
+          test -f "$SETUP"
+          echo "installateur : $(stat -c%s "$SETUP") octets"
+          test "$(stat -c%s "$SETUP")" -gt 20000000
 
       - name: Artefact
         if: steps.v.outputs.new == 'true'

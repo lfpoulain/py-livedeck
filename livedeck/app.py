@@ -111,8 +111,15 @@ def _selftest(win, engine) -> None:
         keyboard = "ok"
     except Exception as ex:
         keyboard = f"erreur {ex}"
+    try:  # pyserial bien embarqué : sans lui, aucun Loupedeck ne serait détecté dans l'exe installé
+        from serial.tools import list_ports
+        list_ports.comports()
+        loupedeck = "ok"
+    except Exception as ex:
+        loupedeck = f"erreur {ex}"
     decks = (engine.decks.error or f"{len(engine.decks.info())} deck(s)") if engine.decks else "désactivés"
     (HOME / "selftest.txt").write_text(
         f"OK LiveDeck {__version__}\npages={len(engine.pages)}\nvmix={'connecté' if st.connected else 'hors ligne'}\n"
-        f"decks={decks}\nclavier={keyboard}\ntray={win.tray.isSystemTrayAvailable()}\n", encoding="utf-8")
+        f"decks={decks}\nclavier={keyboard}\nloupedeck={loupedeck}\n"
+        f"tray={win.tray.isSystemTrayAvailable()}\n", encoding="utf-8")
     win.quit_app()
