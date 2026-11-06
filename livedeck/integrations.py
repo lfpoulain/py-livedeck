@@ -20,7 +20,7 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from .webreq import DIRECT, error_kind, open_url
+from .webreq import DIRECT, NET_ERRORS, error_kind, open_url
 
 # Valeurs de repli tant que le service n'a pas répondu : la liste réelle vient de /status (py-intercom),
 # des réglages et du flux en direct (orchestream).
@@ -170,7 +170,7 @@ def probe_intercom(host: str, port, timeout: float = 3.0) -> tuple[bool | None, 
     host = (host or "127.0.0.1").strip()
     try:
         status, data = _http("GET", f"http://{host}:{int(port)}/status", timeout=timeout, direct=True)
-    except OSError as e:
+    except NET_ERRORS as e:
         return False, explain_intercom(host, port, exc=e)[1]
     if status == 200 and isinstance(data, dict) and "buses" in data:
         buses = "  ·  ".join(f"{bus_label(k)} ({BUS_MODES.get(v.get('mode'), v.get('mode'))}"
@@ -287,7 +287,7 @@ class Intercom(_Service):
             t0 = time.monotonic()
             try:
                 status, data = _http("GET", f"{self.base}/status", timeout=1, direct=True)
-            except OSError as e:
+            except NET_ERRORS as e:
                 self._set_reachable(False, explain_intercom(self.host, self.port, exc=e)[1])
             else:
                 if status == 200 and isinstance(data, dict) and "buses" in data:
@@ -319,7 +319,7 @@ class Intercom(_Service):
             with self._lock:
                 try:
                     _http("POST", f"{self.base}/ptt/{bus}/off", timeout=1, direct=True)
-                except OSError:
+                except NET_ERRORS:
                     pass
                 if bus in self._off_due:
                     self._off_due[bus] = (time.monotonic(), deadline, tries + 1)
@@ -340,7 +340,7 @@ class Intercom(_Service):
             for attempt in range(4):
                 try:
                     status, data = _http("POST", url, timeout=0.5 if quick else (1 if off else 1.5), direct=True)
-                except OSError as e:
+                except NET_ERRORS as e:
                     if off and not quick and attempt < 3:
                         time.sleep((0.1, 0.3, 0.6)[attempt])
                         continue
@@ -487,7 +487,7 @@ def probe_orchestream(url: str, timeout: float = 4.0) -> tuple[bool | None, str]
                 return False, f"{url} répond ({resp.status}, {ctype or 'sans type'}), mais ce n'est pas orchestream"
         except urllib.error.HTTPError as e:
             return False, explain_orchestream(url, e.code, _read_json(e))
-    except OSError as e:
+    except NET_ERRORS as e:
         return False, explain_orchestream(url, exc=e)
 
 
@@ -591,7 +591,7 @@ class Orchestream(_Service):
                     self._run_v1(url)
             except urllib.error.HTTPError as e:
                 why = explain_orchestream(url, e.code, _read_json(e))
-            except OSError as e:
+            except NET_ERRORS as e:
                 why = explain_orchestream(url, exc=e)
             if self.connected:
                 delay = 2  # la connexion avait abouti : on retente vite
@@ -652,7 +652,7 @@ class Orchestream(_Service):
         url = f"{self.url}/api/overlay/{name}/{'show' if show else 'hide'}"
         try:
             status, data = _http("POST", url, timeout=4)
-        except OSError as e:
+        except NET_ERRORS as e:
             self._log("error", explain_orchestream(self.url, exc=e))
             return False
         if 200 <= status < 300:
@@ -684,7 +684,7 @@ def probe_tally(host: str, timeout: float = 3.0) -> tuple[bool | None, str]:
     h, where = _hostport(url)
     try:
         status, data = _http("GET", url, timeout=timeout, direct=True)
-    except OSError as e:
+    except NET_ERRORS as e:
         kind = error_kind(e, h)
         return False, ("connexion refusée : ce n'est pas un Tally32 ?" if kind == "refused"
                        else _net_text(kind, "tally", where))
@@ -719,7 +719,7 @@ class Tallies(_Service):
             status, data = _http("GET", self._url(host, "/status"), timeout=1.5, direct=True)
             ok = status == 200 and isinstance(data, dict)
             new = {"reachable": True, **data} if ok else {"reachable": False, "error": f"HTTP {status}"}
-        except OSError as e:
+        except NET_ERRORS as e:
             new = {"reachable": False, "error": error_kind(e, _hostport(host)[0])}
         if new != self.status.get(host):
             self.status[host] = new
@@ -747,7 +747,7 @@ class Tallies(_Service):
             name = d.get("name") or d["host"]
             try:
                 status, _ = _http("POST", self._url(d["host"], "/vmix/reconnect"), timeout=2, direct=True)
-            except OSError as e:
+            except NET_ERRORS as e:
                 self._log("error", f"Tally {name} injoignable : {_net_text(error_kind(e, _hostport(d['host'])[0]), 'tally', d['host'])}")
                 continue
             if status == 404:
@@ -816,7 +816,7 @@ def probe_multiview(url: str, timeout: float = 4.0) -> tuple[bool | None, str]:
         return None, "Adresse non renseignée (ex. 192.168.1.42:5090)."
     try:
         status, data = _mv_state(url, timeout)
-    except OSError as e:
+    except NET_ERRORS as e:
         return False, explain_multiview(url, exc=e)
     if not _is_mv_state(status, data):
         return False, explain_multiview(url, status, data)
@@ -877,7 +877,7 @@ class Multiview(_Service):
                 continue
             try:
                 status, data = _mv_state(self.url, 1.5)
-            except OSError as e:
+            except NET_ERRORS as e:
                 self._set_reachable(False, explain_multiview(self.url, exc=e))
             else:
                 if _is_mv_state(status, data):
@@ -954,7 +954,7 @@ class Multiview(_Service):
             return False
         try:
             status, data = _http("POST", f"{self.url}{path}", timeout=4)
-        except OSError as e:
+        except NET_ERRORS as e:
             self._set_reachable(False, explain_multiview(self.url, exc=e))
             self._log("error", self.error)
             return False

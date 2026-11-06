@@ -79,6 +79,7 @@ class Engine:
         self._holds: dict[tuple, list] = {}  # touche -> [début, jeton, déclenché, id bouton] (appui long)
         self._latched: dict[str, tuple] = {}  # interrupteur : actions maintenues en attente du 2e appui
         self._rot: dict[tuple, float] = {}  # molettes : crans accumulés en attente du pas
+        self._bad_feedback: set = set()  # retours d'état en erreur déjà signalés (une seule trace)
         self._ids: set[str] = set()
         self.diagnostic = False
         self._undo: list = []
@@ -221,7 +222,7 @@ class Engine:
         return (p.get("controls") or {}).get(cid) if p else None
 
     def page_names(self) -> dict[str, str]:
-        return {p["id"]: p["name"] for p in self.pages}
+        return {p["id"]: p.get("name") or "" for p in self.pages}
 
     # -- modifications (avec annuler / rétablir) ------------------------------
     def mutate(self, fn, coalesce: str | None = None) -> None:
@@ -349,7 +350,7 @@ class Engine:
             if b is None:
                 store.pop(target, None)
             elif cid is not None:
-                store[target] = normalize_control(b)
+                store[target] = normalize_control(b, cid)  # la nature suit l'organe, pas le contenu
             else:
                 store[target] = normalize_button(b)
         # regroupement « annuler » propre à chaque touche : taper sur A puis sur B = deux étapes
@@ -537,13 +538,23 @@ class Engine:
         """Relâché (appelé sous _plock) : appui court éventuel, puis fin des actions maintenues."""
         b, deck = snap["b"], snap["deck"]
         hold = self._holds.pop(tok, None)
-        if short and hold is not None and not hold[2] and not (b.get("confirm") and not snap["test"]):
-            acts = [a for a in b.get("actions") or [] if not actions.is_momentary(a)]
-            self._run(b, acts, ("down", "up"), deck)  # appui court
         held, snap["held"] = snap["held"], []
-        done = self._run(b, held, ("up",), deck)
-        if not any(s["b"]["id"] == b["id"] for s in self._active.values()):
-            self.pressed.discard(b["id"])
+        done = None
+        try:
+            if short and hold is not None and not hold[2] and not (b.get("confirm") and not snap["test"]):
+                acts = [a for a in b.get("actions") or [] if isinstance(a, dict) and not actions.is_momentary(a)]
+                self._run(b, acts, ("down", "up"), deck)  # appui court
+        except Exception:
+            log.exception("relâché : appui court")
+        finally:
+            # Quoi qu'il arrive à l'appui court, les actions maintenues DOIVENT être relâchées :
+            # sinon un micro intercom ou une touche restent enfoncés jusqu'à la fermeture.
+            try:
+                done = self._run(b, held, ("up",), deck)
+            except Exception:
+                log.exception("relâché : actions maintenues")
+            if not any(s["b"]["id"] == b["id"] for s in self._active.values()):
+                self.pressed.discard(b["id"])
         if b["id"] not in self._ids:
             self._gc_runners()
         return done
@@ -556,14 +567,21 @@ class Engine:
         latched = deck is None if latched is None else latched
         events, intercom = [], False
         with self._plock:
+            # Chaque relâché est isolé : une touche en erreur ne doit pas laisser les suivantes enfoncées.
             for tok in [t for t in self._active if deck is None or t[0] == deck]:
                 snap = self._active.pop(tok)
-                intercom |= any(a.get("type") == "intercom.ptt" for a in snap["held"])
-                events.append(self._release(snap, tok, short=False))
+                intercom |= any(isinstance(a, dict) and a.get("type") == "intercom.ptt" for a in snap["held"])
+                try:
+                    events.append(self._release(snap, tok, short=False))
+                except Exception:
+                    log.exception("relâché général")
             if latched:
                 for bid, (b, acts, dk) in list(self._latched.items()):
-                    intercom |= any(a.get("type") == "intercom.ptt" for a in acts)
-                    events.append(self._run(b, acts, ("up",), dk))
+                    intercom |= any(isinstance(a, dict) and a.get("type") == "intercom.ptt" for a in acts)
+                    try:
+                        events.append(self._run(b, acts, ("up",), dk))
+                    except Exception:
+                        log.exception("relâché d'un interrupteur")
                     self.toggles[bid] = False
                 self._latched.clear()
         events = [e for e in events if e is not None]
@@ -633,13 +651,14 @@ class Engine:
     def _run(self, b: dict, acts: list[dict], phases: tuple, deck, extra: dict | None = None) -> threading.Event | None:
         if not acts:
             return None
-        with self._plock:
-            runner = self._runners.get(b["id"])
-            if runner is None:  # un exécuteur par bouton : appui puis relâché toujours dans l'ordre
-                runner = self._runners[b["id"]] = _Runner()
-        acts = copy.deepcopy(acts)
+        # Une entrée invalide (null dans une liste éditée à la main) est ignorée plutôt que de faire
+        # échouer toute la liste — et avec elle le relâché d'une action maintenue.
+        acts = [a for a in copy.deepcopy(acts or []) if isinstance(a, dict)]
         label = (b.get("label") or "").replace("\n", " ")
-        names = self.page_names()
+        try:
+            names = self.page_names()
+        except Exception:
+            names = {}
 
         def job():
             for phase in phases:
@@ -650,7 +669,13 @@ class Engine:
                         actions.execute(self, a, phase, {"deck": deck, **(extra or {})})
                     except Exception as e:
                         self.log("error", f"{label or 'Bouton'} : {actions.summary(a, names)} → {e}")
-        return runner.submit(job)
+        # Soumis sous le verrou : sinon la suppression simultanée du bouton peut arrêter son
+        # exécuteur entre sa récupération et la soumission, et le travail serait perdu.
+        with self._plock:
+            runner = self._runners.get(b["id"])
+            if runner is None:  # un exécuteur par bouton : appui puis relâché toujours dans l'ordre
+                runner = self._runners[b["id"]] = _Runner()
+            return runner.submit(job)
 
     def _unlatch_stale(self) -> None:
         """Un interrupteur verrouillé (talkback, raccourci maintenu) dont le bouton a disparu, n'est plus un
@@ -717,19 +742,29 @@ class Engine:
         """Textes dynamiques qui changent sans événement vMix (temps restant, durée d'enregistrement, heure) :
         on recalcule les libellés à jetons 2 fois par seconde et on ne redessine que s'ils ont changé."""
         last: dict = {}
+        failed: set = set()
         while not self._halt.wait(0.5):
             try:
                 cur = {}
                 for _, _, b in self.all_buttons():
-                    texts = [b.get("label") or ""] + [f.get("label") or "" for f in b.get("feedbacks") or []]
-                    if any(textvars.has_tokens(t) for t in texts):
-                        cur[b["id"]] = tuple(textvars.expand(t, self) for t in texts)
-                    # Niveaux (volume vMix, son et micro Windows) : ils changent aussi hors de LiveDeck,
-                    # sans qu'aucun événement ne le signale. On compare l'apparence obtenue.
-                    fbs = (feedback.auto(b) if b.get("auto_feedback", True) else []) + list(b.get("feedbacks") or [])
-                    if any((f.get("cond") or {}).get("type") in LIVE_CONDS for f in fbs):
-                        v = self.visual(b)
-                        cur[(b["id"], "v")] = tuple(sorted((v or {}).items()))
+                    # Un bouton défaillant est isolé : avant, une seule erreur arrêtait la mise à jour de
+                    # TOUS les textes dynamiques (comptes à rebours, durée d'enregistrement, niveaux) et
+                    # écrivait deux traces par seconde dans le journal.
+                    try:
+                        fl = [f for f in b.get("feedbacks") or [] if isinstance(f, dict)]
+                        texts = [b.get("label") or ""] + [f.get("label") or "" for f in fl]
+                        if any(textvars.has_tokens(t) for t in texts):
+                            cur[b["id"]] = tuple(textvars.expand(t, self) for t in texts)
+                        # Niveaux (volume vMix, son et micro Windows) : ils changent aussi hors de
+                        # LiveDeck, sans qu'aucun événement ne le signale. On compare l'apparence obtenue.
+                        fbs = (feedback.auto(b) if b.get("auto_feedback", True) else []) + fl
+                        if any((f.get("cond") or {}).get("type") in LIVE_CONDS for f in fbs):
+                            v = self.visual(b)
+                            cur[(b["id"], "v")] = tuple(sorted((v or {}).items()))
+                    except Exception:
+                        if b.get("id") not in failed:
+                            failed.add(b.get("id"))
+                            log.exception("textes dynamiques de « %s »", (b.get("label") or "").replace("\n", " "))
                 if cur != last:
                     last = cur
                     self.emit("state")
@@ -743,7 +778,18 @@ class Engine:
              "icon": b.get("icon", ""), "bar": "", "pressed": b["id"] in self.pressed, "warn": False, "lit": ""}
         fbs = (feedback.auto(b) if b.get("auto_feedback", True) else []) + list(b.get("feedbacks") or [])
         for f in fbs:
-            ok, extra = feedback.evaluate(self, b, f.get("cond", {}))
+            if not isinstance(f, dict):
+                continue
+            # Un retour d'état défaillant est ignoré (et signalé une fois) : il ne doit ni empêcher
+            # l'affichage du bouton, ni les retours d'état suivants, ni ceux des autres boutons.
+            try:
+                ok, extra = feedback.evaluate(self, b, f.get("cond") or {})
+            except Exception:
+                sig = (b.get("id"), repr(f.get("cond"))[:120])
+                if sig not in self._bad_feedback:
+                    self._bad_feedback.add(sig)
+                    log.exception("retour d'état de « %s »", (b.get("label") or "").replace("\n", " "))
+                continue
             if ok:
                 v["lit"] = f.get("bg") or v["lit"]
                 for k in ("bg", "fg", "bar", "label"):

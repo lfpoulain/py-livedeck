@@ -87,6 +87,10 @@ class ControlBar(QWidget):
                    for d in (self.engine.decks.info() if self.engine.decks else []))
 
     def set_page(self, page_id: str | None) -> None:
+        if page_id != self.page_id:
+            # Comme la vue : changer de page oublie la sélection. Sinon « Suppr » ou « Coller »
+            # agissaient sur le contrôle du même nom de la NOUVELLE page, jamais sélectionné.
+            self.sel = None
         self.page_id = page_id
         self.refresh()
 

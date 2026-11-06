@@ -11,7 +11,7 @@ import threading
 import time
 
 from . import loupedeck as ld
-from .model import control_key, key
+from .model import control_key, key, parse_control
 from .render import hex_rgb, render, render_strip, render_wheel
 
 log = logging.getLogger("livedeck")
@@ -49,7 +49,11 @@ class LoupedeckHandle:
     def invalidate(self, everything: bool = False) -> None:
         self.cache.clear()
         if everything:
-            self.reset_zones()
+            # Contenu inconnu (après « Identifier » ou le diagnostic) : on oublie tout pour TOUT
+            # redessiner. Supposer l'appareil noir laissait une diode de tally allumée à tort si son
+            # état s'était éteint entre-temps (même couleur « noire » en cache, donc rien d'envoyé).
+            self.zones.clear()
+            self.leds.clear()
 
 
 class LoupedeckManager:
@@ -115,7 +119,7 @@ class LoupedeckManager:
         except Exception as e:
             self.error = str(e)
             return
-        changed, gone = False, []
+        changed, gone, dead = False, [], []
         with self._lock:
             present = {d["path"] for d in found}
             for path in list(self._failures):  # appareil débranché : on oublie ses échecs passés
@@ -126,34 +130,50 @@ class LoupedeckManager:
                     continue
                 self.engine.log("warn", f"{h.model} débranché")
                 del self.handles[path]
+                dead.append(h.dev)
                 gone.append(h.serial)
                 changed = True
-            for d in found:
-                if d["path"] in self.handles:
+            to_open = [d for d in found if d["path"] not in self.handles]
+        for dev in dead:  # libère le port COM : sinon la reconnexion se voit refuser l'accès
+            try:
+                dev.close()
+            except Exception:
+                pass
+
+        # Ouverture HORS du verrou : la poignée de main peut durer 2 s, et l'interface consulte ce verrou
+        # à chaque dessin (info()). Un appareil qui ne répond pas figeait l'écran toutes les 2 secondes.
+        opened = []
+        for d in to_open:
+            try:
+                dev = ld.Loupedeck(d["path"], d["pid"], d["serial"], on_event=self._on_event)
+                dev.connect()
+            except Exception as e:
+                # Un premier échec est souvent passager (appareil encore en train de se refermer après
+                # l'arrêt de LiveDeck) : on réessaie sans rien dire. S'il persiste — typiquement le
+                # logiciel Loupedeck officiel qui garde le port —, on le dit UNE fois, pas toutes les 2 s.
+                n = self._failures.get(d["path"], 0) + 1
+                self._failures[d["path"]] = n
+                if n == 2:
+                    self.engine.log("error", f"Ouverture du {d['model']} ({d['path']}) impossible : {e}. "
+                                             "Ferme le logiciel Loupedeck s'il est ouvert : il garde l'appareil.")
+                continue
+            self._failures.pop(d["path"], None)
+            try:
+                dev.clear()  # 374 Ko à transférer : aussi hors du verrou
+            except Exception:
+                pass
+            opened.append((d["path"], dev))
+
+        with self._lock:
+            for path, dev in opened:
+                if self._stop.is_set():
+                    dev.close()
                     continue
-                try:
-                    dev = ld.Loupedeck(d["path"], d["pid"], d["serial"], on_event=self._on_event)
-                    dev.connect()
-                except Exception as e:
-                    # Un premier échec est souvent passager (appareil encore en train de se refermer après
-                    # l'arrêt de LiveDeck) : on réessaie sans rien dire. S'il persiste — typiquement le
-                    # logiciel Loupedeck officiel qui garde le port —, on le dit UNE fois, pas toutes les 2 s.
-                    n = self._failures.get(d["path"], 0) + 1
-                    self._failures[d["path"]] = n
-                    if n == 2:
-                        self.engine.log("error", f"Ouverture du {d['model']} ({d['path']}) impossible : {e}. "
-                                                 "Ferme le logiciel Loupedeck s'il est ouvert : il garde l'appareil.")
-                    continue
-                self._failures.pop(d["path"], None)
                 h = LoupedeckHandle(dev)
-                self.handles[d["path"]] = h
+                self.handles[path] = h
                 self._show(h, self._initial_page(h))
                 self.apply_settings(h.serial)
-                try:
-                    dev.clear()
-                except Exception:
-                    pass
-                self.engine.log("info", f"{h.model} connecté ({h.serial}, firmware {dev.firmware})")
+                self.engine.log("info", f"{h.model} connecté ({h.serial}, firmware {dev.firmware or '?'})")
                 changed = True
         for serial in gone:  # touches maintenues sur un appareil disparu : on les relâche
             self.engine.release_all(deck=serial)
@@ -280,7 +300,11 @@ class LoupedeckManager:
 
     # -- événements -----------------------------------------------------------
     def _handle(self, serial: str) -> LoupedeckHandle | None:
-        return next((h for h in self.handles.values() if h.serial == serial), None)
+        """Appareil d'origine d'un événement. On compare AUSSI au numéro que l'appareil vient
+        d'annoncer : s'il diffère de celui lu sur l'USB (port sans numéro de série, autre format sur
+        les Razer), aucun appui n'était plus reconnu — l'appareil devenait muet sans un mot.
+        Copie de la liste : la détection peut ajouter ou retirer un appareil pendant ce temps."""
+        return next((h for h in list(self.handles.values()) if serial in (h.serial, h.dev.serial)), None)
 
     def _on_event(self, evt: dict) -> None:
         """Appelé par le thread de lecture de l'appareil : il ne doit jamais lever."""
@@ -306,7 +330,10 @@ class LoupedeckManager:
         """Un doigt posé sur une vignette la tient jusqu'à ce qu'il soit levé, même s'il a glissé
         ailleurs entre-temps : le relâché s'applique toujours à la case du poser. Sans cela, un
         glissement vers un bandeau laisserait la touche enfoncée (micro intercom ouvert en direct)."""
-        phase, finger = evt["phase"], evt["finger"]
+        phase = evt["phase"]
+        # La dalle et l'écran de la molette numérotent leurs doigts chacun de leur côté : sans les
+        # séparer, toucher la molette en tenant une vignette pouvait relâcher la vignette trop tôt.
+        finger = ((evt.get("target") or {}).get("screen") == "wheel", evt["finger"])
         if phase == "move":
             return
         if phase == "end":
@@ -315,7 +342,8 @@ class LoupedeckManager:
                 return  # le doigt n'était pas parti d'une vignette
             page_id, k = started
             if self.diag_handler:
-                self.diag_handler(h.serial, self._index(h, k), False)
+                if parse_control(k) is None:  # le diagnostic ne connaît que les touches de la grille
+                    self.diag_handler(h.serial, self._index(h, k), False)
             else:
                 self.engine.press(page_id, k, False, deck=h.serial)
             return
@@ -337,8 +365,10 @@ class LoupedeckManager:
         if self.diag_handler or not h.page_id:
             return
         h.fingers[finger] = (h.page_id, k)
-        self._haptic(h, k)
+        # L'action d'abord, la vibration ensuite : la vibration attend la fin d'une image en cours
+        # d'envoi (jusqu'à 115 Ko pour la molette), et l'appui ne doit pas attendre avec elle.
         self.engine.press(h.page_id, k, True, deck=h.serial)
+        self._haptic(h, k)
 
     @staticmethod
     def _index(h: LoupedeckHandle, k: str) -> int:
@@ -368,11 +398,11 @@ class LoupedeckManager:
         if self.diag_handler or not h.page_id:
             return
         k = control_key(cid)
-        if evt["down"]:
-            self._haptic(h, k)
         # Même libre, l'appui est transmis : le moteur le signale à l'éditeur, qui sélectionne
         # le contrôle. C'est ce qui permet de câbler l'appareil organe par organe.
         self.engine.press(h.page_id, k, evt["down"], deck=h.serial)
+        if evt["down"]:
+            self._haptic(h, k)  # après l'action : elle ne doit pas attendre une image en cours d'envoi
 
     def _on_rotate(self, h: LoupedeckHandle, evt: dict) -> None:
         if self.diag_handler or not h.page_id:

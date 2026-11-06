@@ -233,15 +233,23 @@ class WinAudio:
 
     def _app_apply(self, app: str, fn) -> list:
         """Applique fn(ISimpleAudioVolume) à toutes les sessions de l'application (Chrome en a plusieurs)."""
-        out = []
-        for name, vol in self._sessions():
-            try:
-                if self._match(name, app):
+        out, err = [], None
+        sessions = self._sessions()
+        try:
+            for name, vol in sessions:
+                if not self._match(name, app):
+                    continue
+                try:
                     out.append(fn(vol))
-            finally:
+                except AudioError as e:  # une session périmée ne doit pas empêcher les autres
+                    err = e
+        finally:
+            # Toutes les sessions sont libérées, même après une erreur : avant, une seule session en
+            # échec laissait les références COM des suivantes à l'abandon.
+            for _, vol in sessions:
                 _release(vol)
         if not out:
-            raise AudioError(f"« {app} » ne produit pas de son en ce moment (aucune session audio)")
+            raise err or AudioError(f"« {app} » ne produit pas de son en ce moment (aucune session audio)")
         return out
 
     # -- API publique ---------------------------------------------------------------
@@ -285,11 +293,14 @@ class CachedAudio:
     """Lectures mises en cache brièvement : le rafraîchissement des touches lit le son plusieurs fois
     par seconde, pour chaque touche concernée, et l'énumération des applications n'est pas gratuite."""
 
-    TTL = 0.3
+    # Plus long que le rafraîchissement des niveaux (0,5 s), sinon chaque passage manquait le cache.
+    # Les écritures de LiveDeck l'invalident aussitôt : seul un changement fait ailleurs (clavier,
+    # barre des tâches) peut mettre jusqu'à une seconde à apparaître.
+    TTL = 1.0
 
     def __init__(self, backend):
         self.backend = backend
-        self._cache: dict[tuple, tuple[float, object]] = {}
+        self._cache: dict[tuple, tuple[float, object, BaseException | None]] = {}
         self._lock = threading.Lock()
 
     def available(self) -> bool:
@@ -300,11 +311,20 @@ class CachedAudio:
         now = time.monotonic()
         with self._lock:
             hit = self._cache.get(k)
-            if hit and now - hit[0] < self.TTL:
-                return hit[1]
-        val = self.backend.get(target, app)
+        if hit and now - hit[0] < self.TTL:
+            if hit[2] is not None:
+                raise hit[2]
+            return hit[1]
+        try:
+            val = self.backend.get(target, app)
+        except Exception as e:
+            # L'échec est mis en cache lui aussi : une application qui ne joue pas de son relançait
+            # sinon une énumération complète de l'audio Windows à chaque dessin de chaque touche.
+            with self._lock:
+                self._cache[k] = (now, None, e)
+            raise
         with self._lock:
-            self._cache[k] = (now, val)
+            self._cache[k] = (now, val, None)
         return val
 
     def peek(self, target: str, app: str = ""):

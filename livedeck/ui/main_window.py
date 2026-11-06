@@ -19,7 +19,6 @@ from .. import __version__, presets
 from ..actions import to_take
 from ..companion_import import import_companion
 from ..integrations import integration_status, merge_integrations
-from ..loupedeck import control_kind
 from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config,
                      parse_control, parse_key, surface_of)
 from . import theme as T
@@ -186,7 +185,7 @@ class MainWindow(QMainWindow):
 
         self.library.input_activated.connect(self._input_activated)
         self.library.preset_activated.connect(self._preset_activated)
-        self.library.inputs.fill_requested.connect(lambda titles: self.open_fill_row(self.grid.sel, titles))
+        self.library.inputs.fill_requested.connect(lambda titles: self.open_fill_row(self.sel, titles))
         self.tray = Tray(self)
         self._shortcuts()
         self._rebuild_tabs()
@@ -650,6 +649,7 @@ class MainWindow(QMainWindow):
         pid = self.tabs.tabData(i)
         if pid and pid != self.page_id:
             self.page_id = pid
+            self.controls.select(None)
             self.grid.set_page(pid)
             self.controls.set_page(pid)
             self.inspector.load(None, None)
@@ -871,7 +871,9 @@ class MainWindow(QMainWindow):
 
     def _cell_menu(self, k: str, pos):
         b = self.engine.button(self.page_id, k)
+        control = parse_control(k) is not None
         m = QMenu(self)
+        m.setAttribute(Qt.WA_DeleteOnClose)  # sinon chaque clic droit laissait un menu en mémoire
         if self.grid.live:
             if b:
                 m.addAction("▶  Tester", lambda: self.engine.trigger(self.page_id, k))
@@ -884,22 +886,28 @@ class MainWindow(QMainWindow):
             m.addAction("Couper", self.cut)
         paste = m.addAction("Coller", self.paste)
         paste.setEnabled(self.clipboard is not None)
-        m.addSeparator()
-        if b and to_take(b):
-            m.addAction("Convertir en Take", lambda: self.convert_to_take([k]))
-        row = self._row_takes(k)
-        if len(row) > 1:
-            m.addAction(f"Convertir la rangée en Take ({len(row)} touches)", lambda: self.convert_to_take(row))
-        m.addAction("Remplir la rangée à partir d'ici…", lambda: self.open_fill_row(k))
+        # Rangées, Take, remplissage, duplication et envoi vers une autre page n'ont de sens que pour
+        # une case de la grille : sur une molette ou un bouton physique, ils plantaient (« c:knobTL »
+        # n'est pas une position « rangée,colonne ») et le menu ne s'ouvrait jamais.
+        if not control:
+            m.addSeparator()
+            if b and to_take(b):
+                m.addAction("Convertir en Take", lambda: self.convert_to_take([k]))
+            row = self._row_takes(k)
+            if len(row) > 1:
+                m.addAction(f"Convertir la rangée en Take ({len(row)} touches)",
+                            lambda: self.convert_to_take(row))
+            m.addAction("Remplir la rangée à partir d'ici…", lambda: self.open_fill_row(k))
         if b:
             m.addSeparator()
-            m.addAction("Dupliquer", self.duplicate_selected)
-            send = m.addMenu("Envoyer vers la page")
-            for p in self.engine.pages:
-                if p["id"] != self.page_id:
-                    act = send.addAction(p["name"], lambda pid=p["id"]: self._send_to(k, pid))
-                    act.setEnabled(self.engine.first_free(p["id"]) is not None)
-            m.addSeparator()
+            if not control:
+                m.addAction("Dupliquer", self.duplicate_selected)
+                send = m.addMenu("Envoyer vers la page")
+                for p in self.engine.pages:
+                    if p["id"] != self.page_id:
+                        act = send.addAction(p["name"], lambda pid=p["id"]: self._send_to(k, pid))
+                        act.setEnabled(self.engine.first_free(p["id"]) is not None)
+                m.addSeparator()
             m.addAction("Effacer", self.delete_selected)
         m.exec(pos)
 
@@ -921,13 +929,15 @@ class MainWindow(QMainWindow):
                 if nb:
                     p["buttons"][kk] = nb
         self.engine.mutate(apply)
-        self.inspector.load(self.page_id, self.grid.sel, force=True)
+        self.inspector.load(self.page_id, self.sel, force=True)
         self.toast(f"{len(keys)} touche(s) converties en Take : 1er appui preview, 2e appui antenne  ·  "
                    "Ctrl+Z pour annuler")
 
     def open_fill_row(self, k: str | None, titles: list[str] | None = None) -> None:
         if not self._editable():
             return
+        if k and parse_control(k) is not None:
+            k = None  # une rangée se remplit dans la grille, pas à partir d'une molette
         k = k or self.engine.first_free(self.page_id) or "0,0"
         r, c = parse_key(k)
         dlg = FillRowDialog(self.engine, self, titles or self.library.inputs.selected_titles(),
@@ -963,10 +973,10 @@ class MainWindow(QMainWindow):
             return
         k = self.sel
         if self.clipboard and k:
-            b = {**copy.deepcopy(self.clipboard), "id": new_id()}
-            cid = parse_control(k)
-            if cid is not None:  # coller sur une molette lui garde ses deux sens de rotation
-                b["kind"] = control_kind(cid)
+            # Même règle que pour un dépôt depuis la bibliothèque : une molette garde sa rotation, une
+            # touche ou un bouton la perd. Avant, une molette collée sur une touche gardait « rotary » et
+            # l'éditeur y proposait une rotation impossible.
+            b = presets.place({**copy.deepcopy(self.clipboard), "id": new_id()}, k)
             self.engine.set_button(self.page_id, k, b)
             self.inspector.load(self.page_id, k, force=True)
 
@@ -1133,11 +1143,20 @@ class MainWindow(QMainWindow):
         if self.locked:
             self.toast(HINT_LOCK, error=True)
             return
-        SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general").exec()
+        self._run_dialog(SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general"))
         self._update_pills()
 
+    @staticmethod
+    def _run_dialog(dlg) -> int:
+        """Ouvre une fenêtre modale puis la détruit : enfant de la fenêtre principale, elle restait
+        sinon en mémoire, une de plus à chaque ouverture, pendant toute la session."""
+        try:
+            return dlg.exec()
+        finally:
+            dlg.deleteLater()
+
     def open_help(self):
-        ShortcutsDialog(self).exec()
+        self._run_dialog(ShortcutsDialog(self))
 
     def _show_migration_notes(self):
         """Notes laissées par la mise à jour d'une ancienne configuration : affichées une fois (Moniteur)."""
@@ -1155,7 +1174,7 @@ class MainWindow(QMainWindow):
             pass
 
     def open_diagnostic(self):
-        DiagnosticDialog(self.engine, self).exec()
+        self._run_dialog(DiagnosticDialog(self.engine, self))
 
     def open_search(self):
         dlg = SearchDialog(self.engine, self)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import ipaddress
 import re
 import shlex
@@ -61,6 +62,12 @@ def error_kind(e: BaseException, host: str = "") -> str:
     if isinstance(r, (ConnectionResetError, ConnectionAbortedError)):
         return "refused" if loop else "reset"  # en local : le programme vient de se fermer
     return "network"
+
+
+# Erreurs d'un échange réseau. Une réponse HTTP mal formée (appareil qui redémarre, autre service sur
+# ce port) lève une HTTPException, qui N'EST PAS une OSError : interceptée seule, OSError laissait
+# l'erreur s'échapper silencieusement et le voyant de l'appareil restait figé au vert.
+NET_ERRORS = (OSError, http.client.HTTPException)
 
 
 def error_text(e: BaseException, host: str = "") -> str:

@@ -148,10 +148,30 @@ def new_control(kind: str = "button", **kw) -> dict:
     return c
 
 
-def normalize_control(c: dict) -> dict:
+LIST_KEYS = ("actions", "actions_off", "long_actions", "actions_cw", "actions_ccw", "feedbacks")
+
+
+def _clean_lists(b: dict) -> None:
+    """Une liste « null » ou contenant « null » (fichier édité à la main, ancienne version) devient
+    une liste propre : sinon une seule valeur nulle fait échouer l'appui, le rendu ou le chargement."""
+    for k in LIST_KEYS:
+        if k in b:
+            b[k] = [x for x in (b[k] or []) if isinstance(x, dict)]
+    for f in b.get("feedbacks") or []:
+        if not isinstance(f.get("cond"), dict):
+            f["cond"] = {}
+
+
+def normalize_control(c: dict, cid: str | None = None) -> dict:
     for k, v in CONTROL_DEFAULTS.items():
-        c.setdefault(k, copy.deepcopy(v))
+        if c.get(k) is None:
+            c[k] = copy.deepcopy(v)
     c.setdefault("id", new_id())
+    if cid is not None:
+        # La nature suit l'organe physique, jamais le contenu : une molette reste une molette même si
+        # on y a déposé un input (qui arrive sans « kind ») — sinon elle cesse silencieusement de tourner.
+        c["kind"] = control_kind(cid)
+    _clean_lists(c)
     return c
 
 
@@ -187,26 +207,33 @@ def default_config() -> dict:
 
 
 def normalize_config(cfg: dict) -> dict:
+    """Complète une configuration. Une valeur « null » est traitée comme absente : `setdefault`
+    seul la laisserait en place, et un seul « null » suffisait à faire classer tout le fichier comme
+    corrompu — LiveDeck repartait alors d'une configuration vide."""
     base = default_config()
     for k, v in base.items():
-        cfg.setdefault(k, v)
+        if not isinstance(cfg.get(k), type(v)):
+            cfg[k] = v
     for k, v in base["options"].items():
         cfg["options"].setdefault(k, v)
     for k, v in base["integrations"].items():
-        cfg["integrations"].setdefault(k, v)
-    if not cfg["pages"]:
-        cfg["pages"] = base["pages"]
+        if cfg["integrations"].get(k) is None:
+            cfg["integrations"][k] = v
+    cfg["pages"] = [p for p in cfg["pages"] if isinstance(p, dict)] or base["pages"]
     for p in cfg["pages"]:
         p.setdefault("id", new_id())
-        p.setdefault("cols", 8)
-        p.setdefault("rows", 4)
-        p.setdefault("buttons", {})
-        p.setdefault("controls", {})
-        p.setdefault("surface", "")
+        if not p.get("name"):
+            p["name"] = "Page"
+        for k, v in (("cols", 8), ("rows", 4), ("buttons", {}), ("controls", {}), ("surface", "")):
+            if not isinstance(p.get(k), type(v)):
+                p[k] = v
+        p["buttons"] = {k: b for k, b in p["buttons"].items() if isinstance(b, dict)}
+        p["controls"] = {k: c for k, c in p["controls"].items() if isinstance(c, dict)}
         for b in p["buttons"].values():
             normalize_button(b)
+            _clean_lists(b)
         for cid, c in p["controls"].items():
-            normalize_control(c)
+            normalize_control(c, cid)
             # Un bouton ne tourne pas : une action de rotation posée là ne partirait jamais.
             # (Les versions précédentes la conservaient en déposant un réglage de molette dessus.)
             if control_kind(cid) != "rotary" and (c["actions_cw"] or c["actions_ccw"]):

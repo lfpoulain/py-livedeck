@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import webreq
+from .webreq import NET_ERRORS
 
 
 def parse_targets(text: str) -> list[tuple[str, str]]:
@@ -42,7 +43,7 @@ def check(address: str) -> bool:
         return ping(address)
     try:
         status, text = webreq.request("GET", address, timeout=2.5)
-    except OSError:
+    except NET_ERRORS:
         return False
     if not 200 <= status < 300:
         return False
@@ -207,7 +208,7 @@ class JsonPoller:
                 new = {"ok": True, "data": json.loads(text or "null")}
         except ValueError:
             new = {"ok": False, "error": "réponse non JSON"}
-        except OSError as e:
+        except NET_ERRORS as e:
             new = {"ok": False, "error": webreq.error_text(e, "")}
         finally:
             self._busy.discard(url)

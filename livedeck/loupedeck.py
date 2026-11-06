@@ -21,6 +21,7 @@ log = logging.getLogger("livedeck")
 
 # -- protocole ---------------------------------------------------------------
 MAGIC = 0x82
+MAX_SHORT = 125  # WebSocket : au-delà, l'octet de longueur annonce une longueur étendue
 BAUD = 256000
 WS_UPGRADE = (b"GET /index.html\nHTTP/1.1\nConnection: Upgrade\n"
               b"Upgrade: websocket\nSec-WebSocket-Key: 123abc\n\n")
@@ -198,8 +199,31 @@ _G6 = tuple((v & 0xFC) << 3 for v in range(256))
 _B5 = tuple(v >> 3 for v in range(256))
 
 
+# Octet de poids fort = (R & 0xF8) | (G >> 5) ; octet de poids faible = ((G & 0x1C) << 3) | (B >> 3).
+# Les bits de chaque moitié ne se recouvrent pas : une simple addition (sans saturation) les assemble.
+_LUT_R_HI = [v & 0xF8 for v in range(256)]
+_LUT_G_HI = [v >> 5 for v in range(256)]
+_LUT_G_LO = [(v & 0x1C) << 3 for v in range(256)]
+_LUT_B_LO = [v >> 3 for v in range(256)]
+
+
 def rgb565(img: Image.Image, big_endian: bool = False) -> bytes:
-    """Image Pillow -> tampon 16 bits 5-6-5, petit-boutiste sauf pour l'écran de la molette."""
+    """Image Pillow -> tampon 16 bits 5-6-5, petit-boutiste sauf pour l'écran de la molette.
+
+    Calcul fait par Pillow (en C) : environ 10 fois plus rapide que la boucle par pixel, qui
+    occupait le processeur — et le verrou de l'interpréteur — à chaque image envoyée. Les modes
+    « BGR;16 » de Pillow auraient été plus directs, mais ils ont disparu de Pillow 12."""
+    from PIL import ImageChops
+    try:
+        r, g, b = img.convert("RGB").split()
+        hi = ImageChops.add(r.point(_LUT_R_HI), g.point(_LUT_G_HI))
+        lo = ImageChops.add(g.point(_LUT_G_LO), b.point(_LUT_B_LO))
+        return Image.merge("LA", (hi, lo) if big_endian else (lo, hi)).tobytes()
+    except Exception:  # Pillow inattendu : on retombe sur le calcul pixel par pixel, plus lent mais sûr
+        return _rgb565_slow(img, big_endian)
+
+
+def _rgb565_slow(img: Image.Image, big_endian: bool = False) -> bytes:
     raw = img.convert("RGB").tobytes()
     n = len(raw) // 3
     out = bytearray(n * 2)
@@ -225,13 +249,25 @@ def split_frames(buf: bytearray) -> list[bytes]:
     out = []
     while True:
         i = buf.find(MAGIC)
-        if i < 0 or len(buf) < i + 2:
+        if i < 0:
+            buf.clear()  # aucun début de trame : ce ne sont que des octets perdus
             break
-        n = buf[i + 1]
-        if len(buf) < i + 2 + n:
+        if i:
+            del buf[:i]  # octets perdus avant la trame
+        if len(buf) < 2:
             break
-        out.append(bytes(buf[i + 2:i + 2 + n]))
-        del buf[:i + 2 + n]
+        n = buf[1]
+        if n < 3 or n > MAX_SHORT:
+            # Pas une trame : un message fait au moins [longueur, commande, n°] (3 octets), et en
+            # WebSocket une longueur courte va de 0 à 125. Un 0x82 lu en plein milieu d'un message
+            # (une abscisse tactile de 130 suffit) faisait attendre jusqu'à 255 octets qui pouvaient
+            # ne jamais venir : les vrais appuis, relâchés compris, restaient bloqués derrière.
+            del buf[:1]
+            continue
+        if len(buf) < 2 + n:
+            break
+        out.append(bytes(buf[2:2 + n]))
+        del buf[:2 + n]
     return out
 
 
@@ -285,6 +321,11 @@ class Loupedeck:
         self._reader.start()
         self._send(CMD_SERIAL)
         self._send(CMD_VERSION)
+        # On attend brièvement les réponses : numéro de série et version sont ainsi connus avant que
+        # l'appareil soit présenté (avant, le journal affichait « firmware  » vide).
+        deadline = time.monotonic() + 0.5
+        while not self.firmware and time.monotonic() < deadline and not self._stop.is_set():
+            time.sleep(0.01)
 
     def _handshake(self, timeout: float) -> None:
         """Poignée de main « WebSocket » sur le port série.
@@ -331,13 +372,17 @@ class Loupedeck:
 
     # -- envoi ----------------------------------------------------------------
     def _send(self, cmd: int, data: bytes = b"") -> None:
+        """Envoie une commande. Lève OSError si l'appareil est perdu : l'appelant arrête alors ses
+        envois au lieu d'enchaîner les écritures vers un port en panne — chacune pouvait bloquer
+        5 s (délai d'écriture), soit plusieurs minutes pour redessiner un appareil complet, pendant
+        lesquelles la détection ne pouvait ni constater la perte ni reconnecter."""
         port = self._port
-        if not port or not port.is_open:
-            return
+        if self._stop.is_set() or not port or not port.is_open:
+            raise OSError("Loupedeck déconnecté")
         with self._send_lock:
             self._tid = self._tid % 255 + 1  # le 0 est ignoré par l'appareil
             body = bytes([min(3 + len(data), 0xFF), cmd, self._tid]) + data
-            if len(body) > 0xFF:
+            if len(body) > MAX_SHORT:  # au-delà de 125 octets, la longueur courte n'existe pas
                 prep = bytearray(14)
                 prep[0], prep[1] = MAGIC, 0xFF
                 struct.pack_into(">I", prep, 6, len(body))
@@ -349,11 +394,20 @@ class Loupedeck:
             except Exception as e:
                 log.warning("Loupedeck %s : écriture impossible (%s)", self.serial, e)
                 self._fail()
+                raise OSError(f"écriture impossible : {e}") from e
 
     def _fail(self) -> None:
         if self._stop.is_set():
             return
         self._stop.set()
+        # Le port est libéré tout de suite : Windows réserve un port COM à un seul ouvreur, et la
+        # reconnexion échouait (« accès refusé ») tant que l'ancien objet n'était pas détruit.
+        port, self._port = self._port, None
+        if port:
+            try:
+                port.close()
+            except Exception:
+                pass
         cb = self.on_close
         if cb:
             try:
@@ -371,6 +425,8 @@ class Loupedeck:
                 chunk = port.read(4096)
             except Exception:
                 self._fail()
+                break
+            if self._stop.is_set():
                 break
             if not chunk:
                 continue

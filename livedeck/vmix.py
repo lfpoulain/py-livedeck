@@ -392,9 +392,13 @@ class VmixClient:
         # position, volume, durées : relues à chaque XML (textes dynamiques) mais sans tout redessiner
         st.durations, st.transitions, st.audio = durations, transitions, audio
         st.set_inputs(inputs)
-        if sig != self._sig:
-            self._sig = sig
-            st.mixes, st.overlays, st.flags = mixes, overlays, flags
+        replaced = False
+        with self._exp_lock:  # même verrou qu'expect() : une attente posée entre-temps n'est pas perdue
+            if sig != self._sig:
+                self._sig = sig
+                st.mixes, st.overlays, st.flags = mixes, overlays, flags
+                replaced = True
+        if replaced:
             self._notify()
         self._set_connected(True)
 
@@ -413,6 +417,12 @@ class VmixClient:
                 self._expect[(mix, k)] = (v, end)
                 if m.get(k) != v:
                     m[k], changed = v, True
+            if changed:
+                # L'état affiché ne correspond plus à la dernière signature lue : on l'oublie, pour que
+                # le prochain XML soit réappliqué. Sinon, si vMix refusait la commande, le XML suivant
+                # avait la même signature qu'avant, n'était pas réappliqué, et l'attente restait
+                # affichée indéfiniment (une preview qui n'est pas la vraie).
+                self._sig = None
         if changed:
             self._notify()
 

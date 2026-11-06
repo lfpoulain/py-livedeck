@@ -625,8 +625,11 @@ def test_multiview_drives_py_multiview(tmp_path):
     # mode absolu : « Démarrer » reste « on » même répété
     tap(e, pg, "0,3")
     tap(e, pg, "0,3")
-    assert wait(lambda: mv.monitor)
-    assert [c for c in mv.calls if c.startswith("monitor/")] == ["monitor/on", "monitor/on"]
+    # On attend les DEUX appels : « mv.monitor » devient vrai dès le premier, et vérifier la liste à
+    # cet instant faisait échouer le test une fois sur deux, selon la vitesse du second.
+    monitor = lambda: [c for c in mv.calls if c.startswith("monitor/")]  # noqa: E731
+    assert wait(lambda: len(monitor()) >= 2), monitor()
+    assert mv.monitor and monitor() == ["monitor/on", "monitor/on"], monitor()
 
     # volume
     tap(e, pg, "0,2")
@@ -3204,6 +3207,257 @@ def test_loupedeck_haptic_option(tmp_path):
     dlg._save()
     assert e.cfg["decks"][h.serial]["haptic"] is True
     dlg.close()
+    e.stop()
+
+
+# -- Audit : chaque test reproduit un défaut constaté, et échoue sur l'ancien code -------------
+def test_held_action_released_despite_error(tmp_path):
+    """Une erreur pendant le relâché ne doit JAMAIS laisser une action maintenue enfoncée : pour un
+    bouton intercom, c'est un micro ouvert jusqu'à la fermeture de LiveDeck."""
+    e, pid, logs = one_page(tmp_path, {"0,0": new_button(
+        label="PTT", actions=[new_action("hotkey", keys="shift+z", hold=True),
+                              new_action("vmix.function", function="Cut")])})
+    since = len(KEYS.log)
+    e.press(pid, "0,0", True)
+    assert wait(lambda: held_keys(since) == ["shift+z"], 3)
+    orig = e.page_names
+    e.page_names = lambda: (_ for _ in ()).throw(KeyError("name"))   # page sans nom, config remplacée…
+    try:
+        e.press(pid, "0,0", False)
+    finally:
+        e.page_names = orig
+    assert wait(lambda: not held_keys(since), 3), f"touche restée enfoncée : {held_keys(since)}"
+    assert not e.pressed, "le bouton ne doit plus être marqué enfoncé"
+    e.stop()
+
+
+def test_config_with_nulls_loads(tmp_path):
+    """Une valeur « null » ne doit plus faire classer tout le fichier comme corrompu (LiveDeck
+    repartait alors d'une configuration vide, en plein direct)."""
+    import json as _json
+    raw = {"version": 4, "options": None, "integrations": None, "decks": None,
+           "pages": [None, {"id": "p", "cols": 4, "rows": 3, "buttons": None, "controls": {
+               "knobTL": {"label": "Gain", "actions_cw": None, "actions": [None, {"type": "vmix.function",
+                                                                                 "function": "Cut"}]},
+               "key0": None}},
+               {"id": "q", "name": "Q", "buttons": {"0,0": {"label": "X", "actions": None,
+                                                           "feedbacks": [{"cond": None, "bg": "#ff0000"}]}}}]}
+    path = Path(tmp_path) / "config.json"
+    path.write_text(_json.dumps(raw), encoding="utf-8")
+    cfg = load_config(path)
+    assert [p["id"] for p in cfg["pages"]] == ["p", "q"], "la page « null » est retirée, les autres gardées"
+    p = cfg["pages"][0]
+    assert p["name"] and p["buttons"] == {} and "key0" not in p["controls"]
+    k = p["controls"]["knobTL"]
+    assert k["kind"] == "rotary", "une molette reste une molette"
+    assert k["actions_cw"] == [] and [a["function"] for a in k["actions"]] == ["Cut"]
+    b = cfg["pages"][1]["buttons"]["0,0"]
+    assert b["actions"] == [] and b["feedbacks"][0]["cond"] == {}
+    assert isinstance(cfg["options"], dict) and isinstance(cfg["integrations"], dict)
+    # Un retour d'état mal formé n'empêche plus l'affichage du bouton.
+    e = engine(tmp_path, start=False)
+    v = e.visual(new_button(label="X", feedbacks=[{"cond": None, "bg": "#ff0000"}, None]))
+    assert v["label"] == "X"
+
+
+def test_page_change_forgets_control_selection(tmp_path):
+    """Changer de page oublie la molette sélectionnée : sinon « Suppr » effaçait la molette du même
+    nom sur la nouvelle page, jamais sélectionnée."""
+    e = engine(tmp_path, start=False)
+    a, b = new_page("A", cols=8, rows=4), new_page("B", cols=8, rows=4)
+    a["controls"] = {"knobTL": new_control("rotary", label="A")}
+    b["controls"] = {"knobTL": new_control("rotary", label="B")}
+    e.cfg["pages"] = [a, b]
+    e.start()
+    w = MainWindow(e)
+    w._goto_page(a["id"])
+    w._select_control(control_key("knobTL"))
+    w._goto_page(b["id"])
+    assert w.sel is None, w.sel
+    w.delete_selected()
+    assert "knobTL" in e.page(b["id"])["controls"], "la molette de la page B a été effacée"
+    w.close()
+    e.stop()
+
+
+def test_edit_actions_on_controls(tmp_path):
+    """Clic droit, input déposé et collage sur des contrôles Loupedeck."""
+    e = engine(tmp_path, start=False)
+    p = new_page("CT", cols=4, rows=3, surface="loupedeck")
+    xl = new_page("XL", cols=8, rows=4)
+    e.cfg["pages"] = [p, xl]
+    e.start()
+    w = MainWindow(e)
+    w.page_id = p["id"]
+    w.grid.set_page(p["id"])
+    k = control_key("knobTL")
+    # Clic droit : le menu s'ouvre (il plantait avant même de s'afficher). On remplace le menu par
+    # une sous-classe qui ne s'affiche pas : patcher QMenu.exec sur la classe ne suffit pas, l'appel
+    # d'instance de PySide l'ignore et le vrai menu modal attendait un clic, bloquant la suite.
+    from PySide6.QtWidgets import QMenu
+    shown_menus = []
+
+    class SilentMenu(QMenu):
+        def exec(self, *a, **k):
+            shown_menus.append([x.text() for x in self.actions() if x.text()])
+            return None
+
+    with mock.patch("livedeck.ui.main_window.QMenu", SilentMenu):
+        w._cell_menu(k, QPointF(0, 0).toPoint())
+        e.set_button(p["id"], k, new_control("rotary", label="Gain"))
+        w._cell_menu(k, QPointF(0, 0).toPoint())
+    assert len(shown_menus) == 2, "le menu d'une molette doit s'ouvrir"
+    assert "Effacer" in shown_menus[1] and not any("rangée" in t or "Dupliquer" in t for t in shown_menus[1]), \
+        shown_menus[1]
+    # Un input déposé sur une molette vide ne lui retire pas sa rotation.
+    e.assign_input(p["id"], control_key("knobBR"), "Cam 1", "preview")
+    assert e.control(p["id"], "knobBR")["kind"] == "rotary"
+    # Coller une molette sur une touche de grille : plus de rotation fantôme.
+    w.clipboard = new_control("rotary", label="Vol", actions_cw=[new_action("vmix.adjust")])
+    w._goto_page(xl["id"])
+    w.grid.select("0,0")
+    w.paste()
+    pasted = e.button(xl["id"], "0,0")
+    assert "kind" not in pasted and not pasted.get("actions_cw"), pasted
+    assert pasted["actions"][0]["type"] == "vmix.adjust", "la rotation devient l'appui"
+    w.close()
+    e.stop()
+
+
+def test_settings_timer_stops(tmp_path):
+    """Fermer les Réglages arrête leur minuteur : chaque ouverture en laissait un de plus, qui
+    interrogeait les intégrations deux fois par seconde jusqu'à la fermeture de LiveDeck."""
+    from PySide6.QtCore import QTimer
+    e = engine(tmp_path, start=False)
+    e.start()
+    w = MainWindow(e)
+    for _ in range(3):
+        dlg = SettingsDialog(e, w)
+        dlg.reject()
+    assert not [t for t in w.findChildren(QTimer) if t.isActive() and t.interval() == 500]
+    w.close()
+    e.stop()
+
+
+def test_loupedeck_stops_writing_after_failure(tmp_path):
+    """Après une panne d'écriture, plus aucune écriture : chacune pouvait bloquer 5 s, pendant
+    lesquelles la détection ne pouvait ni constater la perte ni reconnecter."""
+    from PIL import Image
+    e = engine(tmp_path, start=False)
+    lm, port, h = mock_loupedeck(e)
+    h.dev._fail()
+    assert not port.is_open, "le port doit être libéré tout de suite (reconnexion possible)"
+    n = len(port.commands)
+    for call in (lambda: h.dev.draw_key(0, Image.new("RGB", (90, 90))), lambda: h.dev.set_brightness(50),
+                 lambda: h.dev.vibrate("court")):
+        try:
+            call()
+            raise AssertionError("une écriture vers un appareil perdu doit échouer tout de suite")
+        except OSError:
+            pass
+    assert len(port.commands) == n, "rien ne doit partir vers un port en panne"
+    lm.refresh(force=True)                                 # ne doit ni lever ni écrire
+    assert len(port.commands) == n
+    e.stop()
+
+
+def test_loupedeck_events_with_announced_serial(tmp_path):
+    """L'appareil annonce un numéro de série différent de celui de l'USB : les appuis doivent
+    quand même être reconnus (avant, l'appareil devenait muet sans un mot)."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("CT", cols=4, rows=3)]
+    e.start()
+    lm = LoupedeckManager(e)
+    port = MockLoupedeckPort("SN-ANNONCE")
+    with mock.patch("serial.Serial", return_value=port):
+        dev = ld.Loupedeck("COM-T", 0x0007, "COM-T", on_event=lm._on_event)   # USB sans n° de série
+        dev.connect()
+    assert dev.serial == "SN-ANNONCE" and dev.firmware, "connect() attend désormais les réponses"
+    h = LoupedeckHandle(dev)
+    lm.handles["COM-T"] = h
+    h.page_id = lm._initial_page(h)
+    dev.serial = "AUTRE-CHOSE"                             # annonce tardive, après la création du handle
+    seen = []
+    e.listeners.append(lambda kind, p: seen.append(p) if kind == "activity" else None)
+    port.button("key3")
+    assert wait(lambda: seen, 3), "appui perdu : le numéro annoncé n'est pas reconnu"
+    e.stop()
+
+
+def test_loupedeck_framing_resync():
+    """Un octet 0x82 lu au milieu d'un message ne doit pas bloquer les vrais appuis derrière lui."""
+    real = bytes([0x82, 5, 5, ld.CMD_BUTTON, 1, 0x0A, 0x00])
+    for junk in (b"\x40\x82\xc8", b"\x82\x00", b"\x82\x01\x82\x02", b"\x82\xff", b"\x01\x02\x03"):
+        buf = bytearray(junk + real)
+        out = ld.split_frames(buf)
+        assert any(m[1] == ld.CMD_BUTTON and m[3] == 0x0A for m in out), (junk, out, bytes(buf))
+    buf = bytearray(b"\x01\x02\x03\x04")                   # que du rebut : le tampon ne grossit pas
+    ld.split_frames(buf)
+    assert not buf
+    buf = bytearray(b"\x82\x05\x05\x00")                   # trame valide mais incomplète : on attend
+    assert ld.split_frames(buf) == [] and bytes(buf) == b"\x82\x05\x05\x00"
+
+
+def test_loupedeck_scan_does_not_freeze_ui(tmp_path):
+    """Un appareil qui ne répond pas ne doit plus figer l'interface : la poignée de main se fait
+    hors du verrou que l'écran consulte à chaque dessin."""
+    e = engine(tmp_path, start=False)
+    e.cfg["pages"] = [new_page("CT", cols=4, rows=3)]
+    lm = LoupedeckManager(e)
+    found = [{"path": "COM-S", "vid": 0x2EC2, "pid": 0x0007, "serial": "S", "model": "Loupedeck CT"}]
+
+    def slow(self, timeout=2.0):
+        time.sleep(1.0)
+        raise OSError("poignée de main sans réponse")
+
+    with mock.patch.object(ld, "discover", return_value=found), mock.patch.object(ld.Loupedeck, "connect", slow):
+        th = threading.Thread(target=lm._scan)
+        th.start()
+        time.sleep(0.15)
+        t0 = time.perf_counter()
+        lm.info()
+        waited = time.perf_counter() - t0
+        th.join()
+    assert waited < 0.2, f"info() a attendu {waited:.2f} s"
+    e.stop()
+
+
+def test_loupedeck_rgb565_fast_and_identical():
+    """La conversion rapide (Pillow) donne exactement les mêmes octets que l'ancienne."""
+    import random
+    from PIL import Image
+    rnd = random.Random(7)
+    for size in ((1, 1), (90, 90), (60, 270), (13, 7)):
+        img = Image.frombytes("RGB", size, bytes(rnd.randrange(256) for _ in range(size[0] * size[1] * 3)))
+        for be in (False, True):
+            assert ld.rgb565(img, be) == ld._rgb565_slow(img, be), (size, be)
+    grad = Image.frombytes("RGB", (256, 1), bytes(v for v in range(256) for _ in range(3)))
+    assert ld.rgb565(grad) == ld._rgb565_slow(grad)
+
+
+def test_winaudio_failure_cached():
+    """Une application absente n'est plus recherchée à chaque dessin."""
+    fake = fakes.FakeAudio()
+    calls = []
+    orig = fake.get
+    fake.get = lambda t, app="": calls.append(1) or orig(t, app)
+    c = winsys.CachedAudio(fake)
+    for _ in range(20):
+        assert c.peek("app", "absent.exe") is None
+    assert len(calls) == 1, f"{len(calls)} énumérations au lieu d'une"
+
+
+def test_vmix_expect_not_stuck(tmp_path):
+    """Une preview attendue que vMix refuse ne doit pas rester affichée indéfiniment."""
+    s = vmix_server()
+    e = engine(tmp_path)
+    st = e.vmix.state
+    with s.state_lock:
+        s.mixes[1]["preview"] = 2
+    assert wait(lambda: st.preview(1) == 2, 3)
+    e.vmix.expect(1, ttl=0.2, preview=4)                   # commande que vMix « n'appliquera pas »
+    assert st.preview(1) == 4
+    assert wait(lambda: st.preview(1) == 2, 3), f"preview attendue restée affichée : {st.preview(1)}"
     e.stop()
 
 

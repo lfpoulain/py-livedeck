@@ -98,6 +98,10 @@ class SettingsDialog(QDialog):
         self._refresh_status()
 
     def done(self, r):
+        # La fenêtre fermée reste en mémoire (enfant de la fenêtre principale) : sans cet arrêt, son
+        # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
+        # à chaque ouverture des Réglages.
+        self._timer.stop()
         for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview):
             svc.set_forced(False)
         super().done(r)

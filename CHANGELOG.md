@@ -1,5 +1,47 @@
 # Journal des versions
 
+## 1.6.2 — 2026-11-06
+
+Version de fiabilité, issue d'un audit complet du code. Chaque correction est couverte par un test
+qui échoue sur la version précédente.
+
+### Direct
+- **Une action maintenue ne peut plus rester bloquée.** Une seule erreur au relâché d'une touche
+  (page sans nom, configuration remplacée au même moment…) laissait le raccourci maintenu enfoncé — pour
+  un bouton intercom, le micro restait ouvert jusqu'à la fermeture de LiveDeck. Le relâché des actions
+  maintenues est désormais garanti, et chaque touche est relâchée indépendamment des autres.
+- **Une configuration contenant une valeur vide ne repart plus de zéro.** Un seul « null » dans le
+  fichier le faisait classer comme corrompu, et LiveDeck démarrait avec une configuration vierge.
+- **Un retour d'état défaillant n'affecte plus que son bouton.** Il interrompait la mise à jour de tous
+  les textes dynamiques (comptes à rebours, durée d'enregistrement, niveaux).
+- Une preview attendue que vMix refuse n'est plus affichée indéfiniment.
+
+### Loupedeck
+- **Plus d'écritures vers un appareil en panne.** Après une erreur USB, chaque écriture pouvait bloquer
+  5 secondes, et la reconnexion attendait la fin : plusieurs minutes d'appareil muet.
+- **L'interface ne se fige plus** pendant l'ouverture d'un appareil qui ne répond pas (1,3 s toutes les
+  2 secondes).
+- **Les appuis ne sont plus perdus** quand l'appareil annonce un numéro de série différent de celui de
+  l'USB (cas probable sur les Razer).
+- **Un octet parasite ne bloque plus les vrais appuis.** La lecture attendait jusqu'à 255 octets qui
+  pouvaient ne jamais venir — y compris un relâché, laissant la touche enfoncée.
+- L'action part avant la vibration, et le port est libéré immédiatement en cas de panne.
+- Toucher la molette en tenant une vignette ne relâche plus la vignette trop tôt.
+- Après « Identifier » ou le diagnostic, tout est redessiné : une diode de tally pouvait rester allumée.
+- Conversion des images 10 à 17 fois plus rapide, au bit près identique.
+
+### Édition
+- Changer de page oublie la molette sélectionnée : « Suppr » effaçait celle de la nouvelle page.
+- Le clic droit sur une molette ouvre le menu (il plantait).
+- Un input déposé sur une molette ne l'empêche plus de tourner.
+- Coller une molette sur une touche ne laisse plus de rotation impossible.
+
+### Divers
+- Fermer les Réglages arrête leur minuteur : chaque ouverture en laissait un de plus, actif jusqu'à la
+  fermeture de LiveDeck.
+- Une application absente n'est plus recherchée dans l'audio Windows à chaque dessin.
+- Une réponse HTTP mal formée ne laisse plus le voyant d'un appareil figé au vert.
+
 ## 1.6.1 — 2026-11-05
 
 ### Loupedeck : plus rien ne se déclenche sans qu'on l'ait demandé
