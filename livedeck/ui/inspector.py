@@ -17,7 +17,11 @@ from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_act
                        to_take)
 from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
-from ..integrations import integration_status, probe_intercom, probe_orchestream, probe_tally
+from ..integrations import (ORCH_COMMAND_ARG, integration_status, probe_deck, probe_intercom, probe_orchestream,
+                            probe_tally)
+
+# Libellé du paramètre d'une commande orchestream, selon ce qu'elle attend
+ORCH_ARG_LABEL = {"quizId": "Quiz", "gameId": "Speedizz", "widget": "Widget", "fn": "Fonction vMix"}
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
 from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..render import render
@@ -29,7 +33,7 @@ from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_type
                       section, short_label, tame_combo)
 
 INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32",
-               "multiview": "py-multiview"}
+               "multiview": "py-multiview", "orchdeck": "orchestream (commandes régie)"}
 
 
 def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:
@@ -118,6 +122,9 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
         return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
     if key == "orchestream":
         return probe_orchestream((integ.get("orchestream") or {}).get("url", ""))
+    if key == "orchdeck":
+        orch = integ.get("orchestream") or {}
+        return probe_deck(orch.get("url", ""), orch.get("token", ""))
     devices = integ.get("tallies") or []
     if not devices:
         return None, "Aucun tally renseigné : Réglages → Intégrations."
@@ -846,9 +853,12 @@ class Inspector(QFrame):
                 continue  # « couper tous les bus » : ni bus ni raccourci de secours
             if not shown(fs, a):
                 continue  # champ sans objet pour la cible ou le mode choisis
+            if fs["kind"] == "orch_arg":  # ses valeurs dépendent de la commande choisie
+                fs = {**fs, "command": a.get("command", ""),
+                      "label": ORCH_ARG_LABEL.get(ORCH_COMMAND_ARG.get(a.get("command", "")), fs["label"])}
             w = make_field(self.engine, fs, a.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names())
-            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp"):
+            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp", "orch_arg"):
                 if fs["kind"] != "bool":
                     f.addRow(label(short_label(fs), "Muted"))
                 f.addRow(w)
@@ -959,6 +969,11 @@ class Inspector(QFrame):
         if a["type"] == "vmix.adjust" and k == "target":
             # Le pas par défaut dépend de la cible : 2 % pour un volume, 1 input pour la preview…
             a["amount"] = VMIX_STEP.get(v, (1,))[0]
+        if a["type"] == "orchestream.command" and k == "command":
+            # Un quiz n'est pas un widget : le paramètre de l'ancienne commande n'a plus de sens.
+            a["arg"] = ""
+            self.commit(rebuild=True)  # la liste du paramètre dépend de la commande
+            return
         if k in ("then", "bus", "mode") and a["type"] in ("vmix.preview", "intercom.ptt"):
             self.commit(rebuild=True)  # champs affichés / état d'intégration qui en dépendent
             return

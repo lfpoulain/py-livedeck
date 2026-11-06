@@ -481,3 +481,138 @@ class FakeMultiview:
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), MV)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+
+class FakeOrchDeck:
+    """API Stream Deck d'orchestream-v2, d'après packages/back (deck_controller, api_token_middleware) :
+    jeton dans « Authorization: Bearer » ou « X-Orchestream-Token » (jamais dans l'URL), 401
+    INVALID_TOKEN, 403 FORBIDDEN_ROLE selon les permissions du jeton, erreurs métier 409 avec message en
+    français, 429 TOO_MANY_REQUESTS + Retry-After, réponse { ok, message } des commandes."""
+    TOKEN = "osk_test_123"
+    PERMS = {"game.advance": "games.run", "game.next": "games.run", "draw.run": "games.run",
+             "twizz.start": "games.run", "activity.ackAll": "thanks", "overlay.show": "overlay.control",
+             "live.end": "live.control"}
+
+    def __init__(self, port):
+        self.permissions = {"read", "games.run", "thanks", "overlay.control"}  # pas live.control
+        self.live = True
+        self.game = {"kind": "twizz", "runName": "Culture G", "phase": "open", "questionIndex": 2,
+                     "questionNumber": 3, "totalQuestions": 10, "nextAction": "close"}
+        self.unthanked = 5
+        self.overlays = {"twizz": True, "poll": False, "speedizz": False, "hypeTrain": False, "prediction": False}
+        self.calls = []       # (commande, args, en-tête utilisé)
+        self.reads = 0
+        self.throttle = 0     # nombre de 429 à renvoyer
+        self.quizzes = [{"value": "q-1", "label": "Culture G"}, {"value": "q-2", "label": "Cinéma"}]
+        fake = self
+
+        def info(cid):
+            return {"id": cid, "label": cid, "permission": self.PERMS[cid], "description": "",
+                    "available": not (cid == "draw.run" and not fake.live),
+                    "reason": None if fake.live or cid != "draw.run" else "Aucune session live en cours.",
+                    "argNames": ["quizId"] if cid == "twizz.start" else (["widget"] if cid == "overlay.show" else [])}
+
+        def allowed(cid):
+            return self.PERMS[cid] in fake.permissions
+
+        def state():
+            return {"token": {"name": "Stream Deck plateau", "permissions": sorted(fake.permissions)},
+                    "live": {"active": fake.live, "simulated": False, "startedAt": None, "viewers": 42,
+                             "twitchOnline": True},
+                    "game": dict(fake.game), "draw": {"pendingId": None, "pendingName": None, "lastWinner": None,
+                                                     "defaultSource": "viewers"},
+                    "poll": {"active": False, "title": None, "endsAt": None},
+                    "prediction": {"active": False, "status": None, "title": None, "locksAt": None},
+                    "unthanked": fake.unthanked, "overlays": dict(fake.overlays),
+                    "lanes": {"pending": 0, "running": 0},
+                    "commands": [info(c) for c in fake.PERMS if allowed(c)], "updatedAt": "2026-11-06T12:00:00Z"}
+
+        class H(BaseHTTPRequestHandler):
+            def _send(self, code, data, headers=None):
+                body = json.dumps(data, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _err(self, code, ecode, msg, headers=None):
+                self._send(code, {"error": {"code": ecode, "message": msg}}, headers)
+
+            def _auth(self):
+                """Comme readApiToken : Bearer, sinon X-Orchestream-Token. Le jeton dans l'URL n'est jamais lu."""
+                auth = self.headers.get("Authorization") or ""
+                raw = auth[7:].strip() if auth.lower().startswith("bearer ") else (
+                    self.headers.get("X-Orchestream-Token") or "").strip()
+                if raw != fake.TOKEN:
+                    self._err(401, "INVALID_TOKEN", "Jeton API manquant, invalide ou révoqué.")
+                    return None
+                if fake.throttle:
+                    fake.throttle -= 1
+                    self._err(429, "TOO_MANY_REQUESTS", "Trop de requêtes. Réessayez dans 1 seconde.",
+                              {"Retry-After": "1"})
+                    return None
+                return "bearer" if auth else "custom"
+
+            def do_GET(self):
+                if self._auth() is None:
+                    return
+                fake.reads += 1
+                path = self.path.split("?")[0]
+                if path == "/api/deck/state":
+                    return self._send(200, state())
+                if path == "/api/deck/commands":
+                    out = []
+                    for c in fake.PERMS:
+                        if allowed(c):
+                            i = info(c)
+                            i.pop("argNames")
+                            if c == "twizz.start":
+                                i["args"] = [{"name": "quizId", "label": "Quiz", "values": fake.quizzes}]
+                            out.append(i)
+                    return self._send(200, out)
+                self._err(404, "NOT_FOUND", "Ressource introuvable.")
+
+            def do_POST(self):
+                how = self._auth()
+                if how is None:
+                    return
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                cid = unquote(self.path.split("/api/deck/commands/", 1)[-1].split("?")[0])
+                fake.calls.append((cid, (body or {}).get("args") or {}, how))
+                if cid not in fake.PERMS:
+                    return self._err(404, "COMMAND_NOT_FOUND", f"Commande inconnue : {cid}")
+                if not allowed(cid):
+                    return self._err(403, "FORBIDDEN_ROLE",
+                                     "Action non autorisée pour le jeton « Stream Deck plateau ».")
+                if cid == "twizz.start":
+                    quiz = ((body or {}).get("args") or {}).get("quizId")
+                    if quiz not in {q["value"] for q in fake.quizzes}:
+                        return self._err(422, "VALIDATION_FAILED", "Quiz inconnu.")
+                    return self._send(200, {"ok": True, "message": "Twizz lancé"})
+                if cid == "game.advance":
+                    if fake.game["phase"] == "idle":
+                        return self._err(409, "NO_ACTIVE_GAME", "Aucune partie en cours.")
+                    # Comme deck_state.ts : questionNumber désigne la question ouverte, sinon celle que
+                    # la prochaine pression ouvrira — après fermeture de Q3, c'est donc Q4.
+                    if fake.game["nextAction"] == "close":
+                        n = fake.game["questionNumber"]
+                        fake.game.update(phase="closed", nextAction="open", questionIndex=n, questionNumber=n + 1)
+                        return self._send(200, {"ok": True, "message": f"Question {n} fermée"})
+                    fake.game.update(phase="open", nextAction="close")
+                    return self._send(200, {"ok": True, "message": f"Question {fake.game['questionNumber']} ouverte"})
+                if cid == "activity.ackAll":
+                    fake.unthanked = 0
+                    return self._send(200, {"ok": True, "message": "Tout est remercié"})
+                if cid == "draw.run" and not fake.live:
+                    return self._err(409, "LIVE_NOT_ACTIVE", "Aucune session live en cours.")
+                self._send(200, {"ok": True, "message": f"{cid} : fait"})
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()

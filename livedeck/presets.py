@@ -47,6 +47,27 @@ def _orch(overlay: str, name: str = "") -> dict:
                       actions=[new_action("orchestream.overlay", overlay=overlay)])
 
 
+def _rc(command: str, label: str, arg: str = "", bg: str = "#2a1f05") -> dict:
+    """Commande régie d'orchestream-v2 (API Stream Deck, jeton)."""
+    return new_button(label=label, bg=bg, actions=[new_action("orchestream.command", command=command, arg=arg)])
+
+
+# Commandes régie proposées dans la bibliothèque (les plus utiles sur une surface de contrôle)
+REGIE_PRESETS = [
+    ("rc_advance", "game.advance", "Jeu : suivant", "Ferme, ouvre la suivante, termine", "Suivant"),
+    ("rc_draw", "draw.run", "Tirer au sort", "Tirage en attente, sinon par défaut", "Tirage"),
+    ("rc_reroll", "draw.reroll", "Retirer au sort", "Nouveau gagnant du dernier tirage", "Retirage"),
+    ("rc_poll", "poll.end", "Fin du sondage", "Sondage Twitch en cours", "Fin\nsondage"),
+    ("rc_prediction", "prediction.lock", "Verrouiller la prédiction", "Ferme les paris", "Verrou\nprédiction"),
+    ("rc_thanks", "activity.ackAll", "Tout remercier", "Compte les viewers à remercier", "Merci"),
+    ("rc_replay", "popup.replayLast", "Rejouer la dernière popup", "Popup seule, sans lumières", "Rejouer\npopup"),
+    ("rc_popups", "popups.reset", "Effacer les popups", "Affichées et en attente", "Effacer\npopups"),
+    ("rc_lanes", "lanes.clear", "Vider les files", "Files de déclenchement", "Vider\nfiles"),
+    ("rc_twizz", "twizz.start", "Lancer un Twizz", "Quiz à choisir", "Twizz"),
+    ("rc_live_end", "live.end", "Terminer le live", "Permission « Piloter le live »", "Fin du\nlive"),
+]
+
+
 def _mv(target: str, label: str, ref: str = "", bg: str = "#0f2a24") -> dict:
     return new_button(label=label, bg=bg,
                       actions=[new_action("multiview.control", target=target, ref=ref)])
@@ -145,6 +166,8 @@ PRESETS: dict[str, tuple] = {
                     lambda: _mv("floating", "Fenêtre\nretour")),
     "mv_stream": ("Intégrations", "Un flux multiview", "py-multiview, à préciser",
                   lambda: _mv("stream", "Flux 1", "1")),
+    **{pid: ("Intégrations", name, f"orchestream, {desc}", (lambda c=cmd, k=key: _rc(c, k)))
+       for pid, cmd, name, desc, key in REGIE_PRESETS},
     # -- molettes : la rotation règle, l'appui coupe ----------------------------------
     "knob_master": ("Molette", "Volume Master", "Tourner : volume · appuyer : couper",
                     lambda: _vol("master", "Master", "MasterAudio")),
@@ -325,6 +348,11 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
                 for name, _ in engine.multiview.choices("stream")]
     else:
         out.append(("mv_sender", "py-multiview", "à régler : Réglages → Intégrations"))
+    orch = integ.get("orchestream") or {}
+    if orch.get("url") and orch.get("token"):
+        out += [(pid, name, f"orchestream, {desc}") for pid, _, name, desc, _ in REGIE_PRESETS]
+    else:
+        out.append(("rc_advance", "Régie orchestream", "jeton API à régler : Réglages → Intégrations"))
     return out
 
 
@@ -346,6 +374,9 @@ def needs_setup(preset_id: str, engine) -> str:
         return "" if integ.get("tallies") else "tallies"
     if preset_id.startswith("mv"):
         return "" if (integ.get("multiview") or {}).get("url") else "multiview"
+    if preset_id.startswith("rc_"):
+        orch = integ.get("orchestream") or {}
+        return "" if orch.get("url") and orch.get("token") else "orchdeck"
     return ""
 
 

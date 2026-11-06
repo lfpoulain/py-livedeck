@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 from .. import autostart
 from ..health import parse_targets
 from ..model import surface_of
-from ..integrations import (integration_status, overlay_label, overlay_list, probe_intercom, probe_multiview,
-                            probe_orchestream, probe_tally)
+from ..integrations import (integration_status, overlay_label, overlay_list, probe_deck, probe_intercom,
+                            probe_multiview, probe_orchestream, probe_tally)
 from . import theme as T
 from .widgets import Seg, label
 
@@ -91,7 +91,7 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview):
+        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview, engine.orchdeck):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
@@ -102,7 +102,8 @@ class SettingsDialog(QDialog):
         # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
         # à chaque ouverture des Réglages.
         self._timer.stop()
-        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview):
+        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview,
+                    self.engine.orchdeck):
             svc.set_forced(False)
         super().done(r)
 
@@ -267,6 +268,19 @@ class SettingsDialog(QDialog):
         row.addWidget(self.orch_overlays, 1)
         v.addLayout(row)
         self.orch_status = self._test_row(v, "orchestream")
+        # API Stream Deck d'orchestream-v2 : même serveur, authentifiée par un jeton dans l'en-tête.
+        row = QHBoxLayout()
+        row.addWidget(label("Jeton API", "Muted"))
+        self.orch_token = QLineEdit(integ["orchestream"].get("token", ""))
+        self.orch_token.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
+        self.orch_token.setPlaceholderText("osk_…  (commandes régie)")
+        self.orch_token.setToolTip("Jeton de l'API Stream Deck d'orchestream-v2 : dans orchestream, Réglages › "
+                                   "Sécurité › Jetons API (Stream Deck). Il n'est affiché qu'une fois à sa création ; "
+                                   "ses permissions décident des commandes que les touches peuvent lancer.\n"
+                                   "Inutile pour les seuls overlays ci-dessus.")
+        row.addWidget(self.orch_token, 1)
+        v.addLayout(row)
+        self.orchdeck_status = self._test_row(v, "orchdeck")
 
         v.addSpacing(6)
         v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
@@ -313,6 +327,11 @@ class SettingsDialog(QDialog):
 
             def run():
                 return probe_multiview(mv_url)
+        elif key == "orchdeck":
+            url, token = self.orch_url.text(), self.orch_token.text()
+
+            def run():
+                return probe_deck(url, token)
         else:
             devices = parse_targets(self.tallies.toPlainText())
 
@@ -345,9 +364,10 @@ class SettingsDialog(QDialog):
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
         labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
-                  "multiview": self.mv_status}
+                  "multiview": self.mv_status, "orchdeck": self.orchdeck_status}
         for key, _, ok, text in integration_status(e):
-            labels[key].setText(_dot(ok) + html.escape(text))
+            if key in labels:
+                labels[key].setText(_dot(ok) + html.escape(text))
 
     def _save(self):
         """Une seule étape « annuler » ; le moteur applique ensuite vMix, luminosité et intégrations.
@@ -384,7 +404,8 @@ class SettingsDialog(QDialog):
             integ = cfg["integrations"]
             integ["intercom"] = {**(integ.get("intercom") or {}), "host": self.ic_host.text().strip() or "127.0.0.1",
                                  "port": self.ic_port.value()}
-            integ["orchestream"] = {**(integ.get("orchestream") or {}), "url": self.orch_url.text().strip()}
+            integ["orchestream"] = {**(integ.get("orchestream") or {}), "url": self.orch_url.text().strip(),
+                                    "token": self.orch_token.text().strip()}
             if overlays is not None:
                 integ["orchestream"]["overlays"] = overlays
             integ["tallies"] = tallies

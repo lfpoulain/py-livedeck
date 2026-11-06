@@ -44,6 +44,14 @@ CONDITIONS: dict[str, dict] = {
               "fields": [F("target", "Tally", "tally", "all"),
                          F("state", "Quand", "choice", "ko", [("ok", "Tous connectés à vMix"),
                                                              ("ko", "Au moins un hors ligne")])]},
+    "orchdeck": {"label": "orchestream : régie",
+                 "fields": [F("command", "Commande", "orch_command", "game.advance"),
+                            F("state", "Quand", "choice", "unavailable",
+                              [("unavailable", "La commande est impossible maintenant"),
+                               ("game", "Une partie est en cours"),
+                               ("live", "Le live est en cours"),
+                               ("unthanked", "Il reste des viewers à remercier"),
+                               ("offline", "orchestream injoignable ou jeton refusé")])]},
     "multiview": {"label": "py-multiview",
                   "fields": [F("target", "Cible", "choice", "sender", MULTIVIEW_TARGETS),
                              F("ref", "Lequel", "mv_item", "", placeholder="nom ou numéro (1, 2…)",
@@ -85,6 +93,57 @@ _FLAG_FUNCS = {
 
 def fb(cond_type: str, bg="", fg="", bar="", label="", **cond) -> dict:
     return {"cond": {"type": cond_type, **cond}, "bg": bg, "fg": fg, "bar": bar, "label": label}
+
+
+def _short(text: str, n: int = 22) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def _eval_orchdeck(engine, b: dict, cond: dict) -> tuple[bool, dict]:
+    """Retours d'état de l'API Stream Deck d'orchestream-v2 (GET /api/deck/state)."""
+    od = engine.orchdeck
+    cid, state = cond.get("command", "game.advance"), cond.get("state", "unavailable")
+    base = (b.get("label") or "").strip()
+    if state == "offline":
+        why = od.unavailable()
+        return bool(why), ({"label": f"{base or 'orchestream'}\n{why}"} if why else {})
+    if od.unavailable():
+        return False, {}
+    info = od.command_state(cid)
+    if state == "unavailable":
+        # L'état ne liste que les commandes permises au jeton : absente d'un état bien reçu = refusée.
+        # Sans ce cas, une touche « Fin du live » sans la permission s'affichait en rouge « 42 viewers »,
+        # prête à servir, alors qu'orchestream la refuserait.
+        if info is None:
+            return isinstance(od.get("commands"), list), {"label": f"{base or cid}\nNON AUTORISÉ"}
+        if info.get("available") is False:
+            return True, {"label": f"{base or cid}\n{_short(info.get('reason') or 'indisponible')}"}
+        return False, {}
+    if state == "game":
+        g = od.get("game") or {}
+        nxt, n = g.get("nextAction"), g.get("questionNumber")
+        if cid == "game.advance" and nxt in ("close", "open", "finish"):
+            # Ce que fera la prochaine pression, écrit sur la touche (« Fermer Q3 »)
+            return True, {"label": ("Fermer Q{n}", "Ouvrir Q{n}", "Terminer")[("close", "open", "finish").index(nxt)]
+                          .format(n=n or "?")}
+        return g.get("phase") in ("open", "closed"), {}
+    if state == "widget":
+        widget = cond.get("widget") or ""
+        return bool((od.get("overlays") or {}).get(widget)), {}
+    if state == "unthanked":
+        n = od.get("unthanked") or 0
+        return n > 0, ({"label": f"{base or 'Remercier'}\n{n} à remercier"} if n else {})
+    if state == "live":
+        # Allumée quand le live est en cours : rouge « à l'antenne », comme l'enregistrement de vMix.
+        active = bool(od.get("live.active"))
+        if not active:
+            return False, {}
+        viewers = od.get("live.viewers")
+        if cid == "live.end" and viewers is not None:
+            return True, {"label": f"{base or 'Fin du live'}\n{viewers} viewers"}
+        return True, {}
+    return False, {}
 
 
 def _program(inp, mix=1):
@@ -141,6 +200,22 @@ def _auto_press(b: dict) -> list[dict]:
             ov = a.get("overlay", "twizz")
             return [fb("orchestream", YELLOW, BLACK, overlay=ov, state="visible"),
                     fb("orchestream", bar="#5a6273", overlay=ov, state="unknown")]
+        if t == "orchestream.command":
+            cid = a.get("command") or "game.advance"
+            # Tous les retours vrais s'appliquent dans l'ordre : le DERNIER l'emporte. L'état propre à la
+            # commande d'abord, puis ce qui l'empêche de servir — qui doit primer : une touche « Fin du
+            # live » refusée au jeton s'affichait sinon en rouge « à l'antenne », prête à servir.
+            out = []
+            if cid in ("game.advance", "game.next", "game.close", "game.finish"):
+                out.append(fb("orchdeck", "#1d4ed8", WHITE, command=cid, state="game"))
+            elif cid == "overlay.show":
+                out.append(fb("orchdeck", YELLOW, BLACK, command=cid, state="widget", widget=a.get("arg", "")))
+            elif cid == "activity.ackAll":
+                out.append(fb("orchdeck", "#b45309", WHITE, command=cid, state="unthanked"))
+            elif cid in ("live.start", "live.end"):
+                out.append(fb("orchdeck", RED, WHITE, command=cid, state="live"))
+            return out + [fb("orchdeck", OFF_BG, OFF_FG, command=cid, state="unavailable"),
+                          fb("orchdeck", OFF_BG, OFF_FG, command=cid, state="offline")]
         if t == "tally.reconnect":
             target = a.get("target", "all")
             return [fb("tally", "#237423", WHITE, target=target, state="ok"),
@@ -245,6 +320,8 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         ok = json_compare(val, cond.get("op", "=="), cond.get("value", ""))
         fmt = cond.get("label_fmt") or ""
         return ok, {"label": fmt.replace("\\n", "\n").replace("{value}", json_text(val))} if ok and fmt else {}
+    if t == "orchdeck":
+        return _eval_orchdeck(engine, b, cond)
     if t == "multiview":
         mv = engine.multiview
         target, ref = cond.get("target", "sender"), cond.get("ref", "")
@@ -336,6 +413,12 @@ def describe(f: dict) -> str:
                           + (f" « {c.get('value')} »" if c.get("op") not in ("truthy",) else ""))),
         "tally": "tous les tallys sont connectés" if c.get("state") == "ok" else "un tally est hors ligne",
         "multiview": _multiview_text(c),
+        "orchdeck": {"offline": "orchestream est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
+                     "unavailable": "la commande est impossible maintenant (texte : la raison d'orchestream)",
+                     "game": "une partie est en cours (texte : ce que fera la prochaine pression)",
+                     "widget": "le widget est affiché",
+                     "unthanked": "il reste des viewers à remercier (texte : leur nombre)",
+                     "live": "le live est en cours"}.get(c.get("state"), "état de la régie orchestream"),
         "flag": dict(FLAGS).get(c.get("flag"), "").lower(),
         "toggle": "interrupteur activé",
         "pressed": "bouton enfoncé",
@@ -349,5 +432,6 @@ def describe(f: dict) -> str:
     effect = "liseré" if f.get("bar") and not f.get("bg") else "fond"
     color = f.get("bar") if effect == "liseré" else f.get("bg")
     name = {RED: "rouge", GREEN: "vert", YELLOW: "jaune", BLUE: "bleu", "#2563eb": "bleu", "#237423": "vert",
-            "#cc0000": "rouge", OFF_BG: "gris", OFF_FG: "gris", "#1e3a8a": "bleu foncé"}.get((color or "").lower(), color or "")
+            "#cc0000": "rouge", OFF_BG: "gris", OFF_FG: "gris", "#1e3a8a": "bleu foncé", "#1d4ed8": "bleu",
+            "#b45309": "orange"}.get((color or "").lower(), color or "")
     return f"{effect.capitalize()} {name} quand {what}"

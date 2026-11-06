@@ -671,6 +671,263 @@ class Orchestream(_Service):
         return False
 
 
+# --- orchestream-v2 : API Stream Deck (commandes régie, jeton) -------------------------------
+
+# Commandes régie d'orchestream-v2 (docs/COMMANDES.md) : (id, libellé, argument éventuel).
+# La liste réelle, filtrée par les permissions du jeton, vient de GET /api/deck/commands ;
+# celle-ci sert tant que le serveur n'a pas répondu, et pour écrire les résumés.
+ORCH_COMMANDS = [
+    ("game.advance", "Jeu : étape suivante", ""), ("game.next", "Question suivante", ""),
+    ("game.close", "Fermer la question", ""), ("game.finish", "Terminer la partie", ""),
+    ("twizz.start", "Lancer un Twizz", "quizId"), ("speedizz.start", "Lancer un Speedizz", "gameId"),
+    ("draw.run", "Tirer au sort", ""), ("draw.reroll", "Retirer au sort", ""),
+    ("draw.fromLastTwizz", "Tirage du dernier Twizz", ""), ("poll.end", "Terminer le sondage", ""),
+    ("prediction.lock", "Verrouiller la prédiction", ""),
+    ("overlay.show", "Afficher un widget", "widget"), ("overlay.hide", "Masquer un widget", "widget"),
+    ("popups.reset", "Effacer les popups", ""), ("activity.ackAll", "Tout remercier", ""),
+    ("popup.replayLast", "Rejouer la dernière popup", ""), ("lanes.clear", "Vider les files", ""),
+    ("dmaix.baseScene", "Scène de base DMAIX", ""), ("vmix.function", "Fonction vMix (autorisée)", "fn"),
+    ("live.start", "Démarrer la session", ""), ("live.end", "Terminer le live", ""),
+]
+ORCH_COMMAND_LABEL = {c: label for c, label, _ in ORCH_COMMANDS}
+ORCH_COMMAND_ARG = {c: arg for c, _, arg in ORCH_COMMANDS if arg}
+ORCH_WIDGETS = [("twizz", "Twizz"), ("poll", "Sondage"), ("speedizz", "Speedizz"), ("hypeTrain", "Hype Train"),
+                ("prediction", "Prédiction")]
+# Ce que fera le prochain « Jeu : étape suivante » (état game.nextAction), à écrire sur la touche
+GAME_NEXT = {"close": "Fermer Q{n}", "open": "Ouvrir Q{n}", "finish": "Terminer"}
+
+
+def _deck_request(method: str, url: str, token: str, body: dict | None = None,
+                  timeout: float = 3.0) -> tuple[int, object, dict]:
+    """Requête vers /api/deck : jeton dans l'en-tête Authorization (jamais dans l'URL, qu'orchestream
+    refuse de lire). (statut, JSON, en-têtes). Lève NET_ERRORS si injoignable."""
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with open_url(req, timeout) as resp:
+            return resp.status, _read_json(resp), dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, _read_json(e), dict(e.headers or {})
+
+
+def explain_deck(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
+    """Message en français d'un échec de l'API Stream Deck d'orchestream-v2."""
+    host, where = _hostport(url)
+    if exc is not None:
+        return explain_orchestream(url, exc=exc)
+    code, msg = _orch_code(data), _orch_message(data)
+    if status == 401:
+        return ("orchestream refuse le jeton (absent, inconnu ou révoqué) : crée-en un dans orchestream, "
+                "Réglages › Sécurité › Jetons API, et colle-le dans Réglages → Intégrations")
+    if status == 403:
+        return f"orchestream : {msg or 'le jeton n’a pas la permission de cette commande'}"
+    if status == 404 and code == "NOT_FOUND":
+        return explain_orchestream(url, status, data)  # adresse publique / tunnel : refusé hors du réseau local
+    if status == 404 and code not in ("COMMAND_NOT_FOUND",):
+        return f"{where} répond, mais sans l'API Stream Deck d'orchestream-v2 (/api/deck) : vérifie l'adresse"
+    if status == 429:
+        return f"orchestream : {msg or 'trop de requêtes, réessaie dans un instant'}"
+    if _is_proxy_reply(status or 0, data):
+        return _net_text("proxy", "orchestream", where) + f" (HTTP {status})"
+    return f"orchestream : {msg or f'erreur {status}'}"
+
+
+def probe_deck(url: str, token: str, timeout: float = 4.0) -> tuple[bool | None, str]:
+    """Test ponctuel de l'API Stream Deck : jeton accepté, et ce qu'il permet."""
+    url = normalize_url(url)
+    if not url:
+        return None, "Adresse d'orchestream à renseigner."
+    if not (token or "").strip():
+        return None, "Jeton API à renseigner (orchestream : Réglages › Sécurité › Jetons API)."
+    try:
+        status, data, _ = _deck_request("GET", f"{url}/api/deck/state", token.strip(), timeout=timeout)
+    except NET_ERRORS as e:
+        return False, explain_deck(url, exc=e)
+    if status == 200 and isinstance(data, dict) and isinstance(data.get("commands"), list):
+        tok = data.get("token") or {}
+        n = len(data["commands"])
+        live = "live en cours" if (data.get("live") or {}).get("active") else "aucun live en cours"
+        return True, f"jeton « {tok.get('name') or '?'} » accepté · {n} commande(s) autorisée(s) · {live}"
+    return False, explain_deck(url, status, data)
+
+
+class OrchestreamDeck(_Service):
+    """API Stream Deck d'orchestream-v2 : commandes régie (POST /api/deck/commands/<id>) et état prêt à
+    afficher (GET /api/deck/state), authentifiés par un jeton API.
+
+    L'état est relu toutes les 1,5 s (la documentation recommande 1 à 2 s ; la limite est de 120 lectures
+    par 10 s), et aussitôt après une commande. La liste des commandes, avec les valeurs de leurs arguments
+    (quiz, Speedizz, fonctions vMix autorisées), est relue au démarrage puis toutes les 30 s."""
+
+    POLL = 1.5
+    LIST_EVERY = 30.0
+
+    def __init__(self, on_change, log):
+        super().__init__(on_change, log)
+        self.url = ""
+        self.token = ""
+        self.connected = False
+        self.error = ""
+        self.state: dict = {}
+        self.commands: dict[str, dict] = {}  # id -> RegieCommandInfo (avec les valeurs d'arguments)
+        self._listed_at = 0.0
+        self._retry_at = 0.0  # 429 : pas de nouvelle requête avant (Retry-After)
+        self._lock = threading.Lock()
+
+    def configure(self, url: str, token: str) -> None:
+        url, token = normalize_url(url), (token or "").strip()
+        if (url, token) != (self.url, self.token):
+            self.url, self.token = url, token
+            with self._lock:
+                self.state, self.commands, self._listed_at = {}, {}, 0.0
+            self.error = ""
+            self._wake.set()
+
+    # -- état ----------------------------------------------------------------------------------
+    def _set_connected(self, ok: bool, why: str = "") -> None:
+        if ok:
+            self.error = ""
+        elif why and why != self.error:
+            self.error = why
+            self._log("warn", why)
+        if ok != self.connected:
+            self.connected = ok
+            if ok:
+                self._log("info", f"orchestream (Stream Deck) connecté ({self.url})")
+            self._on_change()
+
+    def unavailable(self) -> str:
+        """Pourquoi les touches ne peuvent pas servir (texte court pour la touche), ou "" si tout va bien."""
+        if not self.url:
+            return "ADRESSE ?"
+        if not self.token:
+            return "JETON ?"
+        if not self.connected:
+            return "HORS LIGNE"
+        return ""
+
+    def command_state(self, cid: str) -> dict | None:
+        """État d'une commande pour ce jeton : {"available", "reason", …}, None si inconnue ou refusée."""
+        with self._lock:
+            for c in self.state.get("commands") or []:
+                if isinstance(c, dict) and c.get("id") == cid:
+                    return c
+        return None
+
+    def get(self, path: str):
+        """Valeur de l'état par chemin pointé (« game.nextAction », « unthanked »…), None si absente."""
+        with self._lock:
+            cur = self.state
+        for part in path.split("."):
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(part)
+        return cur
+
+    def arg_values(self, cid: str) -> list[tuple[str, str]]:
+        """Valeurs proposées pour l'argument d'une commande (quiz, Speedizz, widgets, fonctions vMix)."""
+        with self._lock:
+            info = self.commands.get(cid) or {}
+        for arg in info.get("args") or []:
+            vals = [(str(v.get("value")), str(v.get("label") or v.get("value"))) for v in arg.get("values") or []
+                    if isinstance(v, dict) and v.get("value") is not None]
+            if vals:
+                return vals
+        return list(ORCH_WIDGETS) if ORCH_COMMAND_ARG.get(cid) == "widget" else []
+
+    def command_list(self) -> list[tuple[str, str]]:
+        """Commandes du jeton (une fois lues), sinon toutes celles d'orchestream."""
+        with self._lock:
+            known = [(cid, str(c.get("label") or ORCH_COMMAND_LABEL.get(cid, cid))) for cid, c in self.commands.items()]
+        return known or [(c, label) for c, label, _ in ORCH_COMMANDS]
+
+    # -- boucle --------------------------------------------------------------------------------
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            if not (self.active and self.url and self.token):
+                self._set_connected(False)
+                self._sleep(5)
+                continue
+            wait = self._retry_at - time.monotonic()
+            if wait > 0:  # 429 : on respecte Retry-After au lieu d'aggraver le blocage
+                self._sleep(wait)
+                continue
+            self._poll_once()
+            self._sleep(self.POLL if self.connected else 5)
+
+    def _poll_once(self) -> None:
+        url, token = self.url, self.token
+        try:
+            status, data, headers = _deck_request("GET", f"{url}/api/deck/state", token)
+            if status == 200 and isinstance(data, dict):
+                changed = False
+                with self._lock:
+                    if data != self.state:
+                        self.state, changed = data, True
+                if time.monotonic() - self._listed_at > self.LIST_EVERY:
+                    self._list(url, token)
+                self._set_connected(True)
+                if changed:
+                    self._on_change()
+                return
+            self._throttle(status, headers)
+            self._set_connected(False, explain_deck(url, status, data))
+        except NET_ERRORS as e:
+            self._set_connected(False, explain_deck(url, exc=e))
+
+    def _list(self, url: str, token: str) -> None:
+        try:
+            status, data, headers = _deck_request("GET", f"{url}/api/deck/commands", token)
+        except NET_ERRORS:
+            return
+        if status == 200 and isinstance(data, list):
+            with self._lock:
+                self.commands = {c["id"]: c for c in data if isinstance(c, dict) and isinstance(c.get("id"), str)}
+            self._listed_at = time.monotonic()
+        else:
+            self._throttle(status, headers)
+
+    def _throttle(self, status: int, headers: dict) -> None:
+        if status != 429:
+            return
+        try:
+            secs = float({k.lower(): v for k, v in headers.items()}.get("retry-after") or 2)
+        except (TypeError, ValueError):
+            secs = 2.0
+        self._retry_at = time.monotonic() + min(max(secs, 1.0), 60.0)
+
+    # -- commande ------------------------------------------------------------------------------
+    def run(self, cid: str, args: dict | None = None) -> bool:
+        """Lance une commande régie ; journalise la réponse d'orchestream (déjà en français)."""
+        label = ORCH_COMMAND_LABEL.get(cid, cid)
+        if not self.url:
+            self._log("error", "orchestream : adresse non réglée (Réglages → Intégrations)")
+            return False
+        if not self.token:
+            self._log("error", "orchestream : jeton API non réglé (Réglages → Intégrations)")
+            return False
+        body = {"args": {k: str(v) for k, v in (args or {}).items() if str(v or "").strip()}}
+        if not body["args"]:
+            body = {}
+        path = urllib.parse.quote(cid, safe=".")
+        try:
+            status, data, headers = _deck_request("POST", f"{self.url}/api/deck/commands/{path}", self.token, body)
+        except NET_ERRORS as e:
+            self._log("error", f"orchestream · {label} : {explain_deck(self.url, exc=e)}")
+            return False
+        self._wake.set()  # relit l'état tout de suite : la touche montre l'effet de la commande
+        if 200 <= status < 300:
+            msg = data.get("message") if isinstance(data, dict) else ""
+            self._log("info", f"orchestream · {msg or label}")
+            return True
+        self._throttle(status, headers)
+        self._log("error", f"orchestream · {label} : {explain_deck(self.url, status, data).removeprefix('orchestream : ')}")
+        return False
+
+
 # --- Tally32 --------------------------------------------------------------------------------
 
 
@@ -1064,6 +1321,19 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
             if mv.running(key):
                 parts.append(text)
         out.append(("multiview", "py-multiview", True, "  ·  ".join(parts)))
+    od = engine.orchdeck
+    if not (od.url and od.token):
+        out.append(("orchdeck", "orchestream (commandes)", None,
+                    "Adresse et jeton API à renseigner pour l'utiliser." if not od.token
+                    else "Adresse à renseigner pour l'utiliser."))
+    elif not od.active:
+        out.append(("orchdeck", "orchestream (commandes)", None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."))
+    elif od.connected:
+        tok = od.get("token.name") or "?"
+        live = "live en cours" if od.get("live.active") else "aucun live"
+        out.append(("orchdeck", "orchestream (commandes)", True, f"jeton « {tok} »  ·  {live}"))
+    else:
+        out.append(("orchdeck", "orchestream (commandes)", False, od.error or f"Connexion à {od.url}…"))
     return out
 
 

@@ -10,7 +10,7 @@ import time
 from . import actions, adjust, feedback, winsys
 from . import vars as textvars
 from .health import HealthMonitor, JsonPoller, parse_targets
-from .integrations import Intercom, Multiview, Orchestream, Tallies, overlay_list
+from .integrations import Intercom, Multiview, Orchestream, OrchestreamDeck, Tallies, overlay_list
 from .model import (CONFIG_PATH, backup_config, config_text, control_key, has_backup_today, new_page,
                     normalize_button, normalize_control, open_config, parse_control, parse_key,
                     save_config_text)
@@ -100,6 +100,7 @@ class Engine:
         self.orchestream = Orchestream(lambda: self.emit("state"), self.log)
         self.tallies = Tallies(lambda: self.emit("state"), self.log)
         self.multiview = Multiview(lambda: self.emit("state"), self.log)
+        self.orchdeck = OrchestreamDeck(lambda: self.emit("state"), self.log)  # orchestream-v2 : API Stream Deck
         self.decks = None
         if enable_decks:
             from .deck import DeckHub
@@ -118,7 +119,7 @@ class Engine:
         self.apply_integrations()
         self._ids = {b["id"] for _, _, b in self.all_buttons()}
         self._applied_decks = copy.deepcopy(self.cfg["decks"])
-        for s in (self.intercom, self.orchestream, self.tallies, self.multiview):
+        for s in (self.intercom, self.orchestream, self.tallies, self.multiview, self.orchdeck):
             s.start()
         if self.decks:
             self.decks.start()
@@ -131,7 +132,7 @@ class Engine:
         if self.decks:
             steps.append(self.decks.stop)
         steps += [self.vmix.stop, self.health.stop, self.jsonpoll.stop, self.intercom.stop, self.orchestream.stop, self.tallies.stop,
-                  self.multiview.stop, self._stop_runners, self.flush_save]
+                  self.multiview.stop, self.orchdeck.stop, self._stop_runners, self.flush_save]
         for step in steps:
             try:
                 step()
@@ -267,14 +268,20 @@ class Engine:
         self.orchestream.configure(orch.get("url", ""), overlay_list(orch))
         self.tallies.configure(integ.get("tallies", []))
         self.multiview.configure((integ.get("multiview") or {}).get("url", ""))
-        used = set()
+        self.orchdeck.configure(orch.get("url", ""), orch.get("token", ""))
+        types, conds = set(), set()
         for _, _, b in self.all_buttons():
-            for a in (b.get("actions") or []) + (b.get("actions_off") or []) + (b.get("long_actions") or []):
-                used.add(a.get("type", "").split(".")[0])
-            for f in b.get("feedbacks") or []:
-                used.add((f.get("cond") or {}).get("type"))
+            # Toutes les listes, rotation des molettes comprise : une molette qui ne fait que tourner
+            # vers une intégration la laissait sinon éteinte.
+            for lst in ("actions", "actions_off", "long_actions", "actions_cw", "actions_ccw"):
+                types.update(a.get("type", "") for a in b.get(lst) or [] if isinstance(a, dict))
+            conds.update((f.get("cond") or {}).get("type") for f in b.get("feedbacks") or [] if isinstance(f, dict))
+        used = {t.split(".")[0] for t in types} | conds
         self.intercom.set_wanted("intercom" in used)
-        self.orchestream.set_wanted("orchestream" in used)
+        # Deux services distincts derrière le même orchestream : le flux des overlays, et l'API Stream Deck
+        # (commandes régie, jeton). Une touche de commande ne réveille pas le flux des overlays, ni l'inverse.
+        self.orchestream.set_wanted("orchestream.overlay" in types or "orchestream" in conds)
+        self.orchdeck.set_wanted("orchestream.command" in types or "orchdeck" in conds)
         self.tallies.set_wanted("tally" in used)
         self.multiview.set_wanted("multiview" in used)
 

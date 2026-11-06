@@ -1,5 +1,25 @@
 # Journal des versions
 
+## 1.7.0 — 2026-11-06
+
+### orchestream-v2 : commandes régie
+- **Les touches pilotent la régie d'orchestream-v2** par son API Stream Deck : jeu suivant, question
+  suivante ou fermée, fin de partie, tirage et retirage, Twizz et Speedizz, fin du sondage, prédiction,
+  remercier, rejouer la dernière popup, effacer les popups, vider les files, scène DMAIX, afficher ou
+  masquer un widget, fonctions vMix autorisées, début et fin du live.
+- **La touche montre ce qu'elle va faire** : « Fermer Q3 », « Ouvrir Q4 », « Terminer » ; le nombre de
+  viewers à remercier ; le live en cours. Elle se **grise avec la raison d'orchestream** quand la commande
+  est impossible (« Aucune partie en cours »), et affiche **NON AUTORISÉ** si le jeton n'en a pas la
+  permission — avant même qu'on appuie.
+- Jeton API à coller dans Réglages → Intégrations, avec un bouton **Tester**. Il part dans l'en-tête, jamais
+  dans l'adresse. Le quiz d'un Twizz se choisit dans la liste fournie par orchestream.
+- Les limites d'orchestream sont respectées : état relu toutes les 1,5 s, et délai demandé attendu en cas
+  de trop de requêtes.
+- Neuf boutons prêts dans la bibliothèque, catégorie *Intégrations*.
+
+### Corrections
+- Une molette dont seule la rotation utilisait une intégration ne la réveillait pas.
+
 ## 1.6.2 — 2026-11-06
 
 Version de fiabilité, issue d'un audit complet du code. Chaque correction est couverte par un test

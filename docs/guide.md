@@ -256,6 +256,7 @@ elles sont toutes surveillées.
 |---|---|---|
 | **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
 | **orchestream** (overlays web) | Afficher / masquer / basculer, avec l'état suivi en direct (canal `overlay` d'orchestream-v2, ou flux `/api/overlay/events` de la v1) | Jaune quand l'overlay est affiché, liseré gris si l'état est inconnu |
+| **orchestream-v2 : commandes régie** (API Stream Deck, jeton) | Jeu suivant, tirage, Twizz, sondage, prédiction, remercier, popups, files, widget, fin du live… | Ce que fera la touche (« Fermer Q3 »), viewers à remercier, live en cours ; grisée avec la raison d'orchestream quand c'est impossible, NON AUTORISÉ si le jeton n'a pas la permission |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, `GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
 
@@ -302,6 +303,36 @@ un proxy d'entreprise ne peut plus bloquer le talkback.
     invités) répond « introuvable » : **Tester** te le dit et te propose l'adresse locale.
 - **Tally32** : un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur
   te demande de mettre à jour son firmware.
+
+### Commandes régie d'orchestream-v2
+
+orchestream-v2 se pilote aussi par son **API Stream Deck** : les commandes de la régie, sans identifiant de
+partie ni de tirage à recopier à chaque live. Une touche « Suivant » mène tout un jeu : elle ferme la question
+ouverte, sinon ouvre la suivante, sinon termine la partie.
+
+1. Dans orchestream : **Réglages › Sécurité › Jetons API (Stream Deck)**, crée un jeton. Il ne s'affiche
+   **qu'une fois** : copie-le. Ses **permissions** décident des commandes que les touches peuvent lancer
+   (« Piloter le live » pour terminer le live, par exemple).
+2. Dans LiveDeck, Réglages → Intégrations, section orchestream : colle-le dans **Jeton API**, puis **Tester**.
+   Le résultat donne le nom du jeton et le nombre de commandes qu'il autorise.
+3. Bibliothèque, catégorie *Intégrations* : *Jeu : suivant*, *Tirer au sort*, *Tout remercier*, *Fin du
+   live*… ou l'action **orchestream : commande régie** pour les autres. Pour *Lancer un Twizz*, le quiz se
+   choisit dans une liste fournie par orchestream.
+
+Sur la touche :
+
+| Affichage | Signification |
+|---|---|
+| « Fermer Q3 », « Ouvrir Q4 », « Terminer » | ce que fera la prochaine pression de *Jeu : suivant* |
+| « 5 à remercier », fond orange | des viewers restent à remercier |
+| fond rouge, « 42 viewers » | le live est en cours (touche *Fin du live*) |
+| gris + raison | impossible maintenant : la raison est celle d'orchestream (« Aucune partie en cours ») |
+| NON AUTORISÉ | le jeton n'a pas la permission de cette commande |
+| HORS LIGNE, JETON ? | orchestream ne répond pas, ou aucun jeton n'est réglé |
+
+Le jeton part dans l'en-tête `Authorization`, jamais dans l'adresse (orchestream ne l'y lit pas). L'état est
+relu toutes les 1,5 s et aussitôt après chaque commande ; si orchestream signale trop de requêtes, LiveDeck
+attend le délai demandé au lieu d'insister. Les overlays de la section précédente fonctionnent sans jeton.
 
 ### Régler py-multiview
 

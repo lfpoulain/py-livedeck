@@ -3461,6 +3461,124 @@ def test_vmix_expect_not_stuck(tmp_path):
     e.stop()
 
 
+# -- orchestream-v2 : API Stream Deck (commandes régie) -----------------------------------------
+def orchdeck_engine(tmp_path, port, token=fakes.FakeOrchDeck.TOKEN):
+    od = fakes.FakeOrchDeck(port)
+    cfg = default_config()
+    page = cfg["pages"][0]
+    page["buttons"]["0,0"] = new_button(label="Suivant",
+                                        actions=[new_action("orchestream.command", command="game.advance")])
+    page["buttons"]["0,1"] = new_button(label="Merci",
+                                        actions=[new_action("orchestream.command", command="activity.ackAll")])
+    page["buttons"]["0,2"] = new_button(label="Fin",
+                                        actions=[new_action("orchestream.command", command="live.end")])
+    page["buttons"]["0,3"] = new_button(label="Quiz",
+                                        actions=[new_action("orchestream.command", command="twizz.start", arg="q-2")])
+    cfg["integrations"]["orchestream"] = {"url": f"127.0.0.1:{port}", "token": token}
+    e = engine(tmp_path, cfg=cfg)
+    return e, od, page["id"]
+
+
+def test_orchdeck_commands_and_state(tmp_path):
+    """Les touches lancent les commandes régie avec le jeton dans l'en-tête, et affichent l'état."""
+    e, od, pg = orchdeck_engine(tmp_path, 18261)
+    assert wait(lambda: e.orchdeck.connected, 5), e.orchdeck.error
+    # La touche « Suivant » dit ce que fera la prochaine pression (game.nextAction).
+    assert wait(lambda: e.visual(e.button(pg, "0,0"))["label"] == "Fermer Q3", 3), \
+        e.visual(e.button(pg, "0,0"))["label"]
+    tap(e, pg, "0,0")
+    assert wait(lambda: od.calls and od.calls[-1][0] == "game.advance", 3), od.calls
+    assert od.calls[-1][2] == "bearer", "jeton dans l'en-tête Authorization"
+    # Q3 fermée : la prochaine pression ouvrira la question suivante non posée, Q4.
+    assert wait(lambda: e.visual(e.button(pg, "0,0"))["label"] == "Ouvrir Q4", 3), \
+        f"état non relu après la commande : {e.visual(e.button(pg, '0,0'))['label']!r}"
+
+    # « Tout remercier » affiche le nombre de viewers à remercier, puis s'éteint.
+    v = e.visual(e.button(pg, "0,1"))
+    assert "5 à remercier" in v["label"], v["label"]
+    tap(e, pg, "0,1")
+    assert wait(lambda: "à remercier" not in e.visual(e.button(pg, "0,1"))["label"], 3)
+
+    # Commande avec argument : l'identifiant du quiz part dans le corps JSON.
+    tap(e, pg, "0,3")
+    assert wait(lambda: any(c[0] == "twizz.start" for c in od.calls), 3)
+    assert next(c for c in od.calls if c[0] == "twizz.start")[1] == {"quizId": "q-2"}
+    assert wait(lambda: e.orchdeck.arg_values("twizz.start") == [("q-1", "Culture G"), ("q-2", "Cinéma")], 3)
+    e.stop()
+
+
+def test_orchdeck_permissions_and_errors(tmp_path):
+    """Refus d'orchestream : permission manquante (la touche le dit avant même l'appui), erreur métier
+    journalisée en français, 429 respecté."""
+    e, od, pg = orchdeck_engine(tmp_path, 18262)
+    logs = []
+    e.listeners.append(lambda kind, p: logs.append(p) if kind == "log" else None)
+    assert wait(lambda: e.orchdeck.connected, 5)
+    # « Fin du live » sans la permission live.control : grisée et marquée dès l'affichage.
+    v = e.visual(e.button(pg, "0,2"))
+    assert "NON AUTORISÉ" in v["label"] and v["bg"] == "#1a1d24", v
+    tap(e, pg, "0,2")
+    assert wait(lambda: any("non autorisée" in str(p) for p in logs), 3), logs
+
+    # Erreur métier : message d'orchestream tel quel.
+    od.game.update(phase="idle", nextAction=None)
+    tap(e, pg, "0,0")
+    assert wait(lambda: any("Aucune partie en cours" in str(p) for p in logs), 3), logs
+
+    # 429 : le service attend Retry-After au lieu d'insister.
+    od.throttle = 1
+    e.orchdeck._wake.set()
+    assert wait(lambda: e.orchdeck._retry_at > time.monotonic(), 3), "Retry-After ignoré"
+    e.stop()
+
+
+def test_orchdeck_bad_token_and_offline(tmp_path):
+    """Jeton refusé : message clair, touche grisée « HORS LIGNE » ; aucun jeton : rien n'est envoyé."""
+    e, od, pg = orchdeck_engine(tmp_path, 18263, token="osk_mauvais")
+    assert wait(lambda: e.orchdeck.error, 5)
+    assert "jeton" in e.orchdeck.error.lower() and "Jetons API" in e.orchdeck.error, e.orchdeck.error
+    v = e.visual(e.button(pg, "0,0"))
+    assert "HORS LIGNE" in v["label"], v["label"]
+    ok, msg = integrations.probe_deck("127.0.0.1:18263", "osk_mauvais")
+    assert ok is False and "jeton" in msg.lower(), msg
+    ok, msg = integrations.probe_deck("127.0.0.1:18263", fakes.FakeOrchDeck.TOKEN)
+    assert ok is True and "Stream Deck plateau" in msg, msg
+    assert integrations.probe_deck("127.0.0.1:18263", "")[0] is None, "sans jeton : à renseigner, pas une erreur"
+    e.stop()
+
+
+def test_orchdeck_does_not_wake_overlay_stream(tmp_path):
+    """Une touche de commande régie ne réveille que son service : pas le flux des overlays, et
+    inversement. Avant, tout « orchestream.* » activait les deux."""
+    e = engine(tmp_path, start=False)
+    p = new_page("P")
+    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.command", command="draw.run")])
+    e.cfg["pages"] = [p]
+    e.start()
+    assert e.orchdeck.wanted and not e.orchestream.wanted
+    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.overlay", overlay="twizz")])
+    e.apply_integrations()
+    assert e.orchestream.wanted and not e.orchdeck.wanted
+    # Une molette dont seule la rotation utilise l'intégration la réveille aussi.
+    p["buttons"].clear()
+    p["controls"] = {"knobTL": new_control("rotary", actions_cw=[new_action("orchestream.command",
+                                                                            command="game.advance")])}
+    e.apply_integrations()
+    assert e.orchdeck.wanted, "la liste de rotation d'une molette doit compter"
+    e.stop()
+
+
+def test_orchdeck_catalog():
+    assert summary(new_action("orchestream.command", command="twizz.start", arg="q-1")) == \
+        "orchestream · Lancer un Twizz « q-1 »"
+    spec = {f["key"]: f for f in ACTIONS["orchestream.command"]["fields"]}
+    assert shown(spec["arg"], new_action("orchestream.command", command="twizz.start"))
+    assert not shown(spec["arg"], new_action("orchestream.command", command="game.advance")), \
+        "pas de paramètre pour une commande qui n'en prend pas"
+    for pid, *_ in presets.REGIE_PRESETS:
+        assert presets.make(pid)["actions"][0]["type"] == "orchestream.command", pid
+
+
 def test_winaudio_cache():
     """Le cache évite de rappeler Core Audio à chaque touche, et s'oublie après une écriture."""
     fake = fakes.FakeAudio()

@@ -6,8 +6,8 @@ import time
 
 from . import adjust, hotkeys, netsend, webreq, winsys
 from .adjust import BUSES, VMIX_STEP, VMIX_TARGETS, WIN_MODES, WIN_TARGETS
-from .integrations import (MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, UNREACHABLE,
-                           bus_label, overlay_label)
+from .integrations import (MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, ORCH_COMMAND_ARG,
+                           ORCH_COMMAND_LABEL, UNREACHABLE, bus_label, overlay_label)
 from .webreq import error_text
 
 # Fonctions de transition de l'API vMix (FadeToBlack n'en est pas une : c'est un interrupteur, voir PRODUCTION)
@@ -29,6 +29,7 @@ MEDIA = [("playpause", "Lecture / pause"), ("next", "Piste suivante"), ("previou
 SCROLL_DIRS = [("vertical", "Verticale (haut / bas)"), ("horizontal", "Horizontale (gauche / droite)")]
 # action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
 INTEGRATION_OF = {"intercom.ptt": "intercom", "orchestream.overlay": "orchestream", "tally.reconnect": "tallies",
+                  "orchestream.command": "orchdeck", "orchdeck": "orchdeck",
                   "multiview.control": "multiview", "multiview.volume": "multiview",
                   "intercom": "intercom", "orchestream": "orchestream", "tally": "tallies",
                   "multiview": "multiview"}
@@ -154,6 +155,14 @@ ACTIONS: dict[str, dict] = {
                         "help": "Demande aux Tally32 de se reconnecter à vMix. Le retour d'état montre en "
                                 "direct les tallys hors ligne.",
                         "fields": [F("target", "Tally", "tally", "all")]},
+    "orchestream.command": {"label": "orchestream : commande régie", "cat": "Intégrations", "color": "#2a1f05",
+                            "help": "Lance une commande de la régie orchestream-v2 (jeu suivant, tirage, Twizz, "
+                                    "remercier, widget, fin du live…) par son API Stream Deck. Demande un jeton API "
+                                    "(Réglages → Intégrations). La touche se grise quand la commande n'est pas "
+                                    "possible, avec la raison donnée par orchestream.",
+                            "fields": [F("command", "Commande", "orch_command", "game.advance"),
+                                       F("arg", "Paramètre", "orch_arg", "",
+                                         when={"command": tuple(ORCH_COMMAND_ARG)})]},
     "multiview.control": {"label": "py-multiview", "cat": "Intégrations", "color": "#0f2a24",
                           "help": "Démarre ou arrête une partie de py-multiview : un flux, toute la "
                                   "réception, l'émission OMT, le retour audio ou la fenêtre de retour. "
@@ -395,6 +404,10 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
             engine.log("error", f"OSC {host or '?'}:{a.get('port')} : {error_text(e, host)}")
     elif t == "orchestream.overlay":
         engine.orchestream.command(a.get("overlay", "twizz"), a.get("mode", "toggle"))
+    elif t == "orchestream.command":
+        cid = a.get("command") or "game.advance"
+        arg = ORCH_COMMAND_ARG.get(cid)
+        engine.orchdeck.run(cid, {arg: a.get("arg", "")} if arg else None)
     elif t == "tally.reconnect":
         engine.tallies.reconnect(a.get("target", "all"))
     elif t == "multiview.control":
@@ -580,6 +593,12 @@ def summary(a: dict, page_names: dict | None = None) -> str:
         return f"OSC {a.get('host') or '?'}:{a.get('port')} {a.get('address') or '?'} {a.get('args') or ''}".strip()
     if t == "tally.reconnect":
         return "Tallys · reconnecter à vMix" + ("" if a.get("target", "all") == "all" else f" ({a['target']})")
+    if t == "orchestream.command":
+        cid = a.get("command") or "game.advance"
+        what = ORCH_COMMAND_LABEL.get(cid, cid)
+        if ORCH_COMMAND_ARG.get(cid) and a.get("arg"):
+            what = f"{what} « {a['arg']} »"
+        return f"orchestream · {what}"
     if t == "multiview.control":
         target = a.get("target", "sender")
         what = MULTIVIEW_TARGET_LABEL.get(target, target)

@@ -35,7 +35,7 @@ HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic
         "Entrée : tester  ·  F1 : aide")
 TOAST_MS = {"error": 9000, "warn": 6000}
 MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action", "Actions envoyées")]
-INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Overlays"), ("tallies", "Tallys")]
+INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Overlays"), ("orchdeck", "Régie"), ("tallies", "Tallys")]
 HINT_LOCK = "Verrouillé : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)  ·  Ctrl+L pour déverrouiller"
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
 
@@ -599,7 +599,7 @@ class MainWindow(QMainWindow):
         # intégrations utilisées par une touche : une pastille chacune, ou une seule si la fenêtre est étroite
         e = self.engine
         services = {"intercom": e.intercom, "orchestream": e.orchestream, "tallies": e.tallies,
-                    "multiview": e.multiview}
+                    "multiview": e.multiview, "orchdeck": e.orchdeck}
         used = [(k, name, ok, text) for k, name, ok, text in integration_status(e) if services[k].wanted]
         for k, pill in self.integ_pills.items():
             row = next((u for u in used if u[0] == k), None)

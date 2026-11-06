@@ -381,6 +381,36 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
         w = InputCombo(engine, value or "")
         w.changed.connect(on_change)
         return w
+    if kind == "orch_command":  # commandes autorisées par le jeton (lues sur /api/deck/commands)
+        w = tame_combo(QComboBox())
+        items = engine.orchdeck.command_list()
+        if value and value not in dict(items):
+            items = items + [(value, f"{value} (non autorisée par ce jeton)")]
+        for v, text in items:
+            w.addItem(text, v)
+            w.setItemData(w.count() - 1, v, Qt.ToolTipRole)
+        widen_popup(w)
+        w.setCurrentIndex(max(0, w.findData(value)))
+        w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i)))
+        return w
+    if kind == "orch_arg":  # quiz, Speedizz, widgets, fonctions vMix : valeurs fournies par orchestream
+        w = tame_combo(QComboBox(), 10)
+        w.setEditable(True)
+        for v, text in engine.orchdeck.arg_values(spec.get("command", "")):
+            w.addItem(text, v)
+            w.setItemData(w.count() - 1, v, Qt.ToolTipRole)
+        widen_popup(w)
+        idx = w.findData(value)
+        if idx >= 0:
+            w.setCurrentIndex(idx)
+        else:
+            w.setEditText(str(value or ""))
+        w.lineEdit().setPlaceholderText(spec.get("placeholder") or "")
+        # Le libellé affiché (« Culture G ») n'est pas la valeur envoyée (l'identifiant du quiz).
+        w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i) if i >= 0 else w.currentText()))
+        w.lineEdit().editingFinished.connect(
+            lambda: on_change(w.currentData() if w.currentText() == w.itemText(w.currentIndex()) else w.currentText()))
+        return w
     if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus", "orch_overlay"):
         w = tame_combo(QComboBox())  # option longue raccourcie ; texte complet en info-bulle et dans la liste
         if kind == "mix":
