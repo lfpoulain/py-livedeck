@@ -1,10 +1,14 @@
 """Petites fenêtres : options d'import Companion, remplissage d'une rangée, raccourcis et légende."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
-                               QListWidget, QListWidgetItem, QPushButton, QVBoxLayout)
+import threading
 
+from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
+                               QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar, QPushButton, QVBoxLayout)
+
+from .. import __version__, updater
 from ..actions import THEN_CHOICES
 from . import theme as T
 from .widgets import label, tame_combo, widen_popup
@@ -158,3 +162,88 @@ class ShortcutsDialog(QDialog):
         ok = QPushButton("Fermer")
         ok.clicked.connect(self.accept)
         lay.addWidget(ok, 0, Qt.AlignRight)
+
+
+class UpdateDialog(QDialog):
+    """Nouvelle version : notes, téléchargement avec progression, puis installation silencieuse."""
+    progress = Signal(int, int)
+    downloaded = Signal(str)  # message d'erreur, vide si le fichier est prêt
+
+    def __init__(self, parent, rel: updater.Release, busy: bool):
+        super().__init__(parent)
+        self.rel, self.installing, self._path = rel, False, None
+        self.setWindowTitle("Mise à jour de LiveDeck")
+        self.setMinimumWidth(520)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 20, 24, 20)
+        v.setSpacing(10)
+        v.addWidget(label(f"LiveDeck {rel.version} est disponible", "H1"))
+        v.addWidget(label(f"Version installée : {__version__}", "Muted"))
+        notes = QPlainTextEdit(rel.notes or "Pas de notes pour cette version.")
+        notes.setReadOnly(True)
+        notes.setMinimumHeight(180)
+        v.addWidget(notes)
+        self.info = label("", "Hint", True)
+        v.addWidget(self.info)
+        if updater.can_install():
+            self.info.setText(("⚠  Mode Live ou verrouillé : l'installation ferme LiveDeck, les Stream Decks s'arrêtent "
+                               "quelques secondes. " if busy else "")
+                              + "L'installation ferme LiveDeck puis le relance. Ta configuration est conservée.")
+        else:
+            self.info.setText("Cette copie tourne depuis les sources : mets-la à jour avec « git pull », ou télécharge "
+                              "l'installateur depuis la page de la release.")
+        self.bar = QProgressBar()
+        self.bar.hide()
+        v.addWidget(self.bar)
+        row = QHBoxLayout()
+        row.addStretch()
+        self.go = QPushButton("Installer et redémarrer" if updater.can_install() else "Ouvrir la page de la release")
+        self.go.setObjectName("Primary")
+        self.go.clicked.connect(self._start)
+        later = QPushButton("Plus tard")
+        later.clicked.connect(self.reject)
+        row.addWidget(self.go)
+        row.addWidget(later)
+        v.addLayout(row)
+        self.progress.connect(self._progress)
+        self.downloaded.connect(self._downloaded)
+
+    def _start(self) -> None:
+        if not updater.can_install():
+            QDesktopServices.openUrl(QUrl(updater.PAGE))
+            return
+        self.go.setEnabled(False)
+        self.bar.setRange(0, 0)
+        self.bar.show()
+        self.info.setText("Téléchargement…")
+
+        def work():
+            try:
+                self._path = updater.download(self.rel, lambda d, t: self.progress.emit(d, t))
+                self.downloaded.emit("")
+            except updater.UpdateError as e:
+                self.downloaded.emit(str(e))
+            except Exception as e:
+                self.downloaded.emit(f"Téléchargement impossible : {e}")
+        threading.Thread(target=work, name="livedeck-download", daemon=True).start()
+
+    def _progress(self, done: int, total: int) -> None:
+        if total:
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+
+    def _downloaded(self, error: str) -> None:
+        if error:
+            self.bar.hide()
+            self.go.setEnabled(True)
+            self.info.setText(error)
+            return
+        try:
+            updater.launch_installer(self._path)
+        except OSError as e:
+            self.bar.hide()
+            self.go.setEnabled(True)
+            self.info.setText(f"Impossible de lancer l'installateur : {e}")
+            return
+        self.installing = True
+        self.accept()

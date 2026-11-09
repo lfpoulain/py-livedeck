@@ -71,7 +71,7 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 2. Double-clique dessus : LiveDeck s'installe pour ton compte (pas de droits administrateur), avec un raccourci dans le menu Démarrer
    et, si tu le coches, sur le Bureau. Pas de Python à installer.
 
-Ta configuration est rangée dans **`%APPDATA%\LiveDeck`**, pas dans le dossier d'installation. Pour mettre à jour, quitte LiveDeck
+Ta configuration est rangée dans **`%APPDATA%\LiveDeck`**, pas dans le dossier d'installation. Pour mettre à jour, clique sur **Mise à jour** quand LiveDeck te la propose (bouton au-dessus du deck), ou quitte LiveDeck
 (clic droit sur l'icône près de l'horloge → Quitter) et lance le nouvel installateur par-dessus l'ancien : tu retrouves toutes tes pages.
 Pour désinstaller : Paramètres → Applications (ta configuration est conservée).
 

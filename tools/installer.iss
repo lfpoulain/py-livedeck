@@ -46,8 +46,15 @@ Name: "{autodesktop}\LiveDeck"; Filename: "{app}\LiveDeck.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\LiveDeck.exe"; Description: "Lancer LiveDeck"; Flags: nowait postinstall skipifsilent
+; mise à jour dans l'app : l'installateur silencieux relance LiveDeck (paramètre /RELAUNCH=1)
+Filename: "{app}\LiveDeck.exe"; Flags: nowait runasoriginaluser; Check: Relaunch
 
 [Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
 // La configuration (%APPDATA%\LiveDeck) n'est jamais supprimée. Seule l'entrée de démarrage automatique,
 // qui pointe vers l'exe désinstallé, est retirée.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

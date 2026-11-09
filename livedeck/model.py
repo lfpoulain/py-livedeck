@@ -202,7 +202,7 @@ def default_config() -> dict:
         "decks": {},  # serial -> {"page": page_id, "brightness": 80}
         "integrations": {"intercom": {"host": "127.0.0.1", "port": 5080}, "orchestream": {"url": ""},
                          "tallies": [], "multiview": {"url": ""}},
-        "options": {"health_interval": 15, "start_live": False, "close_to_tray": True},
+        "options": {"health_interval": 15, "start_live": False, "close_to_tray": True, "check_updates": True},
     }
 
 

@@ -1,5 +1,16 @@
 # Journal des versions
 
+## 1.8.0 — 2026-11-09
+
+### Mise à jour dans l'app
+- **LiveDeck cherche tout seul la dernière release GitHub** une dizaine de secondes après le démarrage. Quand une version
+  plus récente existe, un bouton « Mise à jour x.y.z » apparaît au-dessus du deck, avec les notes de la version.
+- **Installer et redémarrer** : l'installateur est téléchargé (taille et empreinte SHA-256 vérifiées), LiveDeck se ferme,
+  la mise à jour s'installe en silencieux puis LiveDeck se relance. Ta configuration n'est jamais touchée.
+- **Réglages → Général → Mises à jour** : « Rechercher maintenant », et une case pour désactiver la recherche au démarrage.
+- La mise à jour n'est jamais automatique : rien ne se ferme sans ton clic, et la fenêtre te prévient si tu es en Live
+  ou verrouillé.
+
 ## 1.7.0 — 2026-11-06
 
 ### orchestream-v2 : commandes régie

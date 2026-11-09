@@ -16,6 +16,7 @@
 - [Intégrations maison](#intégrations-maison)
 - [Commandes réseau : OSC, TCP / UDP, API JSON](#commandes-réseau--osc-tcp--udp-api-json)
 - [Diagnostic Stream Deck](#diagnostic-stream-deck)
+- [Mises à jour](#mises-à-jour)
 - [Barre des tâches et démarrage automatique](#barre-des-tâches-et-démarrage-automatique)
 - [Sauvegardes](#sauvegardes)
 - [Dépannage](#dépannage)
@@ -394,6 +395,17 @@ sur la touche (réponse jusqu'à 4 Mo).
 
 Pendant le diagnostic, les touches ne déclenchent rien (les actions maintenues sont relâchées avant).
 À la fermeture, chaque deck retrouve la page qu'il affichait.
+
+## Mises à jour
+
+Quelques secondes après le démarrage, LiveDeck cherche la dernière [release GitHub](https://github.com/lfpoulain/py-livedeck/releases/latest).
+S'il en existe une plus récente, un bouton **Mise à jour x.y.z** apparaît au-dessus du deck : il ouvre les notes de la version.
+**Installer et redémarrer** télécharge l'installateur, vérifie sa taille et son empreinte SHA-256, ferme LiveDeck, installe
+en silencieux et relance l'app. Rien ne démarre sans ton clic, et la fenêtre te prévient si tu es en Live ou verrouillé
+(les Stream Decks s'arrêtent quelques secondes pendant l'installation).
+
+**Réglages → Général → Mises à jour** : **Rechercher maintenant**, et une case pour ne plus chercher au démarrage.
+Lancé depuis les sources, la recherche n'est pas automatique et LiveDeck ne s'installe pas lui-même : `git pull`.
 
 ## Barre des tâches et démarrage automatique
 

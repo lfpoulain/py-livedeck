@@ -58,6 +58,7 @@ flowchart LR
 | `webreq.py` | Requêtes HTTP, lecture des commandes `curl`, contournement du proxy pour les adresses locales, nature des erreurs réseau |
 | `health.py` | Surveillance ping / HTTP et lecture d'API JSON (`JsonPoller`, chemin, comparaison) |
 | `companion_import.py` | Import `.companionconfig` : pages, decks, actions, retours, variables, options (2e appui, intégrations) |
+| `updater.py` | Dernière release GitHub : version, téléchargement vérifié (SHA-256), lancement de l'installateur silencieux (`/RELAUNCH=1`) |
 | `autostart.py` | Lancement à l'ouverture de session (clé `Run` de l'utilisateur, seulement depuis l'exe) |
 | `app.py` | Démarrage : journal tournant, erreurs non gérées écrites dans le journal, instance unique, icône près de l'horloge, `--tray`, `--selftest` |
 | `ui/` | Fenêtre principale (colonnes redimensionnables, pastilles, Moniteur), deck à l'écran, inspecteur, bibliothèque, réglages, recherche, diagnostic, petites fenêtres (`dialogs.py`) |

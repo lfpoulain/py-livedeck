@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
                                QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import autostart
+from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
 from ..integrations import (integration_status, overlay_label, overlay_list, probe_deck, probe_intercom,
@@ -139,6 +139,19 @@ class SettingsDialog(QDialog):
             v.addWidget(cb)
 
         v.addSpacing(8)
+        v.addWidget(label("MISES À JOUR", "H2"))
+        self.check_updates = QCheckBox("Chercher une nouvelle version de LiveDeck au démarrage")
+        self.check_updates.setChecked(bool(opts.get("check_updates", True)))
+        v.addWidget(self.check_updates)
+        row = QHBoxLayout()
+        btn = QPushButton("Rechercher maintenant")
+        btn.clicked.connect(self._check_updates_now)
+        row.addWidget(btn)
+        self.update_status = label(f"Version installée : {__version__}", "Hint", True)
+        row.addWidget(self.update_status, 1)
+        v.addLayout(row)
+
+        v.addSpacing(8)
         v.addWidget(label("SURVEILLANCE RÉSEAU (PING / HTTP)", "H2"))
         row = QHBoxLayout()
         row.addWidget(label("Vérifier les équipements toutes les", "Muted"))
@@ -151,6 +164,11 @@ class SettingsDialog(QDialog):
         v.addLayout(row)
         v.addStretch()
         return w
+
+    def _check_updates_now(self) -> None:
+        self.update_status.setText("Recherche…")
+        win = self.parent()
+        win.check_updates(manual=True, done=lambda msg: self.update_status.setText(msg))
 
     # -- decks -----------------------------------------------------------------
     def _decks(self) -> QWidget:
@@ -391,7 +409,8 @@ class SettingsDialog(QDialog):
         def apply(cfg):
             cfg["vmix"] = {"host": host, "port": int(port)}
             cfg["options"].update(health_interval=self.interval.value(), start_live=self.start_live.isChecked(),
-                                  close_to_tray=self.close_tray.isChecked())
+                                  close_to_tray=self.close_tray.isChecked(),
+                                  check_updates=self.check_updates.isChecked())
             for serial, (pg, bright, haptic) in decks.items():
                 conf = cfg["decks"].setdefault(serial, {})
                 conf["brightness"] = bright

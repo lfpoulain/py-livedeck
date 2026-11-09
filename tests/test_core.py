@@ -528,6 +528,92 @@ def test_lock_blocks_clicks_and_editing(tmp_path):
     w.quit_app()
 
 
+def test_updater_release_download_and_dialog(tmp_path):
+    import hashlib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from livedeck import updater
+    from livedeck.ui.dialogs import UpdateDialog
+    payload = b"MZ-fake-installer" * 1000
+    state = {"sha": "sha256:" + hashlib.sha256(payload).hexdigest(), "assets": True}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/api":
+                port = self.server.server_address[1]
+                data = {"tag_name": "v99.0.0", "body": "### Nouveautés\n- Truc\n\n---\n\n### Installation\n1. ...",
+                        "assets": [{"name": "LiveDeck-99.0.0-win64-setup.exe", "size": len(payload), "digest": state["sha"],
+                                    "browser_download_url": f"http://127.0.0.1:{port}/file"}] if state["assets"] else []}
+                body = json.dumps(data).encode()
+            elif self.path == "/file":
+                body = payload
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    api = f"http://127.0.0.1:{srv.server_address[1]}/api"
+    try:
+        assert updater.parse_version("v1.10.2") > updater.parse_version("1.9.9") and not updater.is_newer("1.7.0", "1.7.0")
+        assert updater.is_newer("1.8.0", "1.7.9") and not updater.is_newer("", "1.0.0") and not updater.is_newer("zzz", "1.0.0")
+        with mock.patch.dict(os.environ, {"LIVEDECK_UPDATE_API": api}),                 mock.patch.object(updater, "update_dir", return_value=Path(tmp_path)):
+            rel = updater.latest()
+            assert rel.version == "99.0.0" and rel.notes == "### Nouveautés\n- Truc" and rel.sha256 and updater.is_newer(rel.version)
+            seen = []
+            f = updater.download(rel, lambda d, tot: seen.append((d, tot)))
+            assert f.read_bytes() == payload and seen[-1] == (len(payload), len(payload)) and not list(Path(tmp_path).glob("*.part"))
+            # empreinte fausse : fichier refusé et supprimé
+            bad = updater.Release(**{**rel.__dict__, "sha256": "0" * 64})
+            try:
+                updater.download(bad)
+                raise AssertionError("empreinte non vérifiée")
+            except updater.UpdateError as ex:
+                assert "SHA-256" in str(ex)
+            assert not list(Path(tmp_path).glob("*.part"))
+            # release sans installateur : rien à proposer
+            state["assets"] = False
+            assert updater.latest() is None
+            state["assets"] = True
+            # fenêtre : téléchargement puis lancement de l'installateur
+            launched = []
+            with mock.patch.object(updater, "can_install", return_value=True),                     mock.patch.object(updater, "launch_installer", side_effect=launched.append):
+                dlg = UpdateDialog(None, rel, busy=True)
+                assert "Mode Live" in dlg.info.text()
+                dlg._start()
+                assert wait(lambda: dlg.installing)
+                assert launched == [f]
+        # dépôt introuvable ou GitHub hors ligne : message clair, jamais d'exception brute
+        with mock.patch.dict(os.environ, {"LIVEDECK_UPDATE_API": api.replace("/api", "/absent")}):
+            try:
+                updater.latest()
+                raise AssertionError("404 non signalé")
+            except updater.UpdateError as ex:
+                assert "Aucune release" in str(ex)
+        with mock.patch.dict(os.environ, {"LIVEDECK_UPDATE_API": "http://127.0.0.1:1/api"}):
+            try:
+                updater.latest()
+                raise AssertionError("hors ligne non signalé")
+            except updater.UpdateError as ex:
+                assert "injoignable" in str(ex)
+    finally:
+        srv.shutdown()
+    # fenêtre principale : une release plus récente affiche le bouton, la même version le laisse caché
+    e = engine(tmp_path, start=False)
+    w = MainWindow(e)
+    w._update_result(updater.Release("0.0.1", "", "u", "n", 1, ""), "")
+    assert w.update_found is None and not w.update_btn.isVisibleTo(w)
+    w._update_result(updater.Release("99.0.0", "x", "u", "n", 1, ""), "")
+    assert w.update_found.version == "99.0.0" and "99.0.0" in w.update_btn.text() and w.update_btn.isVisibleTo(w)
+    w.quit_app()
+
+
 # -- intégrations maison ---------------------------------------------------------
 def integrations_engine(tmp_path):
     ic, orch = fakes.FakeIntercom(18192), fakes.FakeOrchestream(18193)

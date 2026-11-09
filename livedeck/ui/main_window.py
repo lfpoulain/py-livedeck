@@ -5,6 +5,7 @@ import copy
 import html
 import json
 import os
+import threading
 import time
 
 from pathlib import Path
@@ -19,12 +20,13 @@ from .. import __version__, presets
 from ..actions import to_take
 from ..companion_import import import_companion
 from ..integrations import integration_status, merge_integrations
+from .. import updater
 from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config,
                      parse_control, parse_key, surface_of)
 from . import theme as T
 from .deck_view import ControlBar, DeckGrid
 from .diagnostic import DiagnosticDialog
-from .dialogs import LEGEND, FillRowDialog, ImportOptionsDialog, ShortcutsDialog
+from .dialogs import LEGEND, FillRowDialog, ImportOptionsDialog, ShortcutsDialog, UpdateDialog
 from .inspector import Inspector, prepare_preset
 from .library import LibraryPanel
 from .search import SearchDialog
@@ -38,6 +40,10 @@ MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action
 INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Overlays"), ("orchdeck", "Régie"), ("tallies", "Tallys")]
 HINT_LOCK = "Verrouillé : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)  ·  Ctrl+L pour déverrouiller"
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
+
+
+class _UpdateBridge(QObject):
+    result = Signal(object, str)  # Release | None, message d'erreur
 
 
 class Bridge(QObject):
@@ -197,6 +203,14 @@ class MainWindow(QMainWindow):
             self.set_locked(True)
         QTimer(self, interval=1000, timeout=self._update_pills).start()
         QTimer.singleShot(0, self._show_migration_notes)
+        self.update_found: updater.Release | None = None
+        self._update_bridge = _UpdateBridge()
+        self._update_bridge.result.connect(self._update_result)
+        self._update_done = None
+        # à l'exe seulement : les tests et le lancement depuis les sources ne sortent pas sur Internet
+        if (updater.can_install() and "--selftest" not in QApplication.arguments()
+                and engine.cfg["options"].get("check_updates", True)):
+            QTimer.singleShot(10_000, self.check_updates)
 
     # -- en-tête --------------------------------------------------------------
     def _header(self) -> QFrame:
@@ -303,6 +317,12 @@ class MainWindow(QMainWindow):
         self.tabs.customContextMenuRequested.connect(
             lambda pos: self.locked or self._page_menu().exec(self.tabs.mapToGlobal(pos)))
         row.addWidget(self.tabs, 1)
+        self.update_btn = QPushButton()
+        self.update_btn.setObjectName("Primary")
+        self.update_btn.setToolTip("Une nouvelle version de LiveDeck est disponible")
+        self.update_btn.clicked.connect(self.open_update)
+        self.update_btn.hide()
+        row.addWidget(self.update_btn)
         legend = QPushButton("?")
         legend.setObjectName("Ghost")
         legend.setToolTip(LEGEND + "<br><br>Clic : raccourcis clavier et légende (F1)")
@@ -741,6 +761,56 @@ class MainWindow(QMainWindow):
             self.tray.sync()
         if not self._toast_timer.isActive():
             self._end_toast()
+
+    # -- mise à jour ----------------------------------------------------------
+    def check_updates(self, manual: bool = False, done=None) -> None:
+        """Cherche la dernière release GitHub (en arrière-plan). `manual` : l'utilisateur a demandé, on répond
+        même quand il n'y a rien ; `done(message)` reçoit le résultat en texte."""
+        self._update_manual, self._update_done = manual, done
+
+        def work():
+            try:
+                self._update_bridge.result.emit(updater.latest(), "")
+            except updater.UpdateError as e:
+                self._update_bridge.result.emit(None, str(e))
+            except Exception as e:  # jamais d'erreur muette dans ce fil
+                self._update_bridge.result.emit(None, f"Recherche impossible : {e}")
+        threading.Thread(target=work, name="livedeck-update", daemon=True).start()
+
+    def _update_result(self, rel, error: str) -> None:
+        manual, done = getattr(self, "_update_manual", False), self._update_done
+        self._update_done = None
+        if error:
+            msg = error
+        elif rel is not None and updater.is_newer(rel.version):
+            self.update_found = rel
+            self.update_btn.setText(f"Mise à jour {rel.version}")
+            self.update_btn.show()
+            msg = f"La version {rel.version} est disponible (installée : {__version__})."
+            if manual:
+                self.open_update()
+        else:
+            msg = f"LiveDeck est à jour (version {__version__})."
+        try:
+            if done:
+                done(msg)
+        except RuntimeError:  # fenêtre des Réglages fermée entre-temps
+            pass
+        if error and manual and not done:
+            self.toast(msg, error=True)
+        elif not error and self.update_found is None and manual and not done:
+            self.toast(msg)
+        elif not manual and self.update_found is not None:
+            self.toast(f"Mise à jour disponible : LiveDeck {self.update_found.version}  ·  bouton en haut à droite")
+
+    def open_update(self) -> None:
+        if self.update_found is None:
+            return
+        busy = self.locked or self.grid.live
+        dlg = UpdateDialog(self, self.update_found, busy)
+        self._run_dialog(dlg)
+        if dlg.installing:
+            self.quit_app()  # l'installateur silencieux prend le relais et relance LiveDeck
 
     # -- verrou ---------------------------------------------------------------
     def _saved_lock(self) -> bool:
