@@ -99,7 +99,7 @@ def update_dir() -> Path:
 
 def download(rel: Release, progress: Callable[[int, int], None] | None = None) -> Path:
     """Télécharge l'installateur dans le dossier temporaire et le vérifie (taille, SHA-256 si fourni)."""
-    dest = update_dir() / rel.name
+    dest = update_dir() / (Path(rel.name).name or "LiveDeck-Setup.exe")
     part = dest.with_suffix(".part")
     req = urllib.request.Request(rel.url, headers={"User-Agent": f"LiveDeck/{__version__}"})
     h, done = hashlib.sha256(), 0

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QLineEdit, 
 from .. import presets
 from ..actions import CATEGORIES
 from . import theme as T
-from .deck_view import MIME_INPUTS, MIME_PRESET
+from .deck_view import MIME_INPUTS, MIME_PRESET, preset_thumb
 from .dialogs import ROW_STYLES
 from .widgets import Seg, label, tame_combo, widen_popup
 
@@ -115,7 +115,7 @@ class InputsPage(QWidget):
         lay.setSpacing(10)
         self.mode = tame_combo(QComboBox(), 12)
         for v, text in CREATE_MODES:
-            self.mode.addItem(f"Créer : {text}", v)
+            self.mode.addItem(f"Crée : {text}", v)
             self.mode.setItemData(self.mode.count() - 1, text, Qt.ToolTipRole)
         widen_popup(self.mode)
         self.mode.setToolTip("Type de touche créée en glissant ou en double-cliquant un input")
@@ -140,8 +140,8 @@ class InputsPage(QWidget):
                                  "(API TCP, port 8099).", "Hint", True)
         self.placeholder.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.placeholder, 1)
-        lay.addWidget(label("Glisse un ou plusieurs inputs sur le deck. Double-clic : l'assigner à la touche "
-                            "sélectionnée, puis passer à la suivante. Clic droit : remplir une rangée.", "Hint", True))
+        lay.addWidget(label("Double-clic : crée la touche et passe à la suivante. Glisser : un ou plusieurs "
+                            "inputs sur le deck. Clic droit : remplir une rangée.", "Hint", True))
 
     def selected_titles(self) -> list[str]:
         """Inputs sélectionnés, dans l'ordre de vMix."""
@@ -190,8 +190,12 @@ class InputsPage(QWidget):
 
 
 class _PresetDelegate(QStyledItemDelegate):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+
     def sizeHint(self, option, index):
-        return QSize(200, 30 if index.data(ROLE + 2) == "head" else 44)
+        return QSize(200, 30 if index.data(ROLE + 2) == "head" else 46)
 
     def paint(self, p: QPainter, option, index):
         p.save()
@@ -208,14 +212,17 @@ class _PresetDelegate(QStyledItemDelegate):
             p.drawText(r.adjusted(6, 6, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, index.data(ROLE + 4).upper())
         else:
             _row_bg(p, option, r)
-            sw = QRectF(r.x() + 8, r.center().y() - 11, 22, 22)
-            p.setPen(Qt.NoPen)
-            c = QColor(color)
-            c.setAlphaF(0.18)
-            p.setBrush(c)
-            p.drawRoundedRect(sw, 6, 6)
-            p.setBrush(color)
-            p.drawEllipse(sw.center(), 4, 4)
+            sw = QRectF(r.x() + 6, r.center().y() - 16, 32, 32)
+            dpr = option.widget.devicePixelRatioF() if option.widget else 1.0
+            thumb = preset_thumb(self.engine, index.data(ROLE), index.data(ROLE + 4).lstrip("→ "), 32, dpr)
+            if thumb is not None:  # la touche telle qu'elle sera posée
+                p.drawPixmap(sw.topLeft(), thumb)
+            else:
+                p.setPen(Qt.NoPen)
+                c = QColor(color)
+                c.setAlphaF(0.18)
+                p.setBrush(c)
+                p.drawRoundedRect(sw, 6, 6)
             _two_lines(p, option, sw.right() + 10, r, index.data(ROLE + 4), index.data(ROLE + 5))
         p.restore()
 
@@ -247,15 +254,15 @@ class PresetsPage(QWidget):
         self.search.textChanged.connect(self._filter)
         lay.addWidget(self.search)
         self.list = _PresetList()
-        self.list.setItemDelegate(_PresetDelegate(self.list))
+        self.list.setItemDelegate(_PresetDelegate(engine, self.list))
         self.list.setDragEnabled(True)
         self.list.setDragDropMode(QAbstractItemView.DragOnly)
         self.list.setMouseTracking(True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.itemDoubleClicked.connect(lambda it: it.data(ROLE) and self.activated.emit(it.data(ROLE)))
         lay.addWidget(self.list, 1)
-        lay.addWidget(label("Glisse un bouton sur une touche du deck. Double-clic : le poser sur la touche "
-                            "sélectionnée.", "Hint", True))
+        lay.addWidget(label("Glisser sur le deck, ou double-clic : pose le bouton sur la touche sélectionnée.",
+                            "Hint", True))
         self.refresh()
 
     def refresh(self) -> None:

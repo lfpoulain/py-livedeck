@@ -21,7 +21,7 @@ from ..actions import to_take
 from ..companion_import import import_companion
 from ..integrations import integration_status, merge_integrations
 from .. import updater
-from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, key, new_id, normalize_button, normalize_config,
+from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, config_text, key, new_id, normalize_button, normalize_config,
                      parse_control, parse_key, surface_of)
 from . import theme as T
 from .deck_view import ControlBar, DeckGrid
@@ -573,8 +573,9 @@ class MainWindow(QMainWindow):
 
     def toast(self, msg: str, error: bool = False, level: str = ""):
         level = level or ("error" if error else "info")
-        self.hint.setObjectName("Toast")
-        self.hint.setStyleSheet({"error": f"color:{T.DANGER}", "warn": f"color:{T.WARN}"}.get(level, ""))
+        self.hint.setObjectName("ToastBar")  # bandeau : un message ne doit pas passer pour l'aide du bas
+        self.hint.setStyleSheet({"error": f"color:{T.DANGER};border-color:#5b2b30",
+                                 "warn": f"color:{T.WARN};border-color:#5a4a1c"}.get(level, ""))
         self.hint.setText(msg)
         self.hint.setToolTip("Clic : ouvrir le moniteur" if level in ("error", "warn") else "")
         self.hint.style().unpolish(self.hint)
@@ -1147,15 +1148,23 @@ class MainWindow(QMainWindow):
     def export_config(self):
         path, _ = QFileDialog.getSaveFileName(self, "Exporter", "livedeck.json", "JSON (*.json)")
         if path:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.engine.cfg, f, ensure_ascii=False, indent=2)
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(config_text(self.engine.cfg))  # sans les clés internes « _… »
+            except OSError as e:
+                QMessageBox.warning(self, "Export impossible", f"Le fichier n'a pas pu être écrit :\n{e}")
+                return
             self.toast(f"Configuration exportée : {path}")
 
     def export_page(self):
         p = self.engine.page(self.page_id)
         path, _ = QFileDialog.getSaveFileName(self, "Exporter la page", f"{p['name']}.json", "JSON (*.json)")
         if path:
-            self.write_page(path, self.page_id)
+            try:
+                self.write_page(path, self.page_id)
+            except OSError as e:
+                QMessageBox.warning(self, "Export impossible", f"Le fichier n'a pas pu être écrit :\n{e}")
+                return
             self.toast(f"Page « {p['name']} » exportée : {path}")
 
     def write_page(self, path: str, page_id: str) -> None:
@@ -1198,9 +1207,12 @@ class MainWindow(QMainWindow):
             return
         try:
             with open(path, encoding="utf-8") as f:
-                cfg = normalize_config(json.load(f))
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Chargement impossible", str(e))
+                cfg = json.load(f)
+            if not isinstance(cfg, dict) or not isinstance(cfg.get("pages"), list):
+                raise ValueError("ce fichier n'est pas une configuration LiveDeck")
+            cfg = normalize_config(cfg)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+            QMessageBox.warning(self, "Chargement impossible", f"Ce fichier n'a pas pu être lu :\n{e}")
             return
         self.engine.replace_config(cfg)
         self.engine.set_vmix(cfg["vmix"]["host"], cfg["vmix"]["port"])

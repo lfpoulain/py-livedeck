@@ -302,7 +302,7 @@ class Loupedeck:
         self._port = None
         self._tid = 0
         self._buf = bytearray()
-        self._touches: dict[int, dict] = {}
+        self._touches: dict[tuple, dict] = {}
         self._stop = threading.Event()
         self._send_lock = threading.Lock()
         self._reader: threading.Thread | None = None
@@ -462,12 +462,13 @@ class Loupedeck:
         wheel = cmd in (CMD_TOUCH_CT, CMD_TOUCH_END_CT)
         target = {"screen": "wheel"} if wheel else self.target(x, y)
         evt = {"type": "touch", "x": x, "y": y, "finger": finger, "target": target}
+        tid = (wheel, finger)  # deux écrans, deux numérotations : le doigt 0 de l'un n'est pas celui de l'autre
         if ending:
-            self._touches.pop(finger, None)
+            self._touches.pop(tid, None)
             evt["phase"] = "end"
         else:
-            evt["phase"] = "move" if finger in self._touches else "start"
-            self._touches[finger] = evt
+            evt["phase"] = "move" if tid in self._touches else "start"
+            self._touches[tid] = evt
         self._emit(evt)
 
     def target(self, x: int, y: int) -> dict:

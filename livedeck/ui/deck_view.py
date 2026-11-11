@@ -170,6 +170,51 @@ def pil_to_pixmap(img, dpr: float = 1.0) -> QPixmap:
     return pm
 
 
+def key_pixmap(visual: dict, size: int, dpr: float = 1.0) -> QPixmap:
+    """Image d'une touche aux coins arrondis, comme sur le deck (aperçus, vignettes)."""
+    px = max(24, int(size * dpr))
+    # Jamais dessinée plus petite qu'une vraie touche (72 px) puis réduite : une vignette garde la
+    # mise en page du deck au lieu de couper les mots (« Progr / am »).
+    src = pil_to_pixmap(render(visual, max(px, 72)))
+    pm = QPixmap(px, px)
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, size, size), size * 0.16, size * 0.16)
+    p.setClipPath(path)
+    p.drawPixmap(QRectF(0, 0, size, size), src, QRectF(src.rect()))
+    p.end()
+    return pm
+
+
+_THUMBS: dict = {}
+
+
+def preset_thumb(engine, pid: str, name: str, size: int, dpr: float = 1.0) -> QPixmap | None:
+    """Vignette d'un bouton prêt à l'emploi : la touche telle qu'elle sera créée. Un bouton sans
+    texte (Take, Program… qui prendront le nom de l'input) montre son nom à la place."""
+    sig = (pid, name, size, dpr)
+    pm = _THUMBS.get(sig)
+    if pm is None:
+        from .. import presets
+        try:
+            b = presets.make(pid, engine)
+            if not b:
+                return None
+            v = {"bg": b.get("bg"), "fg": b.get("fg"), "label": b.get("label") or name, "size": 0,
+                 "icon": "", "bar": "", "pressed": False, "warn": False, "lit": ""}
+            pm = key_pixmap(v, size, dpr)
+        except Exception:  # une vignette ne doit jamais empêcher d'afficher la liste
+            return None
+        if len(_THUMBS) > 600:
+            _THUMBS.clear()
+        _THUMBS[sig] = pm
+    return pm
+
+
 class DeckGrid(QWidget):
     selected = Signal(str)
     pressed = Signal(str, bool)
@@ -591,10 +636,12 @@ class DeckGrid(QWidget):
         p.setPen(QPen(QColor("#2a303b"), 1))
         p.setBrush(QColor("#181b22"))
         p.drawRoundedRect(rect, radius, radius)
-        hover = k == self._hover and not self.live and not self.locked
-        p.setPen(QColor(T.FAINT) if hover else QColor("#3a4150"))
-        p.setFont(self._font(cell * (0.2 if hover else 0.12)))
-        p.drawText(rect, Qt.AlignCenter, "+" if hover else "·")
+        edit = not self.live and not self.locked
+        hover, sel = k == self._hover and edit, k == self.sel and edit
+        # « + » : la case attend une action (survolée, ou sélectionnée et ouverte dans l'éditeur)
+        p.setPen(QColor(T.ACCENT) if sel else QColor(T.MUTED) if hover else QColor("#3a4150"))
+        p.setFont(self._font(cell * (0.2 if hover or sel else 0.12)))
+        p.drawText(rect, Qt.AlignCenter, "+" if hover or sel else "·")
         if k == self._drop:
             self._paint_drop(p, rect, radius)
         else:

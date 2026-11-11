@@ -2,6 +2,8 @@
 from pathlib import Path
 
 CHEVRON = (Path(__file__).parent / "assets" / "chevron.svg").as_posix()
+CHEVRON_L = (Path(__file__).parent / "assets" / "chevron-left.svg").as_posix()
+CHEVRON_R = (Path(__file__).parent / "assets" / "chevron-right.svg").as_posix()
 
 BG = "#0d0f13"
 PANEL = "#14171d"
@@ -38,6 +40,11 @@ QLabel#H2 {{ font-size: 11px; font-weight: 700; color: {MUTED}; letter-spacing: 
 QLabel#Muted {{ color: {MUTED}; }}
 QLabel#Hint {{ color: {MUTED}; font-size: 12px; }}
 QLabel#Toast {{ color: {ACCENT}; font-size: 12px; font-weight: 600; }}
+QLabel#ToastBar {{ color: {ACCENT}; font-size: 12px; font-weight: 600; background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 9px; padding: 7px 14px; }}
+QLabel#EmptyIcon {{ color: {FAINT}; font-size: 30px; font-weight: 300; background: {PANEL2}; border: 1px dashed #343b4a; border-radius: 14px; }}
+QLabel#EmptyTitle {{ font-size: 15px; font-weight: 650; }}
+QPushButton#SectionBtn {{ background: transparent; border: none; padding: 4px 0; text-align: left; color: {MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }}
+QPushButton#SectionBtn:hover {{ color: {TEXT}; background: transparent; }}
 QLabel#Chip {{ background: {RAISED}; border-radius: 9px; padding: 2px 9px; color: {MUTED}; font-size: 11px; font-weight: 600; }}
 QPushButton#Chip {{ background: {RAISED}; border: 1px solid {BORDER}; border-radius: 10px; padding: 3px 10px; color: {MUTED}; font-size: 11px; font-weight: 600; }}
 QPushButton#Chip:hover {{ color: {TEXT}; }}
@@ -59,6 +66,7 @@ QPushButton#Danger:hover {{ background: #2a1a1d; }}
 QPushButton#Ghost {{ background: transparent; border: none; color: {MUTED}; padding: 6px 10px; }}
 QPushButton#Ghost:hover {{ color: {TEXT}; background: {PANEL2}; }}
 QPushButton#Ghost:checked {{ color: {ACCENT}; }}
+QPushButton#Ghost:disabled {{ color: #3a4150; }}
 QPushButton#Small {{ padding: 5px 10px; font-size: 12px; }}
 QPushButton#Seg {{ background: transparent; border: none; border-radius: 7px; padding: 6px 14px; color: {MUTED}; }}
 QPushButton#Seg:checked {{ background: {RAISED}; color: {TEXT}; }}
@@ -67,7 +75,7 @@ QPushButton#SegLive:checked {{ background: #3a1518; color: #fca5a5; }}
 QPushButton#LockBtn {{ padding: 6px 12px; }}
 QPushButton#LockBtn:checked {{ background: #3a1518; color: #fca5a5; border-color: #7f1d1d; }}
 QFrame#SegBox {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 9px; }}
-QPushButton#Tile {{ text-align: left; padding: 9px 12px; border-radius: 9px; background: {PANEL2}; font-weight: 600; }}
+QPushButton#Tile {{ text-align: left; padding: 7px 10px; border-radius: 9px; background: {PANEL2}; font-weight: 600; }}
 QPushButton#Tile:hover {{ background: {RAISED}; border-color: #3a4252; }}
 
 QComboBox, QLineEdit, QSpinBox, QPlainTextEdit#Field {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 8px; padding: 6px 10px; selection-background-color: {ACCENT}; selection-color: #04211d; }}
@@ -108,7 +116,13 @@ QTabBar {{ background: transparent; }}
 QTabBar::tab {{ background: transparent; padding: 7px 14px; color: {MUTED}; font-weight: 600; border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {ACCENT}; }}
 QTabBar::tab:hover {{ color: {TEXT}; }}
-QTabBar QToolButton {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 6px; }}
+QTabBar::scroller {{ width: 68px; }}
+QTabBar QToolButton {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 8px; width: 28px; margin: 4px 2px; }}
+QTabBar QToolButton:hover {{ background: {RAISED}; border-color: #3a4252; }}
+QTabBar QToolButton:pressed {{ background: #1c2029; }}
+QTabBar QToolButton:disabled {{ background: transparent; border-color: {PANEL2}; }}
+QTabBar QToolButton::left-arrow {{ image: url("{CHEVRON_L}"); width: 14px; height: 14px; }}
+QTabBar QToolButton::right-arrow {{ image: url("{CHEVRON_R}"); width: 14px; height: 14px; }}
 QSlider::groove:horizontal {{ height: 4px; background: {RAISED}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: {TEXT}; width: 14px; margin: -6px 0; border-radius: 7px; }}

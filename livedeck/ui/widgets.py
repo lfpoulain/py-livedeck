@@ -190,12 +190,12 @@ class ColorRow(QWidget):
         self.value = value or ""
         lay = QGridLayout(self)  # 8 pastilles par ligne : tient dans la colonne la plus étroite
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(3)
+        lay.setSpacing(4)
         self.btns = []
         items = ([""] if allow_none else []) + list(swatches or T.SWATCHES)
         for i, c in enumerate(items):
             b = QPushButton("∅" if not c else "")
-            b.setFixedSize(18, 18)
+            b.setFixedSize(20, 20)
             b.setCursor(Qt.PointingHandCursor)
             b.setToolTip(c or "Aucune")
             b.clicked.connect(lambda _=False, c=c: self.set(c, True))
@@ -203,7 +203,7 @@ class ColorRow(QWidget):
             lay.addWidget(b, i // self.COLS, i % self.COLS)
             self.btns.append(b)
         self.custom = QPushButton("…")
-        self.custom.setFixedSize(24, 18)
+        self.custom.setFixedSize(26, 20)
         self.custom.setToolTip("Couleur personnalisée")
         self.custom.clicked.connect(self._pick)
         n = len(items)
@@ -216,7 +216,7 @@ class ColorRow(QWidget):
             c = b.property("color")
             sel = c.lower() == self.value.lower()
             border = f"2px solid {T.ACCENT}" if sel else f"1px solid {T.BORDER}"
-            b.setStyleSheet(f"QPushButton{{background:{c or T.PANEL2};border:{border};border-radius:9px;"
+            b.setStyleSheet(f"QPushButton{{background:{c or T.PANEL2};border:{border};border-radius:10px;"
                             f"padding:0;color:{T.MUTED};font-size:9px}}")
         custom = self.value and self.value.lower() not in [b.property("color").lower() for b in self.btns]
         self.custom.setStyleSheet(f"QPushButton{{background:{self.value if custom else T.PANEL2};"

@@ -1941,10 +1941,11 @@ def test_review_small_fixes(tmp_path):
     assert not any(t == "Bus" or t.startswith("Raccourci de secours") for t in texts()), texts()
     from livedeck.ui.inspector import Tile               # description de tuile sur 2 lignes, sans « … »
     tile = Tile("Take", "1er appui preview, 2e antenne")
-    tile.resize(170, tile.height())
+    tile.resize(130, tile.height())
     tile.show()
     app.processEvents()
-    assert "…" not in tile.text() and len(tile.text().splitlines()) == 3, tile.text()
+    lines = tile.shown_lines()
+    assert not any("…" in t for t in lines) and len(lines) == 3, lines
     tile.close()
     w.quit_app()
 
@@ -3707,6 +3708,36 @@ def test_loupedeck_rgb565():
     buf = bytearray(b"\x82\x03\x03\x02@\x82\x05\x05\x00")
     assert ld.split_frames(buf) == [b"\x03\x02@"]
     assert bytes(buf) == b"\x82\x05\x05\x00"
+
+
+def test_audit_fixes(tmp_path):
+    """Corrections de l'audit du cœur : config partielle, raccourci « + », doigts des deux écrans."""
+    # config éditée à la main : version nulle, vmix sans port, option nulle -> complétée, jamais « abîmée »
+    path = Path(tmp_path) / "config.json"
+    path.write_text(json.dumps({"version": None, "vmix": {"host": "10.0.0.5"},
+                                "options": {"health_interval": None}, "pages": []}), encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg["vmix"] == {"host": "10.0.0.5", "port": 8099} and cfg["options"]["health_interval"] == 15
+    assert cfg["pages"]
+    # « ctrl++ » : le dernier « + » est une touche
+    from livedeck import hotkeys
+    from pynput.keyboard import Key, KeyCode
+    assert hotkeys.parse("ctrl++") == [Key.ctrl, KeyCode.from_char("+")]
+    assert hotkeys.parse("ctrl+plus") == hotkeys.parse("ctrl++") and hotkeys.parse("+") == [KeyCode.from_char("+")]
+    assert hotkeys.parse("ctrl+a") == [Key.ctrl, KeyCode.from_char("a")]
+    # Loupedeck : le doigt 0 de la molette ne termine pas l'appui du doigt 0 de la dalle
+    events = []
+    dev = ld.Loupedeck.__new__(ld.Loupedeck)
+    dev._touches, dev._emit, dev.target = {}, events.append, lambda x, y: {"screen": "center"}
+    pkt = b"\x00" + struct.pack(">HH", 100, 100) + b"\x00"
+    dev._touch(ld.CMD_TOUCH, pkt)
+    dev._touch(ld.CMD_TOUCH_CT, pkt)
+    dev._touch(ld.CMD_TOUCH_END_CT, pkt)
+    dev._touch(ld.CMD_TOUCH, pkt)
+    assert [ev["phase"] for ev in events] == ["start", "start", "end", "move"], events
+    # un nom de fichier venu d'Internet ne sort pas du dossier de mise à jour
+    from livedeck import updater
+    assert (updater.update_dir() / Path(r"..\..\evil.exe").name).parent == updater.update_dir()
 
 
 if __name__ == "__main__":

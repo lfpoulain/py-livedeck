@@ -35,10 +35,16 @@ def parse(combo: str) -> list:
     from pynput.keyboard import KeyCode
     special = _special()
     keys = []
-    for part in [p.strip().lower() for p in combo.replace(" ", "").split("+")]:
+    # « ctrl++ » : le dernier « + » est la touche elle-même, pas un séparateur (alias : « plus »)
+    text = combo.replace(" ", "")
+    if text.endswith("++") or text == "+":
+        text = text[:-1] + "plus"
+    for part in [p.strip().lower() for p in text.split("+")]:
         if not part:
             continue
-        if part in special:
+        if part == "plus":
+            keys.append(KeyCode.from_char("+"))
+        elif part in special:
             keys.append(special[part])
         elif len(part) == 1:
             keys.append(KeyCode.from_char(part))

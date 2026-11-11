@@ -179,6 +179,7 @@ class Engine:
 
         def items(b):
             return ((b.get("actions") or []) + (b.get("actions_off") or []) + (b.get("long_actions") or [])
+                    + (b.get("actions_cw") or []) + (b.get("actions_ccw") or [])
                     + [(f.get("cond") or {}) for f in (b.get("feedbacks") or [])])
         fixes = {}
         for _, _, b in self.all_buttons():
@@ -191,7 +192,9 @@ class Engine:
         with self._lock:
             for cfg in [self.cfg, *self._undo, *self._redo]:
                 for p in cfg["pages"]:
-                    for b in p["buttons"].values():
+                    # molettes et boutons physiques compris : sinon la correction était annoncée
+                    # (et la config réenregistrée) à chaque passage sans jamais être faite
+                    for b in [*p["buttons"].values(), *(p.get("controls") or {}).values()]:
                         for a in items(b):
                             if a.get("input") in fixes:
                                 a["input"] = fixes[a["input"]]
@@ -667,15 +670,21 @@ class Engine:
         except Exception:
             names = {}
 
+        def what(a) -> str:
+            try:
+                return actions.summary(a, names)
+            except Exception:  # action mal formée : son résumé ne doit pas interrompre les suivantes
+                return str(a.get("type") or "action")
+
         def job():
             for phase in phases:
                 for a in acts:
                     try:
                         if phase == "down":
-                            self.log("action", f"{label or 'Bouton'} — {actions.summary(a, names)}")
+                            self.log("action", f"{label or 'Bouton'} — {what(a)}")
                         actions.execute(self, a, phase, {"deck": deck, **(extra or {})})
                     except Exception as e:
-                        self.log("error", f"{label or 'Bouton'} : {actions.summary(a, names)} → {e}")
+                        self.log("error", f"{label or 'Bouton'} : {what(a)} → {e}")
         # Soumis sous le verrou : sinon la suppression simultanée du bouton peut arrêter son
         # exécuteur entre sa récupération et la soumission, et le travail serait perdu.
         with self._plock:

@@ -289,10 +289,13 @@ def import_companion(path, preview_then: str = "none", integrations: bool = Fals
         for serial, _, brightness in bound:
             cfg["decks"][serial] = {"page": p["id"], "brightness": brightness}
         if overflow:
-            extra = new_page(f"{p['name']} (suite)", cols, rows)
-            for i, b in enumerate(overflow):
-                extra["buttons"][key(*divmod(i, cols))] = b
-            cfg["pages"].append(extra)
+            per = max(1, cols * rows)  # une page « (suite) » par grille pleine : rien ne reste hors grille
+            for n in range(0, len(overflow), per):
+                extra = new_page(f"{p['name']} (suite{' ' + str(n // per + 1) if n else ''})", cols, rows)
+                for i, b in enumerate(overflow[n:n + per]):
+                    extra["buttons"][key(*divmod(i, cols))] = b
+                cfg["pages"].append(extra)
+            extra = {"name": f"{p['name']} (suite)" + (" et suivantes" if len(overflow) > per else "")}
             report.append(f"« {p['name']} » : {len(overflow)} bouton(s) hors de la grille {cols}×{rows} "
                           f"du deck déplacés dans « {extra['name']} ».")
     vmix_conf = next((c.get("config") for c in (data.get("instances") or {}).values()

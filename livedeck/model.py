@@ -214,8 +214,15 @@ def normalize_config(cfg: dict) -> dict:
     for k, v in base.items():
         if not isinstance(cfg.get(k), type(v)):
             cfg[k] = v
+    for k, v in base["vmix"].items():  # « vmix » partiel (sans port) : plantage au démarrage
+        got = cfg["vmix"].get(k)
+        if k == "port" and isinstance(got, str) and got.strip().isdigit():
+            got = cfg["vmix"][k] = int(got)  # port saisi entre guillemets
+        if not isinstance(got, type(v)) or isinstance(got, bool) or got in ("", 0):
+            cfg["vmix"][k] = v
     for k, v in base["options"].items():
-        cfg["options"].setdefault(k, v)
+        if cfg["options"].get(k) is None:
+            cfg["options"][k] = v
     for k, v in base["integrations"].items():
         if cfg["integrations"].get(k) is None:
             cfg["integrations"][k] = v
@@ -252,6 +259,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     if not isinstance(cfg, dict) or not isinstance(cfg.get("pages", []), list):
         raise ValueError("ce n'est pas une configuration LiveDeck")
     old = cfg.get("version", 1)
+    if not isinstance(old, int) or isinstance(old, bool):  # « version » nulle ou en texte
+        old = int(old) if isinstance(old, str) and old.isdigit() else 1
     cfg = normalize_config(cfg)
     if old < 2:  # v1 : bricolages hérités de Companion -> intégrations natives
         from .integrations import migrate

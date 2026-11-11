@@ -962,6 +962,7 @@ class Tallies(_Service):
         self.devices: list[dict] = []
         self.status: dict[str, dict] = {}  # hôte -> {"reachable", "connected", "live", "preview", …}
         self._pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="tally")
+        self._busy: set[str] = set()  # sondages en cours : jamais deux à la fois pour le même tally
 
     def configure(self, devices: list[dict]) -> None:
         self.devices = [d for d in devices if d.get("host")]
@@ -978,6 +979,8 @@ class Tallies(_Service):
             new = {"reachable": True, **data} if ok else {"reachable": False, "error": f"HTTP {status}"}
         except NET_ERRORS as e:
             new = {"reachable": False, "error": error_kind(e, _hostport(host)[0])}
+        finally:
+            self._busy.discard(host)
         if new != self.status.get(host):
             self.status[host] = new
             self._on_change()
@@ -986,6 +989,11 @@ class Tallies(_Service):
         while not self._stop.is_set():
             if self.active:
                 for d in list(self.devices):
+                    # Chaque modification de la config réveille ce fil : sans cette garde, des tallys
+                    # injoignables empilaient des sondages et l'état affiché prenait du retard.
+                    if d["host"] in self._busy:
+                        continue
+                    self._busy.add(d["host"])
                     try:
                         self._pool.submit(self._poll, d["host"])
                     except RuntimeError:  # arrêt en cours : le pool est déjà fermé
@@ -1383,8 +1391,8 @@ def migrate(cfg: dict) -> list[str]:
         for b in page["buttons"].values():
             acts, off = b.get("actions") or [], b.get("actions_off") or []
             # 1. interrupteur show / hide vers orchestream -> overlay orchestream suivi en direct
-            on_m = [_ORCH.match(a.get("url", "")) for a in acts if a.get("type") == "http"]
-            off_m = [_ORCH.match(a.get("url", "")) for a in off if a.get("type") == "http"]
+            on_m = [_ORCH.match(str(a.get("url") or "")) for a in acts if a.get("type") == "http"]
+            off_m = [_ORCH.match(str(a.get("url") or "")) for a in off if a.get("type") == "http"]
             if (b.get("mode") == "toggle" and len(acts) == len(off) == 1 and on_m[:1] and off_m[:1]
                     and on_m[0] and off_m[0] and on_m[0].group(2) == off_m[0].group(2)):
                 orch = integ.setdefault("orchestream", {})

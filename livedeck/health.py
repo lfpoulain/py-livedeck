@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import webreq
 from .webreq import NET_ERRORS
+
+log = logging.getLogger("livedeck.health")
 
 
 def parse_targets(text: str) -> list[tuple[str, str]]:
@@ -26,7 +29,9 @@ def parse_targets(text: str) -> list[tuple[str, str]]:
 
 def ping(host: str, timeout_ms: int = 1000) -> bool:
     if sys.platform == "win32":
-        cmd = ["ping", "-n", "1", "-w", str(timeout_ms), host]
+        # Un nom (« PC-REGIE », « localhost ») se résout souvent en IPv6, dont la réponse n'a pas de
+        # « TTL= » : la cible paraissait hors ligne en permanence. Une adresse IPv6 écrite reste en IPv6.
+        cmd = ["ping", "-n", "1", "-w", str(timeout_ms), *([] if ":" in host else ["-4"]), host]
         flags = subprocess.CREATE_NO_WINDOW
     else:
         cmd = ["ping", "-c", "1", "-W", str(max(1, timeout_ms // 1000)), host]
@@ -35,6 +40,8 @@ def ping(host: str, timeout_ms: int = 1000) -> bool:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout_ms / 1000 + 2, creationflags=flags)
     except (OSError, subprocess.TimeoutExpired):
         return False
+    if sys.platform == "win32" and ":" in host:
+        return r.returncode == 0  # IPv6 : pas de TTL dans la réponse
     return r.returncode == 0 and b"TTL=" in r.stdout.upper()
 
 
@@ -89,8 +96,15 @@ class HealthMonitor:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            self.check_now()
-            self._stop.wait(max(3, self.interval))
+            try:
+                self.check_now()
+            except Exception:  # le fil ne doit jamais s'arrêter : les retours d'état se figeraient
+                log.exception("surveillance réseau")
+            try:
+                pause = max(3.0, float(self.interval))
+            except (TypeError, ValueError):
+                pause = 15.0
+            self._stop.wait(pause)
 
 
 # --- valeur lue dans une API JSON ---------------------------------------------------------------

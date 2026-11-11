@@ -6,7 +6,8 @@ import html
 import json
 import threading
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
@@ -24,11 +25,10 @@ from ..integrations import (ORCH_COMMAND_ARG, integration_status, probe_deck, pr
 ORCH_ARG_LABEL = {"quizId": "Quiz", "gameId": "Speedizz", "widget": "Widget", "fn": "Fonction vMix"}
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
 from ..model import normalize_button, normalize_control, parse_control, parse_key
-from ..render import render
 from ..webreq import parse_curl
 from . import theme as T
 from . import widgets as W
-from .deck_view import pil_to_pixmap
+from .deck_view import key_pixmap, preset_thumb
 from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
                       section, short_label, tame_combo)
 
@@ -89,25 +89,72 @@ class Tile(QPushButton):
     """Tuile « nom + description » : la description passe sur 2 lignes, au-delà elle est raccourcie (…)
     au lieu de déborder."""
 
-    def __init__(self, name: str, sub: str):
+    THUMB = 36
+
+    def __init__(self, name: str, sub: str, thumb=None, dim: bool = False):
         super().__init__(f"{name}\n{sub}")
         self.setObjectName("Tile")
         self._lines = (name, sub)
-        self.setFixedHeight(self.fontMetrics().lineSpacing() * 3 + 24)
+        self._thumb = thumb  # la touche telle qu'elle sera créée
+        self._dim = dim      # intégration à régler : proposée, mais en retrait
+        self.setAttribute(Qt.WA_Hover)
+        self.setFixedHeight(self.fontMetrics().lineSpacing() * 3 + 18)
 
-    def resizeEvent(self, e):
-        fm, w = self.fontMetrics(), max(20, self.width() - 30)
+    def _fonts(self) -> tuple[QFont, QFont]:
+        name = QFont(self.font())
+        name.setWeight(QFont.DemiBold)
+        sub = QFont(self.font())
+        sub.setPixelSize(11)
+        return name, sub
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        hover = self.underMouse() and self.isEnabled()
+        p.setPen(QPen(QColor(T.ACCENT if self.hasFocus() else "#3a4252" if hover else T.BORDER), 1))
+        p.setBrush(QColor("#1c2029" if self.isDown() else T.RAISED if hover else T.PANEL2))
+        p.drawRoundedRect(r, 9, 9)
+        x = 9.0
+        if self._thumb is not None:
+            p.drawPixmap(QPointF(x, (self.height() - self.THUMB) / 2), self._thumb)
+            x += self.THUMB + 9
+        w = self._text_width()
+        f_name, f_sub = self._fonts()
+        fm_n, fm_s = QFontMetricsF(f_name), QFontMetricsF(f_sub)
+        name, *lines = self.shown_lines()
+        y = (self.height() - fm_n.height() - len(lines) * fm_s.height()) / 2
+        p.setFont(f_name)
+        p.setPen(QColor(T.MUTED if self._dim else T.TEXT))
+        p.drawText(QRectF(x, y, w, fm_n.height()), Qt.AlignLeft | Qt.AlignVCenter, name)
+        y += fm_n.height()
+        p.setFont(f_sub)
+        p.setPen(QColor(T.FAINT if self._dim else T.MUTED))
+        for t in lines:
+            p.drawText(QRectF(x, y, w, fm_s.height()), Qt.AlignLeft | Qt.AlignVCenter, t)
+            y += fm_s.height()
+
+    def _text_width(self) -> float:
+        return max(20.0, self.width() - 17 - (self.THUMB + 9 if self._thumb is not None else 0))
+
+    def shown_lines(self) -> list[str]:
+        """Lignes réellement dessinées : le nom, puis la description sur 2 lignes au plus (la 2e est
+        raccourcie par « … » si elle déborde encore)."""
+        w = self._text_width()
+        f_name, f_sub = self._fonts()
+        fm_n, fm_s = QFontMetricsF(f_name), QFontMetricsF(f_sub)
         lines, cur = [], ""
         for word in self._lines[1].split():
             t = f"{cur} {word}".strip()
-            if cur and not lines and fm.horizontalAdvance(t) > w:
+            if cur and not lines and fm_s.horizontalAdvance(t) > w:
                 lines.append(cur)
                 cur = word
             else:
                 cur = t
-        lines.append(cur)
-        self.setText("\n".join(fm.elidedText(t, Qt.ElideRight, w) for t in (self._lines[0], *lines)))
-        super().resizeEvent(e)
+        if cur:
+            lines.append(cur)
+        return [fm_n.elidedText(self._lines[0], Qt.ElideRight, w),
+                *(fm_s.elidedText(t, Qt.ElideRight, w) for t in lines)]
 
 
 class _Probe(QObject):
@@ -165,6 +212,15 @@ class Inspector(QFrame):
         self.next_lbl: QLabel | None = None
         self._integ_lbls: list = []  # (QLabel, intégration, action) mis à jour en direct
         self._pick_text, self._pick_cat = "", ""
+        self.label_edit: QPlainTextEdit | None = None
+        # sections repliables (None = automatique) et panneau « Options » des actions
+        self._open: dict = {"actions": True, "look": True, "fb": None}
+        self._options: bool | None = None
+        try:
+            saved = json.loads(str(getattr(main, "_ui", None).value("inspector_sections", "{}")))
+            self._open.update({k: v for k, v in saved.items() if k in self._open and v in (True, False, None)})
+        except Exception:  # réglage absent ou abîmé : sections par défaut
+            pass
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         self._probe_lbls: dict = {}
@@ -228,7 +284,7 @@ class Inspector(QFrame):
         if not force and (page_id, k) == (self.page_id, self.key) and self._sig(b) == self._last:
             return
         if (page_id, k) != (self.page_id, self.key):
-            self.side, self.step = "actions", 0
+            self.side, self.step, self._options = "actions", 0, None
         self.page_id, self.key = page_id, k
         cid = parse_control(k) if k else None
         self.b = (normalize_control(copy.deepcopy(b)) if cid is not None
@@ -273,8 +329,7 @@ class Inspector(QFrame):
         real = self.engine.button(self.page_id, self.key) if self.page_id and self.key else None
         if self.preview is not None:
             dpr = self.devicePixelRatioF()
-            size = self.preview.width()
-            self.preview.setPixmap(pil_to_pixmap(render(self.engine.visual(real), int(size * dpr)), dpr))
+            self.preview.setPixmap(key_pixmap(self.engine.visual(real), self.preview.width(), dpr))
         if self.next_lbl is not None:
             nxt = next_press(self.engine, real) if real else ""
             self.next_lbl.setVisible(bool(nxt))
@@ -294,15 +349,11 @@ class Inspector(QFrame):
             elif it.layout():
                 _drop_layout(it.layout())
                 it.layout().deleteLater()
-        self.preview = self.auto_desc = self.steps = self.next_lbl = None
+        self.preview = self.auto_desc = self.steps = self.next_lbl = self.label_edit = None
         self._integ_lbls = []
         if not self.page_id or not self.key:
             self.bottom.hide()
-            hint = label("Clique une touche du deck,\nou appuie-la directement sur le Stream Deck.", "Hint", True)
-            hint.setAlignment(Qt.AlignCenter)
-            self.v.addStretch()
-            self.v.addWidget(wrap(hint))
-            self.v.addStretch()
+            self._empty_state()
             return
         self.bottom.setVisible(self.b is not None)
         self._header()
@@ -315,12 +366,67 @@ class Inspector(QFrame):
         elif self.b is None:
             self._picker()
         else:
-            self._appearance()
+            # L'action d'abord : c'est elle qu'on vient régler (choisir l'input…). L'apparence suit,
+            # elle se remplit souvent toute seule (le texte prend le nom de l'input).
             self._actions()
+            self._appearance()
             self._feedbacks()
         self.v.addStretch()
         self.refresh_preview()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(scroll))
+
+    def _empty_state(self):
+        """Rien de sélectionné : dire quoi faire, en trois gestes."""
+        self.v.addStretch(2)
+        icon = label("+", "EmptyIcon")
+        icon.setFixedSize(64, 64)
+        icon.setAlignment(Qt.AlignCenter)
+        self.v.addWidget(icon, 0, Qt.AlignHCenter)
+        self.v.addSpacing(6)
+        title = label("Sélectionne une touche", "EmptyTitle")
+        title.setAlignment(Qt.AlignCenter)
+        self.v.addWidget(wrap(title))
+        sub = label("Clique une touche du deck pour la régler. Une case vide te propose tout ce "
+                    "qu'elle peut devenir.", "Hint")
+        sub.setAlignment(Qt.AlignCenter)
+        self.v.addWidget(wrap(sub))
+        self.v.addSpacing(10)
+        frame, lay = _card()
+        for head, text in (("Double-clic sur un input", "à gauche : crée la touche et passe à la suivante"),
+                           ("Glisser", "un input ou un bouton sur une case ; une touche pour la déplacer"),
+                           ("Suivre le deck", "coché : appuie sur l'appareil pour sélectionner la touche")):
+            lb = wrap(label(f"<b>{head}</b> <span style='color:{T.MUTED}'>· {text}</span>"))
+            lb.setTextFormat(Qt.RichText)
+            lay.addWidget(lb)
+        self.v.addWidget(frame)
+        self.v.addStretch(3)
+
+    def _section(self, key: str, title: str, trailing: QWidget | None = None, auto: bool = True) -> bool:
+        """En-tête de section repliable (clic sur le titre). Renvoie True si la section est ouverte.
+        auto : état quand l'utilisateur n'a rien choisi (self._open[key] vaut None)."""
+        is_open = auto if self._open.get(key) is None else bool(self._open[key])
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 6, 0, 0)
+        head = QPushButton(("▾  " if is_open else "▸  ") + title.upper())
+        head.setObjectName("SectionBtn")
+        head.setCursor(Qt.PointingHandCursor)
+        head.setToolTip("Replier la section" if is_open else "Déplier la section")
+        head.clicked.connect(lambda: self._toggle_section(key, not is_open))
+        row.addWidget(head)
+        row.addStretch()
+        if trailing:
+            row.addWidget(trailing)
+        self.v.addLayout(row)
+        return is_open
+
+    def _toggle_section(self, key: str, is_open: bool) -> None:
+        self._open[key] = is_open
+        try:
+            ui = getattr(self.main, "_ui", None)
+            ui.setValue("inspector_sections", json.dumps(self._open))
+        except Exception:  # la disposition n'est qu'un confort
+            pass
+        self.rebuild()
 
     def _header(self):
         self.v.addWidget(label("TOUCHE", "H2"))
@@ -328,7 +434,7 @@ class Inspector(QFrame):
         row.setSpacing(12)
         if self.b is not None:
             self.preview = QLabel()
-            size = 96 if self.locked else 64
+            size = 96 if self.locked else 72
             self.preview.setFixedSize(size, size)
             row.addWidget(self.preview, 0, Qt.AlignTop)
         col = QVBoxLayout()
@@ -368,7 +474,10 @@ class Inspector(QFrame):
         full = b.get("label", "").replace("\n", " ").strip()
         title = b.get("label", "").split("\n")[0].strip()
         if not title and b.get("actions"):
-            title = summary(b["actions"][0])
+            a = b["actions"][0]
+            # input pas encore choisi : « Take », plutôt que « Take · ? (Cut) »
+            title = (ACTIONS.get(a.get("type"), {}).get("label", "").split(" (")[0]
+                     if "input" in a and not a["input"] else "") or summary(a)
         self.h1.setText(title or ("Touche vide" if self.b is None else "Sans texte"))
         self.h1.setToolTip(full or title)
 
@@ -403,8 +512,8 @@ class Inspector(QFrame):
         search.textChanged.connect(lambda t: self._pick_filter(text=t))
         self.pick_search = search
         self._fill_picker()
-        self.v.addWidget(wrap(label("Ou glisse un input vMix ou un bouton de la bibliothèque sur la touche.",
-                                    "Hint")))
+        self.v.addWidget(wrap(label("Plus rapide pour une caméra : double-clique un input vMix à gauche, "
+                                    "ou glisse-le sur la touche.", "Hint")))
         if self.main.clipboard:
             paste = QPushButton("Coller la touche copiée")
             paste.clicked.connect(self.main.paste)
@@ -448,10 +557,9 @@ class Inspector(QFrame):
                 sub = ({"intercom": "py-intercom injoignable",
                         "always_on": "toujours ouvert dans py-intercom : rien à piloter"}.get(setup)
                        or f"à configurer · {INTEG_NAMES.get(setup, setup)}") if setup else desc
-                b = Tile(name, sub)
+                b = Tile(name, sub, preset_thumb(self.engine, pid, name, Tile.THUMB, self.devicePixelRatioF()),
+                         dim=bool(setup))
                 b.setProperty("pid", pid)
-                b.setStyleSheet(f"QPushButton#Tile{{border-left:3px solid {color};"
-                                + (f"color:{T.MUTED};" if setup else "") + "}")
                 b.setCursor(Qt.PointingHandCursor)
                 b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
                 b.setToolTip(f"{name} : {desc}" + (
@@ -586,7 +694,8 @@ class Inspector(QFrame):
     # -- apparence ------------------------------------------------------------
     def _appearance(self):
         b = self.b
-        self.v.addLayout(section("Apparence", self._vars_button()))
+        if not self._section("look", "Apparence", self._vars_button()):
+            return
         text = QPlainTextEdit(b["label"])
         text.setObjectName("Field")
         text.setPlaceholderText("Texte de la touche (Entrée = retour à la ligne)")
@@ -594,10 +703,10 @@ class Inspector(QFrame):
         text.textChanged.connect(lambda: self._set("label", text.toPlainText(), "label"))
         self.label_edit = text
         self.v.addWidget(text)
+        f = form()
         bg = ColorRow(b["bg"])
         bg.changed.connect(lambda v: self._set("bg", v))
-        self.v.addWidget(bg)
-        f = form()
+        f.addRow(label("Fond", "Muted"), bg)
         fg = ColorRow(b["fg"], swatches=T.FG_SWATCHES)
         fg.changed.connect(lambda v: self._set("fg", v))
         f.addRow(label("Texte", "Muted"), fg)
@@ -677,6 +786,8 @@ class Inspector(QFrame):
                         sub.addAction(f"Texte « {n} »", lambda t=f"$(vmix:text:{ref}:{n})": self.insert_token(t))
 
     def insert_token(self, tok: str) -> None:
+        if self.label_edit is None:  # section Apparence repliée : on la rouvre pour y écrire
+            self._toggle_section("look", True)
         self.label_edit.setFocus()
         self.label_edit.insertPlainText(tok)
 
@@ -692,7 +803,7 @@ class Inspector(QFrame):
         self.b[k] = v
         self.commit(coalesce)
 
-    def _rotary_options(self):
+    def _rotary_options(self, lay):
         """Réglages propres aux molettes : pas d'accélération et retour vibratoire."""
         if self.side in ("actions_cw", "actions_ccw"):
             row = QHBoxLayout()
@@ -707,8 +818,8 @@ class Inspector(QFrame):
             row.addWidget(spin)
             row.addWidget(label("crans", "Hint"))
             row.addStretch()
-            self.v.addLayout(row)
-            self.v.addWidget(wrap(label("Dans une action, <b>$(delta)</b> vaut le nombre de crans avec son "
+            lay.addLayout(row)
+            lay.addWidget(wrap(label("Dans une action, <b>$(delta)</b> vaut le nombre de crans avec son "
                                         "signe, <b>$(delta_abs)</b> sans le signe.", "Hint")))
         hap = QHBoxLayout()
         hap.setSpacing(6)
@@ -722,16 +833,40 @@ class Inspector(QFrame):
         combo.currentIndexChanged.connect(lambda i: self._set("haptic", combo.itemData(i)))
         hap.addWidget(combo)
         hap.addStretch()
-        self.v.addLayout(hap)
+        lay.addLayout(hap)
 
     # -- actions --------------------------------------------------------------
     def _actions(self):
-        mode = Seg([("press", "Appui"), ("toggle", "Interrupteur")], self.b["mode"])
-        mode.setToolTip("Interrupteur : alterne entre deux séries d'actions et reste allumé tant qu'il est actif")
-        mode.changed.connect(self._set_mode)
-        self.v.addLayout(section("Actions", mode))
-        toggle = self.b["mode"] == "toggle"
-        rotary = self.b.get("kind") == "rotary"
+        b = self.b
+        toggle = b["mode"] == "toggle"
+        rotary = b.get("kind") == "rotary"
+        # Options avancées (interrupteur, appui long, sécurité) : repliées tant qu'on ne s'en sert
+        # pas, pour que créer une touche simple se résume à « choisir l'action, choisir l'input ».
+        used = toggle or rotary or bool(b.get("confirm")) or bool(b["long_actions"])
+        show_opts = used if self._options is None else self._options
+        opts = QPushButton("⚙  Options")
+        opts.setObjectName("Ghost")
+        opts.setCheckable(True)
+        opts.setChecked(show_opts)
+        opts.setToolTip("Interrupteur, appui long, sécurité contre un appui accidentel")
+        opts.clicked.connect(lambda: self._set_options(not show_opts))
+        if not self._section("actions", "Actions", opts):
+            return
+        if show_opts:
+            frame, lay = _card()
+            mode = Seg([("press", "Appui"), ("toggle", "Interrupteur")], b["mode"])
+            mode.setToolTip("Interrupteur : alterne entre deux séries d'actions et reste allumé tant qu'il est actif")
+            mode.changed.connect(self._set_mode)
+            lay.addWidget(mode)
+            confirm = QCheckBox("Sécurité : maintenir ½ s")
+            confirm.setToolTip("Évite un appui accidentel (FTB, arrêt du stream…) : il faut maintenir la touche ½ s "
+                               "pour déclencher. Une jauge se remplit sur la touche.")
+            confirm.setChecked(bool(b.get("confirm")))
+            confirm.toggled.connect(lambda v: (self._set("confirm", v), self.rebuild()))
+            lay.addWidget(confirm)
+            if rotary:
+                self._rotary_options(lay)
+            self.v.addWidget(frame)
         if rotary:
             # Une molette a trois listes : son appui, et un sens de rotation chacun.
             sides = [("actions", "Appui"), ("actions_cw", "Rotation ⟳"), ("actions_ccw", "Rotation ⟲")]
@@ -744,30 +879,24 @@ class Inspector(QFrame):
                 self.side = "actions"
             sides = ([("actions", "À l'activation"), ("actions_off", "À la désactivation")] if toggle
                      else [("actions", "Appui court"), ("long_actions", "Appui long")])
-        side = Seg(sides, self.side)
-        side.changed.connect(self._set_side)
-        if not toggle and not rotary:
-            side.buttons["long_actions"].setText("Appui long" + (f"  ·  {len(self.b['long_actions'])}"
-                                                                if self.b["long_actions"] else ""))
-        self.v.addWidget(side)
-        if rotary:
-            self._rotary_options()
-        confirm = QCheckBox("Sécurité : maintenir ½ s")
-        confirm.setToolTip("Évite un appui accidentel (FTB, arrêt du stream…) : il faut maintenir la touche ½ s "
-                           "pour déclencher. Une jauge se remplit sur la touche.")
-        confirm.setChecked(bool(self.b.get("confirm")))
-        confirm.toggled.connect(lambda v: (self._set("confirm", v), self.rebuild()))
-        self.v.addWidget(confirm)
-        if self.side == "long_actions" and self.b.get("confirm"):
+        # Onglets des listes : seulement quand il y en a plusieurs à voir (ou qu'on ouvre les options)
+        if toggle or rotary or show_opts or b["long_actions"] or self.side != "actions":
+            side = Seg(sides, self.side)
+            side.changed.connect(self._set_side)
+            if not toggle and not rotary:
+                side.buttons["long_actions"].setText("Appui long" + (f"  ·  {len(b['long_actions'])}"
+                                                                    if b["long_actions"] else ""))
+            self.v.addWidget(side)
+        if self.side == "long_actions" and b.get("confirm"):
             self.v.addWidget(wrap(label("Avec la sécurité, l'appui long déclenche déjà les actions de l'appui "
                                         "court : cette liste est ignorée.", "Hint")))
-        elif not toggle and self.b["long_actions"] and not self.b.get("confirm"):
+        elif not toggle and b["long_actions"] and not b.get("confirm"):
             self.v.addWidget(wrap(label("Un appui long est défini : l'appui court part au relâchement de la "
                                         "touche.", "Hint")))
-        lst = self.b[self.side]
+        lst = b[self.side]
         self.step = min(self.step, max(0, len(lst) - 1))
 
-        if lst:
+        if len(lst) > 1:  # une seule étape : sa carte suffit, la liste ne ferait que la répéter
             self.steps = QListWidget()
             self.steps.setObjectName("Steps")
             self.steps.setDragDropMode(QAbstractItemView.InternalMove)
@@ -777,6 +906,7 @@ class Inspector(QFrame):
             self.steps.setTextElideMode(Qt.ElideMiddle)
             self.steps.setUniformItemSizes(True)
             self.steps.setFixedHeight(min(6, len(lst)) * 38 + 12)
+            self.steps.setToolTip("Les étapes s'exécutent dans l'ordre. Glisse une étape pour la déplacer.")
             for i, a in enumerate(lst):
                 it = QListWidgetItem(dot_icon(CATEGORIES.get(ACTIONS.get(a["type"], {}).get("cat"), T.MUTED)), "")
                 it.setData(Qt.UserRole, i)
@@ -788,37 +918,41 @@ class Inspector(QFrame):
             self.steps.model().rowsMoved.connect(lambda *_: QTimer.singleShot(0, self._reordered))
             self.steps.setIconSize(QSize(10, 10))
             self.v.addWidget(self.steps)
+        if lst:
+            self.v.addWidget(self._step_editor(lst[self.step]))
         else:
-            self.v.addWidget(label("Aucune action pour l'instant.", "Hint"))
+            self.v.addWidget(wrap(label({"long_actions": "Rien à l'appui long pour l'instant.",
+                                         "actions_off": "Rien à la désactivation pour l'instant.",
+                                         "actions_cw": "Rien à la rotation ⟳ pour l'instant.",
+                                         "actions_ccw": "Rien à la rotation ⟲ pour l'instant."}
+                                        .get(self.side, "Cette touche ne fait rien pour l'instant."), "Hint")))
 
         row = QHBoxLayout()
         row.setSpacing(6)
-        add = QPushButton("＋ Action")
+        add = QPushButton("＋ Ajouter une action" if not lst else "＋ Étape")
         add.setObjectName("Small")
+        add.setToolTip("Ajoute une action à la suite : elles s'exécutent dans l'ordre à chaque appui")
         menu = QMenu(add)
         for cat, color in CATEGORIES.items():
-            items = [(t, s) for t, s in ACTIONS.items() if s["cat"] == cat]
+            items = [(t, sp) for t, sp in ACTIONS.items() if sp["cat"] == cat]
             if items:
                 menu.addSection(cat)
-                for t, s in items:
-                    menu.addAction(dot_icon(color), s["label"], lambda t=t: self._add_action(t))
+                for t, sp in items:
+                    menu.addAction(dot_icon(color), sp["label"], lambda t=t: self._add_action(t))
         add.setMenu(menu)
         row.addWidget(add)
-        pause = QPushButton("＋ Pause")
-        pause.setObjectName("Small")
-        pause.clicked.connect(lambda: self._add_action("delay"))
-        row.addWidget(pause)
-        row.addStretch()
-        for text, tip, fn in (("⧉", "Dupliquer l'étape", self._dup_step), ("✕", "Supprimer l'étape", self._del_step)):
-            b = QPushButton(text)
-            b.setObjectName("Ghost")
-            b.setToolTip(tip)
-            b.setEnabled(bool(lst))
-            b.clicked.connect(fn)
-            row.addWidget(b)
-        self.v.addLayout(row)
         if lst:
-            self.v.addWidget(self._step_editor(lst[self.step]))
+            pause = QPushButton("＋ Pause")
+            pause.setObjectName("Small")
+            pause.setToolTip("Attendre avant l'étape suivante")
+            pause.clicked.connect(lambda: self._add_action("delay"))
+            row.addWidget(pause)
+        row.addStretch()
+        self.v.addLayout(row)
+
+    def _set_options(self, on: bool) -> None:
+        self._options = on
+        self.rebuild()
 
     def _refresh_step_texts(self):
         if self.steps is None or not self.b:
@@ -838,7 +972,17 @@ class Inspector(QFrame):
         types.setMaxVisibleItems(20)
         fill_types(types, a["type"])
         types.currentIndexChanged.connect(lambda i: self._change_type(types.itemData(i)))
-        lay.addWidget(types)
+        head = QHBoxLayout()
+        head.setSpacing(2)
+        head.addWidget(types, 1)
+        for text, tip, fn in (("⧉", "Dupliquer cette étape", self._dup_step),
+                              ("✕", "Supprimer cette étape", self._del_step)):
+            btn = QPushButton(text)
+            btn.setObjectName("Ghost")
+            btn.setToolTip(tip)
+            btn.clicked.connect(fn)
+            head.addWidget(btn)
+        lay.addLayout(head)
         spec = ACTIONS.get(a["type"], {"fields": [], "help": ""})
         if spec.get("help"):
             lay.addWidget(wrap(label(spec["help"], "Hint")))
@@ -963,6 +1107,7 @@ class Inspector(QFrame):
                 new_label = f"PIP {v}"
             if new_label is not None:
                 self.b["label"] = new_label
+            if new_label is not None and self.label_edit is not None:
                 self.label_edit.blockSignals(True)
                 self.label_edit.setPlainText(new_label)
                 self.label_edit.blockSignals(False)
@@ -1008,7 +1153,10 @@ class Inspector(QFrame):
         for t, spec in CONDITIONS.items():
             menu.addAction(spec["label"], lambda t=t: self._add_fb(t))
         add.setMenu(menu)
-        self.v.addLayout(section("Retour d'état", add))
+        n = len(self.b["feedbacks"])
+        title = "Retour d'état" + (f"  ·  {n}" if n else "  ·  auto" if self.b.get("auto_feedback", True) else "")
+        if not self._section("fb", title, add, auto=bool(n) or not self.b.get("auto_feedback", True)):
+            return
         auto = QCheckBox("Automatique, déduit des actions")
         auto.setChecked(self.b.get("auto_feedback", True))
         auto.toggled.connect(lambda v: self._set("auto_feedback", v))
@@ -1024,6 +1172,8 @@ class Inspector(QFrame):
         if first and "input" in cond:
             cond["input"] = first["input"]
         self.b["feedbacks"].append({"cond": cond, "bg": feedback.RED, "fg": "#ffffff", "bar": "", "label": ""})
+        if self._open.get("fb") is False:
+            self._open["fb"] = None  # on vient d'en ajouter un : il doit être visible
         self.commit(rebuild=True)
 
     def _fb_card(self, i: int, f: dict) -> QWidget:

@@ -1,5 +1,37 @@
 # Journal des versions
 
+## 1.9.0 — 2026-11-11
+
+### Éditeur de touche plus direct
+- **L'action d'abord** : après avoir choisi « Take », « Program »… le choix de l'input est tout de suite sous les yeux,
+  au lieu d'être sous l'apparence et trois rangées d'options. L'ordre est maintenant Actions, Apparence, Retour d'état.
+- **⚙ Options** : Interrupteur, appui long et Sécurité sont repliés tant que la touche ne s'en sert pas.
+- **Une étape = une carte** : la liste des étapes n'apparaît qu'à partir de deux ; dupliquer et supprimer sont dans la
+  carte, **＋ Étape** et **＋ Pause** juste en dessous.
+- **Sections repliables** (clic sur le titre, mémorisé) ; le retour d'état automatique est replié par défaut.
+- **Touche vide** : chaque proposition montre la vignette de la touche qui sera créée ; même chose dans l'onglet
+  *Boutons* de la bibliothèque. La case sélectionnée affiche un « + ».
+- Rien de sélectionné : l'éditeur explique les trois gestes utiles au lieu de rester vide.
+- Les messages (erreurs, alertes, confirmations) s'affichent dans un bandeau, plus dans la ligne d'aide.
+- Les flèches de défilement des onglets de pages sont plus grandes et lisibles.
+
+### Corrections
+- **Loupedeck CT** : toucher l'écran de la molette pendant qu'une vignette est maintenue ne relâche plus celle-ci
+  (ni l'inverse) : les deux écrans numérotent leurs doigts séparément.
+- **Noms d'input corrigés automatiquement** : les molettes et boutons physiques sont enfin corrigés eux aussi (la
+  correction était annoncée et la configuration réenregistrée en boucle, sans effet).
+- **Import Companion** : les boutons en trop sont répartis sur autant de pages « (suite) » qu'il en faut ; ils
+  pouvaient se retrouver hors de la grille, invisibles.
+- **Configuration éditée à la main** : une `version` nulle, un bloc `vmix` sans port ou une option nulle ne font plus
+  classer le fichier comme abîmé, ni planter le démarrage.
+- **Surveillance réseau** : une cible donnée par son nom (résolue en IPv6) n'est plus « hors ligne » en permanence ;
+  le fil de surveillance ne s'arrête plus sur un réglage inattendu.
+- **Tallys** : plus d'empilement de sondages quand des tallys sont injoignables (état affiché en retard).
+- **Raccourcis** : « ctrl++ » (ou « ctrl+plus ») envoie bien la touche +.
+- Une action mal formée n'empêche plus les suivantes de partir ; l'export écrit sans les clés internes et signale
+  un fichier impossible à écrire ; charger un fichier qui n'est pas une configuration est refusé proprement.
+- Mise à jour : le nom du fichier téléchargé ne peut plus sortir du dossier temporaire.
+
 ## 1.8.0 — 2026-11-09
 
 ### Licence

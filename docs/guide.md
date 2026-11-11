@@ -99,9 +99,16 @@ seul **▶ Tester** reste actif. De quoi laisser l'écran ouvert pendant le dire
 
 ## Les étapes d'une touche
 
-Une touche enchaîne une ou plusieurs étapes (ex. *Preview · Waiting Screen* puis *Stinger1*). On
-sélectionne une étape dans la liste pour la modifier ; glisser pour réordonner, **＋ Action** pour en ajouter
-(dont **Pause** dans *Avancé*). Changer le type d'une étape garde ses réglages compatibles (input, mix…).
+L'éditeur montre d'abord l'**action** de la touche (c'est là que tu choisis l'input), puis son *Apparence*
+et son *Retour d'état*. Un clic sur le titre d'une section la replie ou la déplie.
+
+Une touche enchaîne une ou plusieurs étapes (ex. *Preview · Waiting Screen* puis *Stinger1*). Avec une seule
+étape, sa carte s'affiche directement ; à partir de deux, une liste apparaît : sélectionne une étape pour la
+modifier, glisse-la pour la réordonner. **＋ Étape** en ajoute une, **＋ Pause** un délai ; ⧉ et ✕ dans la carte
+dupliquent ou suppriment l'étape. Changer le type d'une étape garde ses réglages compatibles (input, mix…).
+
+**⚙ Options**, à droite du titre *Actions*, ouvre les réglages avancés : mode **Interrupteur**, **appui long**
+et **Sécurité**. Ils s'affichent d'eux-mêmes sur une touche qui s'en sert déjà.
 
 Sous le titre de la touche, **Prochain appui** dit en clair ce que fera le prochain appui
 (« mettre en preview », « À L'ANTENNE (Fade) », « rien : l'input est déjà à l'antenne »…), en suivant l'état de vMix en direct.
