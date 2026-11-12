@@ -3445,20 +3445,19 @@ def test_close_reduces_instead_of_quitting(tmp_path):
     e.stop()
 
 
-def test_single_instance_lock(tmp_path, monkeypatch):
+def test_single_instance_lock(tmp_path):
     """Deux lancements rapprochés : seul le premier prend le verrou, le second réveille le premier."""
     from livedeck import app as app_mod
-    monkeypatch.setattr(app_mod, "HOME", tmp_path)
     woken = []
-    monkeypatch.setattr(app_mod, "_wake_first", lambda name, wait_s=5.0: woken.append(name))
-    first = app_mod._single_instance("LiveDeck-test-lock")
-    assert first is not None
-    assert app_mod._single_instance("LiveDeck-test-lock") is None
-    assert woken == ["LiveDeck-test-lock"]
-    first[0].unlock()
-    again = app_mod._single_instance("LiveDeck-test-lock")  # verrou libéré : on peut relancer
-    assert again is not None
-    again[0].unlock()
+    with mock.patch.object(app_mod, "HOME", Path(tmp_path)),             mock.patch.object(app_mod, "_wake_first", lambda name, wait_s=5.0: woken.append(name)):
+        first = app_mod._single_instance("LiveDeck-test-lock")
+        assert first is not None
+        assert app_mod._single_instance("LiveDeck-test-lock") is None
+        assert woken == ["LiveDeck-test-lock"]
+        first[0].unlock()
+        again = app_mod._single_instance("LiveDeck-test-lock")  # verrou libéré : on peut relancer
+        assert again is not None
+        again[0].unlock()
 
 
 def test_loupedeck_stops_writing_after_failure(tmp_path):
