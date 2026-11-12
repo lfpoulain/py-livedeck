@@ -7,8 +7,9 @@ import logging.handlers
 import os
 import sys
 import threading
+import time
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QLockFile, QTimer
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
@@ -20,17 +21,40 @@ from .ui import theme
 from .ui.main_window import MainWindow
 
 
-def _already_running(name: str) -> bool:
-    """Une seule instance : deux LiveDeck se disputeraient les Stream Decks. On réveille la première."""
-    sock = QLocalSocket()
-    sock.connectToServer(name)
-    if not sock.waitForConnected(300):
-        return False
-    sock.write(b"show")
-    sock.flush()
-    sock.waitForBytesWritten(300)
-    sock.disconnectFromServer()
-    return True
+def _wake_first(name: str, wait_s: float = 5.0) -> None:
+    """Demande à la première instance de se montrer. Elle peut être encore en train de démarrer (le socket
+    n'écoute pas encore) : on réessaie quelques secondes."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        sock = QLocalSocket()
+        sock.connectToServer(name)
+        if sock.waitForConnected(300):
+            sock.write(b"show")
+            sock.flush()
+            sock.waitForBytesWritten(300)
+            sock.disconnectFromServer()
+            return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.1)
+
+
+def _single_instance(name: str):
+    """Une seule instance : deux LiveDeck se disputeraient les Stream Decks.
+
+    Un verrou fichier (atomique, libéré par le système si le processus meurt) est pris dès le départ, avant le
+    moteur : deux lancements rapprochés ne passent plus tous les deux. Renvoie (verrou, serveur) pour la première
+    instance, None pour les suivantes (qui réveillent la première)."""
+    HOME.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(HOME / "livedeck.lock"))
+    if not lock.tryLock(0):
+        _wake_first(name)
+        return None
+    server = QLocalServer()
+    QLocalServer.removeServer(name)  # reste d'un arrêt brutal ; le verrou prouve qu'aucune autre instance ne vit
+    if not server.listen(name):
+        logging.getLogger("livedeck").warning("Socket d'instance unique indisponible : %s", server.errorString())
+    return lock, server
 
 
 def _install_logging() -> None:
@@ -77,16 +101,25 @@ def main() -> None:
     app.setPalette(pal)
     app.setStyleSheet(theme.QSS)
 
-    server_name = f"LiveDeck-{getpass.getuser()}"
-    if "--selftest" not in args and _already_running(server_name):
-        return
+    instance = None
+    if "--selftest" not in args:
+        instance = _single_instance(f"LiveDeck-{getpass.getuser()}")
+        if instance is None:
+            return
     migrate_legacy()
     engine = Engine(enable_decks=not os.environ.get("LIVEDECK_NO_DECK"))
     win = MainWindow(engine)
-    server = QLocalServer()
-    QLocalServer.removeServer(server_name)
-    server.listen(server_name)
-    server.newConnection.connect(lambda: (server.nextPendingConnection(), win.bring_to_front()))
+    if instance:
+        server = instance[1]
+
+        def on_connection():
+            while server.hasPendingConnections():
+                server.nextPendingConnection()
+            win.bring_to_front()
+
+        server.newConnection.connect(on_connection)
+        if server.hasPendingConnections():  # un second lancement est arrivé pendant notre démarrage
+            on_connection()
     engine.start()
     if engine.cfg["options"].get("start_live"):
         win.set_live(True)

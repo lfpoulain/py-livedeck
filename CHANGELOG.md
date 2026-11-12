@@ -1,5 +1,15 @@
 # Journal des versions
 
+## 1.9.1 — 2026-11-12
+
+### Corrections
+- **Une seule instance, pour de bon** : deux lancements rapprochés (double-clic, démarrage de Windows + clic sur le
+  raccourci) pouvaient ouvrir deux LiveDeck qui se disputaient les Stream Decks. Un verrou est maintenant pris dès
+  le début du démarrage ; le second lancement réveille la première fenêtre, même si elle démarre encore.
+- **La croix réduit au lieu de quitter** : si l'icône près de l'horloge n'était pas encore prête (lancement au
+  démarrage de Windows), la croix fermait LiveDeck et coupait les decks. Elle réaffiche l'icône, ou réduit dans la
+  barre des tâches si la zone de notification est absente. Fermer la session Windows n'est plus bloqué par LiveDeck.
+
 ## 1.9.0 — 2026-11-11
 
 ### Éditeur de touche plus direct

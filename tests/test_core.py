@@ -3426,6 +3426,41 @@ def test_settings_timer_stops(tmp_path):
     e.stop()
 
 
+def test_close_reduces_instead_of_quitting(tmp_path):
+    """La croix réduit LiveDeck (zone de notification, ou barre des tâches sans icône) : les decks
+    continuent. Seul « Quitter » (ou l'option décochée) ferme pour de bon."""
+    e = engine(tmp_path, start=False)
+    e.start()
+    w = MainWindow(e)
+    w.show()
+    w.tray.isVisible = lambda: False  # pas de zone de notification (ex. lancement au démarrage de Windows)
+    w.tray.isSystemTrayAvailable = lambda: False
+    w.close()
+    assert w.isMinimized() and not w._quitting and w in QApplication.topLevelWidgets()
+    w.tray.isVisible = lambda: True
+    w.close()
+    assert not w.isVisible()  # masquée près de l'horloge
+    e.cfg["options"]["close_to_tray"] = False
+    assert w.close()  # option décochée : on quitte vraiment
+    e.stop()
+
+
+def test_single_instance_lock(tmp_path, monkeypatch):
+    """Deux lancements rapprochés : seul le premier prend le verrou, le second réveille le premier."""
+    from livedeck import app as app_mod
+    monkeypatch.setattr(app_mod, "HOME", tmp_path)
+    woken = []
+    monkeypatch.setattr(app_mod, "_wake_first", lambda name, wait_s=5.0: woken.append(name))
+    first = app_mod._single_instance("LiveDeck-test-lock")
+    assert first is not None
+    assert app_mod._single_instance("LiveDeck-test-lock") is None
+    assert woken == ["LiveDeck-test-lock"]
+    first[0].unlock()
+    again = app_mod._single_instance("LiveDeck-test-lock")  # verrou libéré : on peut relancer
+    assert again is not None
+    again[0].unlock()
+
+
 def test_loupedeck_stops_writing_after_failure(tmp_path):
     """Après une panne d'écriture, plus aucune écriture : chacune pouvait bloquer 5 s, pendant
     lesquelles la détection ne pouvait ni constater la perte ni reconnecter."""

@@ -1279,10 +1279,16 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self._save_ui()
-        keep = (not self._quitting and self.engine.cfg["options"].get("close_to_tray", True)
-                and self.tray.isVisible())
+        # fermer la session Windows ne doit jamais être bloqué par la fenêtre
+        keep = (not self._quitting and not QApplication.instance().isSavingSession()
+                and self.engine.cfg["options"].get("close_to_tray", True))
         if keep:
             e.ignore()
+            if not self.tray.isVisible() and self.tray.isSystemTrayAvailable():
+                self.tray.show()  # l'icône n'était pas encore prête (lancement au démarrage de Windows)
+            if not self.tray.isVisible():
+                self.showMinimized()  # pas de zone de notification : on réduit dans la barre des tâches
+                return
             self.hide()
             if not self._tray_hint_shown:
                 self._tray_hint_shown = True
