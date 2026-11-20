@@ -76,7 +76,7 @@ class ImportOptionsDialog(QDialog):
         lay.addWidget(self.integrations)
         lay.addWidget(label("Les raccourcis clavier « Intercom » deviennent des touches py-intercom (le raccourci est "
                             "gardé en secours), les requêtes show / hide d'overlays deviennent des touches orchestream "
-                            "et les reconnexions de tallys des touches Tally32. Laisse décoché si tu n'utilises pas "
+                            "(jeton API à renseigner ensuite) et les reconnexions de tallys des touches Tally32. Laisse décoché si tu n'utilises pas "
                             "ces logiciels.", "Hint", True))
         btns = QHBoxLayout()
         btns.addStretch()

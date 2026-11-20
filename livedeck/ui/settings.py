@@ -1,4 +1,5 @@
-"""Réglages : général (vMix, démarrage), Stream Decks, intégrations (py-intercom, orchestream, Tally32)."""
+"""Réglages : général (vMix, démarrage), Stream Decks, intégrations (py-intercom, orchestream, Tally32,
+py-multiview)."""
 from __future__ import annotations
 
 import copy
@@ -13,8 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
-from ..integrations import (integration_status, overlay_label, overlay_list, probe_deck, probe_intercom,
-                            probe_multiview, probe_orchestream, probe_tally)
+from ..integrations import integration_status, probe_intercom, probe_multiview, probe_orchestream, probe_tally
 from . import theme as T
 from .widgets import Seg, label
 
@@ -26,16 +26,6 @@ def _dot(ok: bool | None) -> str:
 class _Probe(QObject):
     """Résultat d'un test lancé dans un thread, renvoyé au thread de l'interface."""
     done = Signal(str, object, str)  # intégration, état (True / None / False), message
-
-
-def parse_overlays(text: str) -> list[dict]:
-    """« twizz = Twizz » (ou juste « twizz »), un overlay par ligne ou séparés par des virgules."""
-    out = []
-    for name, lab in parse_targets(text.replace(",", "\n")):
-        name = name.strip()
-        if name and name not in {o["name"] for o in out}:
-            out.append({"name": name, "label": lab.strip() if lab.strip() != name else overlay_label(name)})
-    return out
 
 
 def _page() -> tuple[QWidget, QVBoxLayout]:
@@ -91,7 +81,7 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview, engine.orchdeck):
+        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
@@ -102,8 +92,7 @@ class SettingsDialog(QDialog):
         # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
         # à chaque ouverture des Réglages.
         self._timer.stop()
-        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview,
-                    self.engine.orchdeck):
+        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview):
             svc.set_forced(False)
         super().done(r)
 
@@ -271,34 +260,24 @@ class SettingsDialog(QDialog):
                           "sur un autre PC, coche aussi « Depuis le réseau ».", "Hint", True))
 
         v.addSpacing(6)
-        v.addWidget(label("ORCHESTREAM  ·  OVERLAYS WEB", "H2"))
+        v.addWidget(label("ORCHESTREAM  ·  TOUCHES DE LA RÉGIE", "H2"))
         self.orch_url = QLineEdit(integ["orchestream"].get("url", ""))
         self.orch_url.setPlaceholderText("http://serveur:5174")
         v.addWidget(self.orch_url)
-        row = QHBoxLayout()
-        row.addWidget(label("Overlays", "Muted"))
-        self.orch_overlays = QLineEdit(", ".join(n if lab == overlay_label(n) else f"{n} = {lab}"
-                                                 for n, lab in overlay_list(integ.get("orchestream"))))
-        self.orch_overlays.setPlaceholderText("twizz, poll = Sondage, speedizz")
-        self.orch_overlays.setToolTip("Noms des overlays d'orchestream (route /api/overlay/<nom>/show), séparés par "
-                                      "des virgules ; « nom = Libellé » pour un nom affiché. Un overlay vu dans le "
-                                      "flux en direct est aussi proposé automatiquement.")
-        row.addWidget(self.orch_overlays, 1)
-        v.addLayout(row)
-        self.orch_status = self._test_row(v, "orchestream")
-        # API Stream Deck d'orchestream-v2 : même serveur, authentifiée par un jeton dans l'en-tête.
+        # API Stream Deck d'orchestream-v2 : jeton dans l'en-tête, jamais dans l'URL.
         row = QHBoxLayout()
         row.addWidget(label("Jeton API", "Muted"))
         self.orch_token = QLineEdit(integ["orchestream"].get("token", ""))
         self.orch_token.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
-        self.orch_token.setPlaceholderText("osk_…  (commandes régie)")
+        self.orch_token.setPlaceholderText("osk_…")
         self.orch_token.setToolTip("Jeton de l'API Stream Deck d'orchestream-v2 : dans orchestream, Réglages › "
                                    "Sécurité › Jetons API (Stream Deck). Il n'est affiché qu'une fois à sa création ; "
-                                   "ses permissions décident des commandes que les touches peuvent lancer.\n"
-                                   "Inutile pour les seuls overlays ci-dessus.")
+                                   "ses permissions décident des touches proposées.")
         row.addWidget(self.orch_token, 1)
         v.addLayout(row)
-        self.orchdeck_status = self._test_row(v, "orchdeck")
+        self.orch_status = self._test_row(v, "orchestream")
+        v.addWidget(label("orchestream décrit lui-même chaque touche (texte, couleur, état) et l'envoie en direct : "
+                          "choisis-la dans l'action « Orchestream » de l'inspecteur.", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
@@ -336,20 +315,15 @@ class SettingsDialog(QDialog):
             def run():
                 return probe_intercom(host, port)
         elif key == "orchestream":
-            url = self.orch_url.text()
+            url, token = self.orch_url.text(), self.orch_token.text()
 
             def run():
-                return probe_orchestream(url)
+                return probe_orchestream(url, token)
         elif key == "multiview":
             mv_url = self.mv_url.text()
 
             def run():
                 return probe_multiview(mv_url)
-        elif key == "orchdeck":
-            url, token = self.orch_url.text(), self.orch_token.text()
-
-            def run():
-                return probe_deck(url, token)
         else:
             devices = parse_targets(self.tallies.toPlainText())
 
@@ -382,7 +356,7 @@ class SettingsDialog(QDialog):
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
         labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
-                  "multiview": self.mv_status, "orchdeck": self.orchdeck_status}
+                  "multiview": self.mv_status}
         for key, _, ok, text in integration_status(e):
             if key in labels:
                 labels[key].setText(_dot(ok) + html.escape(text))
@@ -401,10 +375,6 @@ class SettingsDialog(QDialog):
                  for serial, page, bright, haptic in self.deck_rows}
         moved = [s for s, (pg, _, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
         tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
-        overlays = parse_overlays(self.orch_overlays.text())
-        if [(o["name"], o["label"]) for o in overlays] == overlay_list(e.cfg["integrations"].get("orchestream")) \
-                and "overlays" not in (e.cfg["integrations"].get("orchestream") or {}):
-            overlays = None  # liste par défaut inchangée : on ne l'écrit pas dans la configuration
 
         def apply(cfg):
             cfg["vmix"] = {"host": host, "port": int(port)}
@@ -425,8 +395,6 @@ class SettingsDialog(QDialog):
                                  "port": self.ic_port.value()}
             integ["orchestream"] = {**(integ.get("orchestream") or {}), "url": self.orch_url.text().strip(),
                                     "token": self.orch_token.text().strip()}
-            if overlays is not None:
-                integ["orchestream"]["overlays"] = overlays
             integ["tallies"] = tallies
             integ["multiview"] = {**(integ.get("multiview") or {}), "url": self.mv_url.text().strip()}
         trial = copy.deepcopy(e.cfg)

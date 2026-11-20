@@ -93,6 +93,12 @@ QListWidget::item {{ padding: 7px 8px; border-radius: 8px; margin: 1px 0; }}
 QListWidget::item:hover {{ background: {PANEL2}; }}
 QListWidget::item:selected {{ background: {RAISED}; color: {TEXT}; }}
 QListWidget#Steps {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 10px; padding: 4px; }}
+QTreeWidget {{ background: {PANEL2}; border: 1px solid {BORDER}; border-radius: 10px; padding: 4px; outline: none; color: {TEXT}; }}
+QTreeWidget::item {{ padding: 4px 6px; border-radius: 6px; }}
+QTreeWidget::item:hover {{ background: {PANEL}; }}
+QTreeWidget::item:selected {{ background: {RAISED}; color: {TEXT}; }}
+QTreeWidget::item:disabled {{ color: {MUTED}; }}
+QTreeWidget::branch {{ background: transparent; }}
 
 QPlainTextEdit#Monitor {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 10px; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; color: {MUTED}; padding: 6px; }}
 QScrollArea {{ background: transparent; border: none; }}

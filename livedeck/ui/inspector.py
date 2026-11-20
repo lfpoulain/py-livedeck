@@ -18,11 +18,7 @@ from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_act
                        to_take)
 from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
-from ..integrations import (ORCH_COMMAND_ARG, integration_status, probe_deck, probe_intercom, probe_orchestream,
-                            probe_tally)
-
-# Libellé du paramètre d'une commande orchestream, selon ce qu'elle attend
-ORCH_ARG_LABEL = {"quizId": "Quiz", "gameId": "Speedizz", "widget": "Widget", "fn": "Fonction vMix"}
+from ..integrations import integration_status, probe_intercom, probe_orchestream, probe_tally
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
 from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..webreq import parse_curl
@@ -33,7 +29,7 @@ from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_type
                       section, short_label, tame_combo)
 
 INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32",
-               "multiview": "py-multiview", "orchdeck": "orchestream (commandes régie)"}
+               "multiview": "py-multiview"}
 
 
 def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:
@@ -168,10 +164,8 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
         ic = integ.get("intercom") or {}
         return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
     if key == "orchestream":
-        return probe_orchestream((integ.get("orchestream") or {}).get("url", ""))
-    if key == "orchdeck":
         orch = integ.get("orchestream") or {}
-        return probe_deck(orch.get("url", ""), orch.get("token", ""))
+        return probe_orchestream(orch.get("url", ""), orch.get("token", ""))
     devices = integ.get("tallies") or []
     if not devices:
         return None, "Aucun tally renseigné : Réglages → Intégrations."
@@ -997,12 +991,9 @@ class Inspector(QFrame):
                 continue  # « couper tous les bus » : ni bus ni raccourci de secours
             if not shown(fs, a):
                 continue  # champ sans objet pour la cible ou le mode choisis
-            if fs["kind"] == "orch_arg":  # ses valeurs dépendent de la commande choisie
-                fs = {**fs, "command": a.get("command", ""),
-                      "label": ORCH_ARG_LABEL.get(ORCH_COMMAND_ARG.get(a.get("command", "")), fs["label"])}
             w = make_field(self.engine, fs, a.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names())
-            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp", "orch_arg"):
+            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp", "orch_key"):
                 if fs["kind"] != "bool":
                     f.addRow(label(short_label(fs), "Muted"))
                 f.addRow(w)
@@ -1114,10 +1105,10 @@ class Inspector(QFrame):
         if a["type"] == "vmix.adjust" and k == "target":
             # Le pas par défaut dépend de la cible : 2 % pour un volume, 1 input pour la preview…
             a["amount"] = VMIX_STEP.get(v, (1,))[0]
-        if a["type"] == "orchestream.command" and k == "command":
-            # Un quiz n'est pas un widget : le paramètre de l'ancienne commande n'a plus de sens.
-            a["arg"] = ""
-            self.commit(rebuild=True)  # la liste du paramètre dépend de la commande
+        if a["type"] == "orchestream.key" and k == "key":
+            # Titre retenu pour les résumés et pour la touche tant qu'orchestream ne répond pas
+            a["title"] = str((self.engine.orchestream.key(v) or {}).get("title") or "")
+            self.commit(rebuild=True)
             return
         if k in ("then", "bus", "mode") and a["type"] in ("vmix.preview", "intercom.ptt"):
             self.commit(rebuild=True)  # champs affichés / état d'intégration qui en dépendent
@@ -1195,7 +1186,7 @@ class Inspector(QFrame):
                 continue
             w = make_field(self.engine, fs, cond.get(fs["key"], fs["default"]),
                            lambda v, k=fs["key"]: self._set_cond(i, k, v))
-            if fs["kind"] in ("input", "multiline", "text"):  # texte : toute la largeur (URL, chemin JSON…)
+            if fs["kind"] in ("input", "multiline", "text", "orch_key"):  # toute la largeur (URL, liste…)
                 fl.addRow(label(short_label(fs), "Muted"))
                 fl.addRow(w)
             else:
@@ -1215,6 +1206,8 @@ class Inspector(QFrame):
     def _set_cond(self, i: int, k: str, v):
         cond = self.b["feedbacks"][i]["cond"]
         cond[k] = v
+        if cond.get("type") == "orchkey" and k == "key":
+            cond["title"] = str((self.engine.orchestream.key(v) or {}).get("title") or "")
         fields = CONDITIONS.get(cond.get("type"), {}).get("fields", [])
         if any(k in (fs.get("when") or {}) for fs in fields):
             self.commit(rebuild=True)  # un champ dépendant apparaît ou disparaît

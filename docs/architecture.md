@@ -29,7 +29,7 @@ flowchart LR
    touche** : les phases appui / relâché d'une même touche restent dans l'ordre, sans bloquer les autres touches.
 3. Les actions parlent à vMix, au clavier, au réseau ou aux intégrations.
 4. L'état revient par vMix (abonnement `TALLY` / `ACTS` + XML lu toutes les 300 ms, et juste après chaque réponse
-   `FUNCTION`), par les intégrations (sondage de py-intercom et des tallys, canal Transmit d'orchestream-v2 ou flux SSE de la v1) et par
+   `FUNCTION`), par les intégrations (sondage de py-intercom et des tallys, flux SSE `/api/deck/events` d'orchestream-v2) et par
    `health.py` (pings, HTTP, API JSON).
 5. `feedback.py` déduit l'apparence de chaque touche, `vars.py` remplace les variables du texte ; `render.py`
    dessine la **même image** pour l'écran et pour le deck. Seules les touches dont l'image a changé sont renvoyées
@@ -50,7 +50,7 @@ flowchart LR
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
-| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), orchestream (v2 : état `/api/overlay/state` + canal Transmit `overlay` ; v1 : flux SSE, détectée automatiquement), Tally32, py-multiview (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
+| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), orchestream-v2 (touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton dans l'en-tête ; conversion des anciennes touches), Tally32, py-multiview (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |
@@ -106,7 +106,7 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
 
 `tests/test_core.py` lance de vrais scénarios de bout en bout : faux vMix (`tools/fake_vmix.py`, Mix 1 à 4, titres,
 vidéos, vMix lent ou figé), faux Stream Deck, faux Loupedeck (port série simulé : poignée de main, trames, molettes,
-tactile), faux py-intercom, orchestream (v2 et v1), Tally32, py-multiview, API JSON et faux clavier
+tactile), faux py-intercom, orchestream-v2 (touches et flux en direct), Tally32, py-multiview, API JSON et faux clavier
 (`tests/fakes.py`), interface Qt hors écran. Rien ne sort de `127.0.0.1`, aucune vraie touche n'est simulée et le
 registre Windows n'est jamais touché.
 

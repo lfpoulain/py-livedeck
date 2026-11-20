@@ -5,7 +5,8 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QStandardItem
 from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QCompleter, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QPlainTextEdit,
-                               QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget)
+                               QPushButton, QSizePolicy, QSlider, QSpinBox, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from ..actions import ACTIONS, CATEGORIES, VMIX_FUNCTIONS
 from . import theme as T
@@ -353,6 +354,91 @@ class InputCombo(QWidget):
         self.status.setStyleSheet(f"color:{T.OK if i else T.DANGER}")
 
 
+class OrchKeyPicker(QWidget):
+    """Choix d'une touche décrite par orchestream (flux /api/deck/events) : liste groupée par rubrique
+    (« Jeux », « Studio », « État »…), filtrée par la recherche (titre, rubrique, ce qui est en cours,
+    identifiant). Seul l'identifiant est enregistré."""
+    changed = Signal(str)
+
+    def __init__(self, engine, value: str = ""):
+        super().__init__()
+        self.engine, self.value = engine, value or ""
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.current = label("", "Hint", True)
+        v.addWidget(self.current)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher une touche (titre, rubrique…)")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._fill)
+        v.addWidget(self.search)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setMinimumHeight(170)
+        self.tree.itemClicked.connect(self._picked)
+        self.tree.itemActivated.connect(self._picked)
+        v.addWidget(self.tree)
+        self._fill()
+
+    def _fill(self, *_):
+        orch = self.engine.orchestream
+        needle = self.search.text().strip().lower()
+        self.tree.clear()
+        groups: dict[str, QTreeWidgetItem] = {}
+        selected = None
+        for k in orch.key_list():
+            title, group = str(k.get("title") or k["id"]), str(k.get("group") or "Autres")
+            sub = k.get("subtitle") or ""
+            hay = " ".join([title, group, str(sub), k["id"]]).lower()
+            if needle and needle not in hay:
+                continue
+            head = groups.get(group)
+            if head is None:
+                head = groups[group] = QTreeWidgetItem(self.tree, [group])
+                head.setFlags(Qt.ItemIsEnabled)
+                f = head.font(0)
+                f.setBold(True)
+                head.setFont(0, f)
+                head.setExpanded(True)
+            text = f"{title}  ·  {sub}" if sub else title
+            if not k.get("command"):
+                text += "   (affichage seul)"
+            it = QTreeWidgetItem(head, [text])
+            it.setData(0, Qt.UserRole, k["id"])
+            it.setToolTip(0, k["id"] + (f"\n{k['reason']}" if k.get("reason") else ""))
+            if k["id"] == self.value:
+                selected = it
+        if selected is not None:
+            self.tree.setCurrentItem(selected)
+        if not groups:
+            msg = ("Aucune touche ne correspond." if needle and orch.key_list() else
+                   orch.unavailable() and f"Liste indisponible : {orch.error or orch.unavailable()}" or
+                   "Liste des touches pas encore reçue d'orchestream.")
+            QTreeWidgetItem(self.tree, [msg]).setFlags(Qt.NoItemFlags)
+        self._show_current()
+
+    def _show_current(self):
+        if not self.value:
+            self.current.setText("Choisis une touche dans la liste.")
+            return
+        k = self.engine.orchestream.key(self.value)
+        if k:
+            self.current.setText(f"✓  {k.get('group') or ''} › {k.get('title') or self.value}   ({self.value})")
+        elif self.engine.orchestream.has_keys:
+            self.current.setText(f"⚠  « {self.value} » n'existe plus dans orchestream (ou n'est pas permise au jeton)")
+        else:
+            self.current.setText(f"Touche « {self.value} »")
+
+    def _picked(self, it, _col=0):
+        kid = it.data(0, Qt.UserRole)
+        if kid and kid != self.value:
+            self.value = kid
+            self._show_current()
+            self.changed.emit(kid)
+
+
 def fill_types(combo: QComboBox, current: str) -> None:
     """Liste des types d'action, regroupés par catégorie (en-têtes colorés non sélectionnables)."""
     combo.blockSignals(True)
@@ -381,37 +467,11 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
         w = InputCombo(engine, value or "")
         w.changed.connect(on_change)
         return w
-    if kind == "orch_command":  # commandes autorisées par le jeton (lues sur /api/deck/commands)
-        w = tame_combo(QComboBox())
-        items = engine.orchdeck.command_list()
-        if value and value not in dict(items):
-            items = items + [(value, f"{value} (non autorisée par ce jeton)")]
-        for v, text in items:
-            w.addItem(text, v)
-            w.setItemData(w.count() - 1, v, Qt.ToolTipRole)
-        widen_popup(w)
-        w.setCurrentIndex(max(0, w.findData(value)))
-        w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i)))
+    if kind == "orch_key":  # touches décrites par orchestream, groupées et filtrables
+        w = OrchKeyPicker(engine, value or "")
+        w.changed.connect(on_change)
         return w
-    if kind == "orch_arg":  # quiz, Speedizz, widgets, fonctions vMix : valeurs fournies par orchestream
-        w = tame_combo(QComboBox(), 10)
-        w.setEditable(True)
-        for v, text in engine.orchdeck.arg_values(spec.get("command", "")):
-            w.addItem(text, v)
-            w.setItemData(w.count() - 1, v, Qt.ToolTipRole)
-        widen_popup(w)
-        idx = w.findData(value)
-        if idx >= 0:
-            w.setCurrentIndex(idx)
-        else:
-            w.setEditText(str(value or ""))
-        w.lineEdit().setPlaceholderText(spec.get("placeholder") or "")
-        # Le libellé affiché (« Culture G ») n'est pas la valeur envoyée (l'identifiant du quiz).
-        w.currentIndexChanged.connect(lambda i: on_change(w.itemData(i) if i >= 0 else w.currentText()))
-        w.lineEdit().editingFinished.connect(
-            lambda: on_change(w.currentData() if w.currentText() == w.itemText(w.currentIndex()) else w.currentText()))
-        return w
-    if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus", "orch_overlay"):
+    if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus"):
         w = tame_combo(QComboBox())  # option longue raccourcie ; texte complet en info-bulle et dans la liste
         if kind == "mix":
             items = [(1, "Master (Program)")] + [(i, f"Mix {i}") for i in range(2, 17)]
@@ -426,10 +486,6 @@ def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget
             items = engine.intercom.bus_choices()
             if value and value not in dict(items):
                 items = items + [(value, f"{value} (absent)" if engine.intercom.buses else str(value))]
-        elif kind == "orch_overlay":  # overlays réglés + ceux vus en direct sur orchestream
-            items = engine.orchestream.names()
-            if value and value not in dict(items):
-                items = items + [(value, str(value))]
         else:
             items = spec["options"]
         for v, text in items:

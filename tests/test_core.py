@@ -1,4 +1,4 @@
-"""Tests de bout en bout : faux vMix, faux Stream Deck, faux py-intercom / orchestream / Tally32.
+"""Tests de bout en bout : faux vMix, faux Stream Deck, faux py-intercom / orchestream-v2 / Tally32.
 
     python -m pytest tests      ou      python tests/test_core.py
 
@@ -266,7 +266,7 @@ def key_xy(index, cols=4, size=90, keys_x=60):
 def test_import_companion():
     plain, report = import_companion(FIXTURE)  # par défaut : pas de conversion vers les intégrations maison
     types = {a["type"] for p in plain["pages"] for b in p["buttons"].values() for a in b["actions"]}
-    assert not types & {"orchestream.overlay", "tally.reconnect", "intercom.ptt"}, types
+    assert not types & {"orchestream.key", "tally.reconnect", "intercom.ptt"}, types
     assert any("Convertir vers les intégrations natives" in line for line in report)
     cfg, report = import_companion(FIXTURE, integrations=True)
     names = [p["name"] for p in cfg["pages"]]
@@ -277,7 +277,9 @@ def test_import_companion():
     assert "orchestream.local" in integ["orchestream"]["url"]
     assert {t["host"] for t in integ["tallies"]} >= {"10.0.0.51", "10.0.0.52", "10.0.0.53"}
     types = {a["type"] for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"]}
-    assert {"vmix.preview", "vmix.program", "orchestream.overlay", "tally.reconnect", "intercom.ptt"} <= types, types
+    assert {"vmix.preview", "vmix.program", "orchestream.key", "tally.reconnect", "intercom.ptt"} <= types, types
+    keys = {a.get("key") for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"]}
+    assert {"overlay.toggle:twizz", "overlay.toggle:poll", "overlay.toggle:speedizz"} <= keys, keys
     ptt = [a for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"] if a["type"] == "intercom.ptt"]
     assert ptt and all(a.get("fallback_keys") for a in ptt), ptt   # le raccourci d'origine reste en secours
 
@@ -295,7 +297,7 @@ def test_migration_v1(tmp_path):
     cfg = load_config(p)
     btns = cfg["pages"][0]["buttons"]
     assert cfg["version"] >= 2
-    assert btns["0,0"]["actions"][0]["type"] == "orchestream.overlay"
+    assert btns["0,0"]["actions"][0] == {"type": "orchestream.key", "key": "overlay.toggle:poll"}
     assert btns["0,0"]["mode"] == "press" and not btns["0,0"]["actions_off"]
     assert btns["0,1"]["actions"][0]["type"] == "intercom.ptt"
     assert btns["0,1"]["actions"][0]["fallback_keys"] == "shift+z"
@@ -616,10 +618,11 @@ def test_updater_release_download_and_dialog(tmp_path):
 
 # -- intégrations maison ---------------------------------------------------------
 def integrations_engine(tmp_path):
-    ic, orch = fakes.FakeIntercom(18192), fakes.FakeOrchestream(18193)
+    ic, orch = fakes.FakeIntercom(18192), fakes.FakeOrchDeck(18193)
     t1, t2 = fakes.FakeTally(18194, True), fakes.FakeTally(18195, False)
     cfg, _ = import_companion(FIXTURE, integrations=True)
-    cfg["integrations"] = {"intercom": {"host": "127.0.0.1", "port": 18192}, "orchestream": {"url": "127.0.0.1:18193"},
+    cfg["integrations"] = {"intercom": {"host": "127.0.0.1", "port": 18192},
+                           "orchestream": {"url": "127.0.0.1:18193", "token": fakes.FakeOrchDeck.TOKEN},
                            "tallies": [{"name": "Reporter", "host": "127.0.0.1:18194"},
                                        {"name": "Animateur", "host": "127.0.0.1:18195"}]}
     return engine(tmp_path, cfg=cfg), ic, orch, (t1, t2)
@@ -644,12 +647,12 @@ def test_integrations(tmp_path):
     ic.online = False
     assert wait(lambda: not e.intercom.online)
     ic.online = True
-    # orchestream : la touche suit l'overlay, même basculé ailleurs
+    # orchestream : la touche (overlay.toggle:twizz) suit le widget, même basculé ailleurs
     assert wait(lambda: e.orchestream.connected)
     tap(e, sd2, "2,4")
-    assert wait(lambda: orch.visible["twizz"] and e.orchestream.overlays["twizz"])
-    orch.set("twizz", False)
-    assert wait(lambda: e.orchestream.overlays["twizz"] is False)
+    assert wait(lambda: orch.overlays["twizz"] is False and not e.orchestream.key("overlay.toggle:twizz")["active"])
+    orch.overlays["twizz"] = True
+    assert wait(lambda: e.orchestream.key("overlay.toggle:twizz")["active"])
     logs = []
     e.listeners.append(lambda k, pl: logs.append(pl) if k == "log" else None)
     tap(e, sd2, "2,1")                              # Speedizz sans partie : le refus est journalisé
@@ -1474,13 +1477,12 @@ def test_http_json_feedback(tmp_path):
 
 def test_integration_settings_and_details(tmp_path):
     fakes.FakeIntercom(18231)
-    orch = fakes.FakeOrchestream(18232)
+    fakes.FakeOrchDeck(18232)
     tally = fakes.FakeTally(18233, False)
     tally.old_firmware = True
     e, pid, logs = one_page(tmp_path, {"0,0": new_button(label="Tallys", actions=[new_action("tally.reconnect")])}, {
         "intercom": {"host": "127.0.0.1", "port": 18231},
-        "orchestream": {"url": "127.0.0.1:18232", "overlays": [{"name": "twizz", "label": "Twizz"},
-                                                                {"name": "quiz", "label": "Quiz"}]},
+        "orchestream": {"url": "127.0.0.1:18232", "token": fakes.FakeOrchDeck.TOKEN},
         "tallies": [{"name": "Cam 1", "host": "127.0.0.1:18233"}]})
     assert not e.intercom.wanted and not e.orchestream.wanted
     w = MainWindow(e)
@@ -1488,11 +1490,8 @@ def test_integration_settings_and_details(tmp_path):
     dlg.show()
     assert wait(lambda: e.intercom.online and e.orchestream.connected, 6)
     dlg._refresh_status()
-    assert "En ligne" in dlg.ic_status.text() and "Quiz" in dlg.orch_status.text(), dlg.orch_status.text()
-    assert [n for n, _ in e.orchestream.names()][:2] == ["twizz", "quiz"]
-    orch.set("poll", True)                          # overlay de la v2 absent des réglages : appris en direct
-    assert wait(lambda: e.orchestream.overlays.get("poll") is True)
-    assert "poll" in [n for n, _ in e.orchestream.names()]
+    assert "En ligne" in dlg.ic_status.text() and "flux en direct" in dlg.orch_status.text(), dlg.orch_status.text()
+    assert "Stream Deck plateau" in dlg.orch_status.text()
     # « Tester » essaie les valeurs saisies et classe le résultat
     result = dlg._tests["intercom"][1]
     dlg.ic_port.setValue(18234)
@@ -1502,18 +1501,17 @@ def test_integration_settings_and_details(tmp_path):
     dlg._test("intercom")
     assert wait(lambda: "en ligne" in result.text(), 6), result.text()
     dlg._test("orchestream")
-    assert wait(lambda: "orchestream-v2 joignable" in dlg._tests["orchestream"][1].text(), 6)
+    assert wait(lambda: "accepté" in dlg._tests["orchestream"][1].text(), 6), dlg._tests["orchestream"][1].text()
     dlg._test("tallies")
     assert wait(lambda: "pas connecté à vMix" in dlg._tests["tallies"][1].text(), 6)
-    dlg.orch_overlays.setText("twizz, quiz = Le Quiz, poll")
+    dlg.orch_token.setText("osk_autre")
     dlg._save()
-    assert e.cfg["integrations"]["orchestream"]["overlays"][1] == {"name": "quiz", "label": "Le Quiz"}
+    assert e.cfg["integrations"]["orchestream"]["token"] == "osk_autre"
     assert not e.intercom.forced and not e.orchestream.forced
     # bibliothèque : intégrations d'après les services réglés
     from livedeck import presets
     lib = dict(presets.library(e))["Intégrations"]
-    assert {"talk:regie", "orch:quiz", "tallies"} <= {pid_ for pid_, _, _ in lib}, lib
-    assert presets.make("orch:quiz", e)["label"] == "Le Quiz"
+    assert {"talk:regie", "orch", "tallies"} <= {pid_ for pid_, _, _ in lib}, lib  # jeton changé : liste à relire
     # tally à l'ancien firmware : la reconnexion explique quoi faire
     tap(e, pid, "0,0")
     assert wait(lambda: any(lv == "error" and "firmware" in m for lv, m in logs), 5), logs
@@ -1623,7 +1621,7 @@ def test_empty_key_picker_and_take(tmp_path):
     ins._pick_filter(cat="")
     # une intégration à régler : la touche est créée et l'inspecteur montre son état + « Réglages… »
     ins._create("orch")
-    assert e.button(pid, "0,0")["actions"][0]["type"] == "orchestream.overlay"
+    assert e.button(pid, "0,0")["actions"][0]["type"] == "orchestream.key"
     assert ins._integ_lbls and "orchestream" in ins._integ_lbls[0][0].text()
     # Take : créé depuis une tuile, il demande l'input ; le prochain appui est annoncé en direct
     w.grid.select("0,1")
@@ -1917,13 +1915,11 @@ def test_review_small_fixes(tmp_path):
     assert tiles["talk:vmix"][1] == "always_on" and "toujours ouvert" in tiles["talk:vmix"][0]
     assert tiles["talk:plateau"] == ("py-intercom, bascule", "") and tiles["talk:regie"][1] == ""
     # import « Ajouter les pages » : les réglages trouvés par la conversion sont repris
-    imp = {"integrations": {"orchestream": {"url": "http://orch.local", "overlays": [
-        {"name": "twizz", "label": "Twizz"}, {"name": "quiz", "label": "Le Quiz"}]},
+    imp = {"integrations": {"orchestream": {"url": "http://orch.local"},
         "tallies": [{"name": "Cam 1", "host": "10.0.0.11"}, {"name": "Cam 2", "host": "10.0.0.12"}]}}
     cur = {"integrations": {"orchestream": {"url": ""}, "tallies": [{"name": "A", "host": "10.0.0.11"}]}}
     notes = integ.merge_integrations(cur, imp)
-    assert cur["integrations"]["orchestream"]["url"] == "http://orch.local" and len(notes) == 3, notes
-    assert "quiz" in {o["name"] for o in cur["integrations"]["orchestream"]["overlays"]}
+    assert cur["integrations"]["orchestream"]["url"] == "http://orch.local" and len(notes) == 2, notes
     assert [t["host"] for t in cur["integrations"]["tallies"]] == ["10.0.0.11", "10.0.0.12"]
     assert typo("F1 : aide « x »") == "F1 : aide « x »"
     e.stop()
@@ -1975,63 +1971,6 @@ def test_wheel_scrolls_column_not_fields(tmp_path):
         assert bar.value() > pos or bar.value() == bar.maximum(), (pos, bar.value())
     e.stop()
     w.close()
-
-
-def test_orchestream_v2(tmp_path):
-    from livedeck.integrations import probe_orchestream
-    orch = fakes.FakeOrchestream(18251)
-    orch.visible["poll"] = True                     # déjà à l'antenne avant le lancement de LiveDeck
-    e, pid, logs = one_page(tmp_path, {
-        "0,0": new_button(label="Twizz", actions=[new_action("orchestream.overlay", overlay="twizz")]),
-        "0,1": new_button(label="Sondage", actions=[new_action("orchestream.overlay", overlay="poll")]),
-        "0,2": new_button(label="Speedizz", actions=[new_action("orchestream.overlay", overlay="speedizz",
-                                                                mode="show")])},
-        {"orchestream": {"url": "127.0.0.1:18251"}})
-    o = e.orchestream
-    # la v2 garde l'état : connu dès la connexion, sans attendre un changement
-    assert wait(lambda: o.connected and o.api == "v2", 6)
-    assert o.overlays == {"twizz": False, "poll": True, "speedizz": False}, o.overlays
-    assert wait(lambda: any(orch.subscribed.values()))
-    # basculer : show puis hide, la réponse de la v2 met l'état à jour
-    tap(e, pid, "0,0")
-    assert wait(lambda: orch.visible["twizz"] and o.overlays["twizz"] is True)
-    tap(e, pid, "0,1")
-    assert wait(lambda: orch.visible["poll"] is False and o.overlays["poll"] is False)
-    # changé depuis la régie d'orchestream : suivi par Transmit (le ping est ignoré)
-    orch.ping()
-    orch.set("twizz", False)
-    assert wait(lambda: o.overlays["twizz"] is False)
-    orch.set("poll", True)
-    assert wait(lambda: o.overlays["poll"] is True)
-    # rien à afficher : le 409 OVERLAY_EMPTY est expliqué tel quel
-    tap(e, pid, "0,2")
-    assert wait(lambda: any("lancez une partie" in m for _, m in logs)), logs
-    assert not orch.visible["speedizz"]
-    assert probe_orchestream("127.0.0.1:18251")[0] is True
-    assert "à l'antenne : Sondage" in probe_orchestream("127.0.0.1:18251")[1]
-    # adresse publique (tunnel) : la v2 refuse la régie, le message dit quoi faire
-    orch.external = True
-    ok, msg = probe_orchestream("127.0.0.1:18251")
-    assert ok is False and "adresse locale" in msg, msg
-    e.stop()
-
-
-def test_orchestream_v1_still_supported(tmp_path):
-    orch = fakes.FakeOrchestream(18252, v1=True)
-    e, pid, logs = one_page(tmp_path, {
-        "0,0": new_button(label="Twizz", actions=[new_action("orchestream.overlay", overlay="twizz")])},
-        {"orchestream": {"url": "127.0.0.1:18252"}})
-    o = e.orchestream
-    assert wait(lambda: o.connected and o.api == "v1", 6)
-    tap(e, pid, "0,0")
-    assert wait(lambda: orch.visible["twizz"] and o.overlays["twizz"] is True)
-    orch.set("twizz", False)
-    assert wait(lambda: o.overlays["twizz"] is False)
-    orch.emit("quiz:overlay:toggle", {"isVisible": True})    # overlay appris en direct
-    assert wait(lambda: o.overlays.get("quiz") is True)
-    from livedeck.integrations import probe_orchestream
-    assert "v1" in probe_orchestream("127.0.0.1:18252")[1]
-    e.stop()
 
 
 # -- Loupedeck ------------------------------------------------------------------
@@ -3582,122 +3521,244 @@ def test_vmix_expect_not_stuck(tmp_path):
     e.stop()
 
 
-# -- orchestream-v2 : API Stream Deck (commandes régie) -----------------------------------------
-def orchdeck_engine(tmp_path, port, token=fakes.FakeOrchDeck.TOKEN):
-    od = fakes.FakeOrchDeck(port)
-    cfg = default_config()
-    page = cfg["pages"][0]
-    page["buttons"]["0,0"] = new_button(label="Suivant",
-                                        actions=[new_action("orchestream.command", command="game.advance")])
-    page["buttons"]["0,1"] = new_button(label="Merci",
-                                        actions=[new_action("orchestream.command", command="activity.ackAll")])
-    page["buttons"]["0,2"] = new_button(label="Fin",
-                                        actions=[new_action("orchestream.command", command="live.end")])
-    page["buttons"]["0,3"] = new_button(label="Quiz",
-                                        actions=[new_action("orchestream.command", command="twizz.start", arg="q-2")])
-    cfg["integrations"]["orchestream"] = {"url": f"127.0.0.1:{port}", "token": token}
-    e = engine(tmp_path, cfg=cfg)
-    return e, od, page["id"]
+# -- orchestream-v2 : touches décrites par le serveur (API Stream Deck, flux en direct) ---------------
+def orch_engine(tmp_path, port, token=fakes.FakeOrchDeck.TOKEN, stream=True):
+    od = fakes.FakeOrchDeck(port, stream=stream)
+    keys = {"0,0": "game.advance", "0,1": "activity.ackAll", "0,2": "live.end", "0,3": "twizz.start:q-2",
+            "0,4": "overlay.toggle:twizz", "1,0": "status:live", "1,1": "studio.shortcut:s1"}
+    e, pg, logs = one_page(tmp_path, {k: new_button(actions=[new_action("orchestream.key", key=v)])
+                                      for k, v in keys.items()},
+                           {"orchestream": {"url": f"127.0.0.1:{port}", "token": token}})
+    return e, od, pg, logs
 
 
-def test_orchdeck_commands_and_state(tmp_path):
-    """Les touches lancent les commandes régie avec le jeton dans l'en-tête, et affichent l'état."""
-    e, od, pg = orchdeck_engine(tmp_path, 18261)
-    assert wait(lambda: e.orchdeck.connected, 5), e.orchdeck.error
-    # La touche « Suivant » dit ce que fera la prochaine pression (game.nextAction).
-    assert wait(lambda: e.visual(e.button(pg, "0,0"))["label"] == "Fermer Q3", 3), \
-        e.visual(e.button(pg, "0,0"))["label"]
+def vis_of(e, pg, k):
+    return e.visual(e.button(pg, k))
+
+
+def test_orchestream_keys_follow_the_stream(tmp_path):
+    """Les touches affichent ce que décrit orchestream (texte, couleur, allumée, disponible), suivent le flux
+    /api/deck/events dans la seconde, et lancent la commande de la touche avec ses arguments."""
+    from livedeck.feedback import OFF_BG, ORCH_TONES
+    e, od, pg, logs = orch_engine(tmp_path, 18261)
+    o = e.orchestream
+    assert wait(lambda: o.connected and o.mode == "stream", 5), o.error
+    assert od.stream_headers[0]["Authorization"] == f"Bearer {fakes.FakeOrchDeck.TOKEN}"  # jeton : en-tête seul
+    # Texte et couleur de la touche, tels qu'orchestream les décrit
+    v = vis_of(e, pg, "0,0")
+    assert v["label"] == "Fermer Q3\nCulture G" and v["bg"] == ORCH_TONES["accent"][1], v
+    v = vis_of(e, pg, "0,1")
+    assert v["label"] == "Tout remercier\n5 à remercier" and v["bg"] == ORCH_TONES["warning"][0], v
+    assert v["fg"] == "#000000", "texte noir sur une couleur claire"
+    assert vis_of(e, pg, "0,4")["bg"] == ORCH_TONES["violet"][0], "widget affiché : touche allumée"
+    assert vis_of(e, pg, "1,1")["label"] == "Lumière plateau\nÉteint"
+    # Appui : la commande de la touche, puis la touche change dans la seconde (sans interroger)
+    reads = od.reads
     tap(e, pg, "0,0")
     assert wait(lambda: od.calls and od.calls[-1][0] == "game.advance", 3), od.calls
-    assert od.calls[-1][2] == "bearer", "jeton dans l'en-tête Authorization"
-    # Q3 fermée : la prochaine pression ouvrira la question suivante non posée, Q4.
-    assert wait(lambda: e.visual(e.button(pg, "0,0"))["label"] == "Ouvrir Q4", 3), \
-        f"état non relu après la commande : {e.visual(e.button(pg, '0,0'))['label']!r}"
-
-    # « Tout remercier » affiche le nombre de viewers à remercier, puis s'éteint.
-    v = e.visual(e.button(pg, "0,1"))
-    assert "5 à remercier" in v["label"], v["label"]
+    assert od.calls[-1][2] == "bearer"
+    assert wait(lambda: vis_of(e, pg, "0,0")["label"] == "Ouvrir Q4\nCulture G", 1.5), vis_of(e, pg, "0,0")
     tap(e, pg, "0,1")
-    assert wait(lambda: "à remercier" not in e.visual(e.button(pg, "0,1"))["label"], 3)
-
-    # Commande avec argument : l'identifiant du quiz part dans le corps JSON.
+    assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Tout remercier", 1.5)
+    assert vis_of(e, pg, "0,1")["bg"] == ORCH_TONES["neutral"][1]
+    # Une valeur d'argument par touche : les arguments partent tels quels
     tap(e, pg, "0,3")
     assert wait(lambda: any(c[0] == "twizz.start" for c in od.calls), 3)
     assert next(c for c in od.calls if c[0] == "twizz.start")[1] == {"quizId": "q-2"}
-    assert wait(lambda: e.orchdeck.arg_values("twizz.start") == [("q-1", "Culture G"), ("q-2", "Cinéma")], 3)
-    e.stop()
-
-
-def test_orchdeck_permissions_and_errors(tmp_path):
-    """Refus d'orchestream : permission manquante (la touche le dit avant même l'appui), erreur métier
-    journalisée en français, 429 respecté."""
-    e, od, pg = orchdeck_engine(tmp_path, 18262)
-    logs = []
-    e.listeners.append(lambda kind, p: logs.append(p) if kind == "log" else None)
-    assert wait(lambda: e.orchdeck.connected, 5)
-    # « Fin du live » sans la permission live.control : grisée et marquée dès l'affichage.
-    v = e.visual(e.button(pg, "0,2"))
-    assert "NON AUTORISÉ" in v["label"] and v["bg"] == "#1a1d24", v
-    tap(e, pg, "0,2")
-    assert wait(lambda: any("non autorisée" in str(p) for p in logs), 3), logs
-
-    # Erreur métier : message d'orchestream tel quel.
+    tap(e, pg, "1,1")
+    assert wait(lambda: od.shortcuts["s1"]["on"], 3)
+    assert wait(lambda: vis_of(e, pg, "1,1")["bg"] == ORCH_TONES["amber"][0], 1.5)
+    # Changé ailleurs (régie web) : suivi par le flux
+    tap(e, pg, "0,4")
+    assert wait(lambda: od.overlays["twizz"] is False, 3)
+    assert wait(lambda: vis_of(e, pg, "0,4")["bg"] == ORCH_TONES["violet"][1], 1.5)
+    od.overlays["twizz"] = True
+    assert wait(lambda: vis_of(e, pg, "0,4")["bg"] == ORCH_TONES["violet"][0], 1.5)
+    assert od.reads == reads, "le flux suffit : aucune lecture de l'état"
+    # Touche d'état : elle affiche, l'appui n'envoie rien
+    assert vis_of(e, pg, "1,0")["label"] == "Live\n42 viewers"
+    n = len(od.calls)
+    tap(e, pg, "1,0")
+    time.sleep(0.3)
+    assert len(od.calls) == n
+    # Indisponible : grisée avec la raison d'orchestream ; l'appui part quand même (le serveur décide)
     od.game.update(phase="idle", nextAction=None)
+    assert wait(lambda: "Aucune partie en cours" in vis_of(e, pg, "0,0")["label"], 1.5)
+    assert vis_of(e, pg, "0,0")["bg"] == OFF_BG
     tap(e, pg, "0,0")
-    assert wait(lambda: any("Aucune partie en cours" in str(p) for p in logs), 3), logs
-
-    # 429 : le service attend Retry-After au lieu d'insister.
-    od.throttle = 1
-    e.orchdeck._wake.set()
-    assert wait(lambda: e.orchdeck._retry_at > time.monotonic(), 3), "Retry-After ignoré"
+    assert wait(lambda: any("Aucune partie en cours" in m for _, m in logs), 3), logs
+    # Touche absente de la liste (pas la permission live.control) : indisponible, rien n'est envoyé
+    v = vis_of(e, pg, "0,2")
+    assert "INTROUVABLE" in v["label"] and v["bg"] == OFF_BG, v
+    tap(e, pg, "0,2")
+    assert wait(lambda: any("inconnue d'orchestream" in m for _, m in logs), 3), logs
+    assert not any(c[0] == "live.end" for c in od.calls)
+    # Touche supprimée dans orchestream (patch « removedKeys ») : elle devient indisponible
+    od.shortcuts.clear()
+    assert wait(lambda: "INTROUVABLE" in vis_of(e, pg, "1,1")["label"], 1.5)
+    # Nouvelle touche (patch « keys ») : proposée aussitôt
+    od.shortcuts["s2"] = {"name": "Néons", "on": True, "tone": "pink"}
+    assert wait(lambda: o.key("studio.shortcut:s2"), 1.5)
+    assert od.streams == 1
     e.stop()
 
 
-def test_orchdeck_bad_token_and_offline(tmp_path):
-    """Jeton refusé : message clair, touche grisée « HORS LIGNE » ; aucun jeton : rien n'est envoyé."""
-    e, od, pg = orchdeck_engine(tmp_path, 18263, token="osk_mauvais")
-    assert wait(lambda: e.orchdeck.error, 5)
-    assert "jeton" in e.orchdeck.error.lower() and "Jetons API" in e.orchdeck.error, e.orchdeck.error
-    v = e.visual(e.button(pg, "0,0"))
-    assert "HORS LIGNE" in v["label"], v["label"]
-    ok, msg = integrations.probe_deck("127.0.0.1:18263", "osk_mauvais")
+def test_orchestream_token_refused_and_revoked(tmp_path):
+    """Jeton refusé ou révoqué : message clair, touches grisées « JETON REFUSÉ » ; reconnexion ensuite."""
+    e, od, pg, logs = orch_engine(tmp_path, 18262)
+    o = e.orchestream
+    assert wait(lambda: o.connected, 5), o.error
+    od.revoked = True                               # le serveur ferme le flux, puis répond 401
+    assert wait(lambda: not o.connected and "jeton" in o.error, 5), o.error
+    assert "Jetons API" in o.error
+    v = vis_of(e, pg, "0,0")
+    assert v["label"].endswith("JETON REFUSÉ") and v["bg"] == "#1a1d24", v
+    od.revoked = False
+    o._wake.set()                                   # sans attendre le délai de reconnexion
+    assert wait(lambda: o.connected and o.mode == "stream", 5), o.error
+    assert od.streams == 2 and wait(lambda: vis_of(e, pg, "0,0")["label"].startswith("Fermer Q3"), 2)
+    # Test ponctuel des Réglages
+    ok, msg = integrations.probe_orchestream("127.0.0.1:18262", "osk_mauvais")
     assert ok is False and "jeton" in msg.lower(), msg
-    ok, msg = integrations.probe_deck("127.0.0.1:18263", fakes.FakeOrchDeck.TOKEN)
-    assert ok is True and "Stream Deck plateau" in msg, msg
-    assert integrations.probe_deck("127.0.0.1:18263", "")[0] is None, "sans jeton : à renseigner, pas une erreur"
+    ok, msg = integrations.probe_orchestream("127.0.0.1:18262", fakes.FakeOrchDeck.TOKEN)
+    assert ok is True and "Stream Deck plateau" in msg and "touche(s)" in msg, msg
+    assert integrations.probe_orchestream("127.0.0.1:18262", "")[0] is None, "sans jeton : à renseigner"
+    e.stop()
+    e2, od2, pg2, _ = orch_engine(tmp_path / "bad", 18263, token="osk_mauvais")
+    assert wait(lambda: "jeton" in e2.orchestream.error, 5), e2.orchestream.error
+    assert not od2.calls and od2.streams == 0
+    e2.stop()
+
+
+def test_orchestream_falls_back_to_state(tmp_path):
+    """Flux indisponible (orchestream sans /api/deck/events) : l'état est relu chaque seconde."""
+    e, od, pg, logs = orch_engine(tmp_path, 18251, stream=False)
+    o = e.orchestream
+    assert wait(lambda: o.connected and o.mode == "poll", 5), o.error
+    assert vis_of(e, pg, "0,1")["label"] == "Tout remercier\n5 à remercier"
+    tap(e, pg, "0,1")
+    assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Tout remercier", 2)
+    row = next(r for r in integrations.integration_status(e) if r[0] == "orchestream")
+    assert row[2] is True and "lecture de l'état" in row[3], row
+    assert od.streams == 0 and od.reads >= 2
     e.stop()
 
 
-def test_orchdeck_does_not_wake_overlay_stream(tmp_path):
-    """Une touche de commande régie ne réveille que son service : pas le flux des overlays, et
-    inversement. Avant, tout « orchestream.* » activait les deux."""
+def test_orchestream_retry_after(tmp_path):
+    """429 à la reconnexion : le service attend Retry-After au lieu d'insister."""
+    e, od, pg, _ = orch_engine(tmp_path, 18252)
+    o = e.orchestream
+    assert wait(lambda: o.connected, 5)
+    od.throttle = 1
+    o._abort()                                      # flux coupé : la reconnexion reçoit le 429
+    assert wait(lambda: o._retry_at > time.monotonic(), 5), "Retry-After ignoré"
+    assert not od.throttle and od.streams == 1
+    assert wait(lambda: o.connected and od.streams == 2, 5)
+    e.stop()
+
+
+def test_orchestream_wanted(tmp_path):
+    """Une touche Orchestream réveille le service, y compris par la rotation d'une molette."""
     e = engine(tmp_path, start=False)
     p = new_page("P")
-    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.command", command="draw.run")])
     e.cfg["pages"] = [p]
     e.start()
-    assert e.orchdeck.wanted and not e.orchestream.wanted
-    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.overlay", overlay="twizz")])
+    assert not e.orchestream.wanted
+    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.key", key="draw.run")])
     e.apply_integrations()
-    assert e.orchestream.wanted and not e.orchdeck.wanted
-    # Une molette dont seule la rotation utilise l'intégration la réveille aussi.
+    assert e.orchestream.wanted
     p["buttons"].clear()
-    p["controls"] = {"knobTL": new_control("rotary", actions_cw=[new_action("orchestream.command",
-                                                                            command="game.advance")])}
+    p["controls"] = {"knobTL": new_control("rotary", actions_cw=[new_action("orchestream.key", key="game.advance")])}
     e.apply_integrations()
-    assert e.orchdeck.wanted, "la liste de rotation d'une molette doit compter"
+    assert e.orchestream.wanted, "la liste de rotation d'une molette doit compter"
+    p["controls"] = {}
+    p["buttons"]["0,0"] = new_button(feedbacks=[fb("orchkey", key="status:live", state="active")])
+    e.apply_integrations()
+    assert e.orchestream.wanted, "un retour d'état orchestream compte aussi"
     e.stop()
 
 
-def test_orchdeck_catalog():
-    assert summary(new_action("orchestream.command", command="twizz.start", arg="q-1")) == \
-        "orchestream · Lancer un Twizz « q-1 »"
-    spec = {f["key"]: f for f in ACTIONS["orchestream.command"]["fields"]}
-    assert shown(spec["arg"], new_action("orchestream.command", command="twizz.start"))
-    assert not shown(spec["arg"], new_action("orchestream.command", command="game.advance")), \
-        "pas de paramètre pour une commande qui n'en prend pas"
-    for pid, *_ in presets.REGIE_PRESETS:
-        assert presets.make(pid)["actions"][0]["type"] == "orchestream.command", pid
+def test_orchestream_old_keys_converted(tmp_path):
+    """Les anciennes touches (overlays publics sans jeton, commandes d'une liste en dur) deviennent des touches
+    Orchestream : overlay.<mode>:<widget>, <commande> ou <commande>:<valeur>."""
+    import json
+    old = {"version": 4, "vmix": {"host": "127.0.0.1", "port": 8099}, "decks": {}, "options": {},
+           "integrations": {"orchestream": {"url": "http://orch.local", "overlays": [{"name": "quiz", "label": "Q"}]}},
+           "pages": [{"id": "p", "name": "P", "cols": 5, "rows": 3, "buttons": {
+               "0,0": {"id": "a", "actions": [{"type": "orchestream.overlay", "overlay": "poll", "mode": "toggle"}]},
+               "0,1": {"id": "b", "actions": [{"type": "orchestream.overlay", "overlay": "twizz", "mode": "show"}],
+                       "actions_off": [{"type": "orchestream.overlay", "overlay": "twizz", "mode": "hide"}],
+                       "mode": "toggle"},
+               "0,2": {"id": "c", "actions": [{"type": "orchestream.command", "command": "game.advance", "arg": ""}]},
+               "0,3": {"id": "d", "actions": [{"type": "orchestream.command", "command": "twizz.start",
+                                               "arg": "q-1"}],
+                       "feedbacks": [{"cond": {"type": "orchdeck", "command": "twizz.start", "state": "unavailable"},
+                                      "bg": "#111111"},
+                                     {"cond": {"type": "orchestream", "overlay": "twizz", "state": "visible"},
+                                      "bg": "#facc15"}]},
+               "0,4": {"id": "e", "actions": [{"type": "http", "method": "POST",
+                                               "url": "http://orch.local/api/overlay/poll/show"}]}},
+               "controls": {"knobTL": {"id": "k", "kind": "rotary", "actions_cw": [
+                   {"type": "orchestream.command", "command": "overlay.show", "arg": "poll"}]}}}]}
+    p = Path(tmp_path) / "config.json"
+    p.write_text(json.dumps(old), encoding="utf-8")
+    cfg = load_config(p)
+    b = cfg["pages"][0]["buttons"]
+    assert b["0,0"]["actions"] == [{"type": "orchestream.key", "key": "overlay.toggle:poll", "title": ""}]
+    assert b["0,1"]["actions"][0]["key"] == "overlay.show:twizz"
+    assert b["0,1"]["actions_off"][0]["key"] == "overlay.hide:twizz"
+    assert b["0,2"]["actions"][0]["key"] == "game.advance"
+    assert b["0,3"]["actions"][0]["key"] == "twizz.start:q-1"
+    conds = [f["cond"] for f in b["0,3"]["feedbacks"]]
+    assert conds == [{"type": "orchkey", "key": "twizz.start", "state": "unavailable"},
+                     {"type": "orchkey", "key": "overlay.toggle:twizz", "state": "active"}], conds
+    assert b["0,4"]["actions"][0]["type"] == "http", "une requête HTTP écrite à la main reste telle quelle"
+    assert cfg["pages"][0]["controls"]["knobTL"]["actions_cw"][0]["key"] == "overlay.show:poll"
+    assert "overlays" not in cfg["integrations"]["orchestream"]
+    notes = cfg["_migration_notes"]
+    assert any("jeton API" in n for n in notes), notes
+    assert "orchestream.overlay" not in config_text(cfg) and "orchestream.command" not in config_text(cfg)
+    # déjà convertie : rien ne change, aucune note
+    again = json.loads(config_text(cfg))
+    assert not integrations.convert_orchestream(again)
+    # import Companion « intégrations natives » : les requêtes show / hide isolées sont converties aussi
+    comp = {"pages": [{"buttons": {"0,0": {"actions": [{"type": "http", "url": "http://o.local/api/overlay/poll/hide"}],
+                                           "actions_off": [], "feedbacks": [], "label": ""}}}]}
+    integrations.migrate(comp)
+    assert comp["pages"][0]["buttons"]["0,0"]["actions"][0] == {"type": "orchestream.key", "key": "overlay.hide:poll",
+                                                                 "title": ""}
+    assert comp["integrations"]["orchestream"]["url"] == "http://o.local"
+
+
+def test_orchestream_catalog_and_picker(tmp_path):
+    """Aucune liste de touches en dur : la bibliothèque et l'inspecteur proposent celles d'orchestream."""
+    from livedeck.ui.widgets import OrchKeyPicker
+    assert summary(new_action("orchestream.key", key="twizz.start:q-1", title="Twizz Culture G")) == \
+        "Orchestream · Twizz Culture G"
+    assert summary(new_action("orchestream.key", key="draw.run")) == "Orchestream · draw.run"
+    assert not hasattr(integrations, "ORCH_COMMANDS") and not hasattr(presets, "REGIE_PRESETS")
+    assert presets.make("orch")["actions"][0]["type"] == "orchestream.key"
+    e, od, pg, _ = orch_engine(tmp_path, 18264)
+    assert wait(lambda: e.orchestream.has_keys, 5)
+    lib = dict(presets.library(e))["Intégrations"]
+    ids = {pid_ for pid_, _, _ in lib}
+    assert {"orch:game.advance", "orch:studio.shortcut:s1", "orch:status:live"} <= ids, ids
+    assert "orch:live.end" not in ids, "seulement les touches permises au jeton"
+    b = presets.make("orch:twizz.start:q-1", e)
+    assert b["actions"][0] == {"type": "orchestream.key", "key": "twizz.start:q-1", "title": "Twizz Culture G"}
+    picker = OrchKeyPicker(e, "studio.shortcut:s1")
+    groups = [picker.tree.topLevelItem(i).text(0) for i in range(picker.tree.topLevelItemCount())]
+    assert groups[:3] == ["Jeux", "Tirages", "Chat et remerciements"] and "État" in groups, groups
+    assert picker.tree.currentItem().data(0, Qt.UserRole) == "studio.shortcut:s1"
+    got = []
+    picker.changed.connect(got.append)
+    picker.search.setText("néons")
+    assert picker.tree.topLevelItemCount() == 1 and "Aucune" in picker.tree.topLevelItem(0).text(0)
+    picker.search.setText("cinéma")
+    item = picker.tree.topLevelItem(0).child(0)
+    picker._picked(item)
+    assert got == ["twizz.start:q-2"]
+    e.stop()
 
 
 def test_winaudio_cache():

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import feedback
 from .actions import ACTIONS, new_action
-from .integrations import bus_label, overlay_label
+from .integrations import bus_label
 from .model import new_button
 
 
@@ -42,30 +42,9 @@ def _talk(bus: str, name: str = "") -> dict:
                       actions=[new_action("intercom.ptt", bus=bus)])
 
 
-def _orch(overlay: str, name: str = "") -> dict:
-    return new_button(label=name or overlay_label(overlay), bg="#333300",
-                      actions=[new_action("orchestream.overlay", overlay=overlay)])
-
-
-def _rc(command: str, label: str, arg: str = "", bg: str = "#2a1f05") -> dict:
-    """Commande régie d'orchestream-v2 (API Stream Deck, jeton)."""
-    return new_button(label=label, bg=bg, actions=[new_action("orchestream.command", command=command, arg=arg)])
-
-
-# Commandes régie proposées dans la bibliothèque (les plus utiles sur une surface de contrôle)
-REGIE_PRESETS = [
-    ("rc_advance", "game.advance", "Jeu : suivant", "Ferme, ouvre la suivante, termine", "Suivant"),
-    ("rc_draw", "draw.run", "Tirer au sort", "Tirage en attente, sinon par défaut", "Tirage"),
-    ("rc_reroll", "draw.reroll", "Retirer au sort", "Nouveau gagnant du dernier tirage", "Retirage"),
-    ("rc_poll", "poll.end", "Fin du sondage", "Sondage Twitch en cours", "Fin\nsondage"),
-    ("rc_prediction", "prediction.lock", "Verrouiller la prédiction", "Ferme les paris", "Verrou\nprédiction"),
-    ("rc_thanks", "activity.ackAll", "Tout remercier", "Compte les viewers à remercier", "Merci"),
-    ("rc_replay", "popup.replayLast", "Rejouer la dernière popup", "Popup seule, sans lumières", "Rejouer\npopup"),
-    ("rc_popups", "popups.reset", "Effacer les popups", "Affichées et en attente", "Effacer\npopups"),
-    ("rc_lanes", "lanes.clear", "Vider les files", "Files de déclenchement", "Vider\nfiles"),
-    ("rc_twizz", "twizz.start", "Lancer un Twizz", "Quiz à choisir", "Twizz"),
-    ("rc_live_end", "live.end", "Terminer le live", "Permission « Piloter le live »", "Fin du\nlive"),
-]
+def _orch(key_id: str = "", title: str = "") -> dict:
+    """Touche décrite par orchestream-v2 : texte, couleur et état viennent du serveur (libellé vide)."""
+    return new_button(label="", bg="#1f2937", actions=[new_action("orchestream.key", key=key_id, title=title)])
 
 
 def _mv(target: str, label: str, ref: str = "", bg: str = "#0f2a24") -> dict:
@@ -145,15 +124,12 @@ PRESETS: dict[str, tuple] = {
     "function": ("vMix avancé", "Fonction vMix", "Toute l'API vMix", lambda: new_button(
         bg="#1e293b", actions=[new_action("vmix.function")])),
     "talk": ("Intégrations", "Talkback", "py-intercom, maintenu", lambda: _talk("regie")),
-    "orch": ("Intégrations", "Overlay web", "orchestream, état en direct", lambda: _orch("twizz")),
+    "orch": ("Intégrations", "Touche orchestream", "Décrite par orchestream, à choisir", lambda: _orch()),
     "talk_regie": ("Intégrations", "Talkback Régie", "py-intercom, maintenu", lambda: _talk("regie", "Régie")),
     "talk_plateau": ("Intégrations", "Talkback Plateau", "py-intercom, maintenu", lambda: _talk("plateau", "Plateau")),
     "talk_vmix": ("Intégrations", "Talkback vMix", "py-intercom, maintenu", lambda: _talk("vmix", "vMix")),
     "talk_alloff": ("Intégrations", "Couper l'intercom", "Relâche tous les bus", lambda: new_button(
         label="Intercom\nOFF", bg="#1a1d24", actions=[new_action("intercom.ptt", mode="alloff")])),
-    "ov_twizz": ("Intégrations", "Overlay Twizz", "orchestream, état en direct", lambda: _orch("twizz", "Twizz")),
-    "ov_poll": ("Intégrations", "Overlay Sondage", "orchestream, état en direct", lambda: _orch("poll", "Poll")),
-    "ov_speedizz": ("Intégrations", "Overlay Speedizz", "orchestream, état en direct", lambda: _orch("speedizz", "Speedizz")),
     "tallies": ("Intégrations", "Tallys", "Vert si tous connectés, reconnecte", lambda: new_button(
         label="Tallys", bg="#000000", actions=[new_action("tally.reconnect")])),
     "mv_sender": ("Intégrations", "Émission OMT", "py-multiview, état en direct",
@@ -166,8 +142,6 @@ PRESETS: dict[str, tuple] = {
                     lambda: _mv("floating", "Fenêtre\nretour")),
     "mv_stream": ("Intégrations", "Un flux multiview", "py-multiview, à préciser",
                   lambda: _mv("stream", "Flux 1", "1")),
-    **{pid: ("Intégrations", name, f"orchestream, {desc}", (lambda c=cmd, k=key: _rc(c, k)))
-       for pid, cmd, name, desc, key in REGIE_PRESETS},
     # -- molettes : la rotation règle, l'appui coupe ----------------------------------
     "knob_master": ("Molette", "Volume Master", "Tourner : volume · appuyer : couper",
                     lambda: _vol("master", "Master", "MasterAudio")),
@@ -318,7 +292,8 @@ def make(preset_id: str, engine=None) -> dict | None:
     if preset_id.startswith("talk:"):
         return _talk(preset_id[5:])
     if preset_id.startswith("orch:"):
-        return _orch(preset_id[5:], engine.orchestream.labels.get(preset_id[5:], "") if engine else "")
+        kid = preset_id[5:]
+        return _orch(kid, str(((engine.orchestream.key(kid) if engine else None) or {}).get("title") or ""))
     if preset_id.startswith("mv:"):
         return _mv("stream", preset_id[3:], preset_id[3:])
     entry = PRESETS.get(preset_id)
@@ -326,17 +301,22 @@ def make(preset_id: str, engine=None) -> dict | None:
 
 
 def _integrations(engine) -> list[tuple[str, str, str]]:
-    """Intégrations d'après ce qui est réglé et découvert : bus proposés par py-intercom, overlays réglés ou
-    vus en direct ; un service non réglé n'apparaît qu'une fois, marqué « à régler »."""
+    """Intégrations d'après ce qui est réglé et découvert : bus proposés par py-intercom, touches décrites par
+    orchestream ; un service non réglé n'apparaît qu'une fois, marqué « à régler »."""
     integ = engine.cfg.get("integrations", {})
     modes = {"toggle": "py-intercom, bascule", "always_on": "py-intercom, toujours ouvert"}
     out = [(f"talk:{k}", f"Talkback {name}", modes.get(engine.intercom.bus(k).get("mode"), "py-intercom, maintenu"))
            for k, name in engine.intercom.bus_choices()]
     out.append(("talk_alloff", "Couper l'intercom", "Relâche tous les bus"))
-    if (integ.get("orchestream") or {}).get("url"):
-        out += [(f"orch:{k}", f"Overlay {name}", "orchestream, état en direct") for k, name in engine.orchestream.names()]
+    orch = integ.get("orchestream") or {}
+    if not (orch.get("url") and orch.get("token")):
+        out.append(("orch", "Touche orchestream", "adresse et jeton API à régler : Réglages → Intégrations"))
+    elif engine.orchestream.has_keys:
+        # Toutes les touches que le jeton peut poser, telles qu'orchestream les décrit (aucune liste en dur)
+        out += [(f"orch:{k['id']}", str(k.get("title") or k["id"]), f"orchestream · {k.get('group') or 'Autres'}")
+                for k in engine.orchestream.key_list()]
     else:
-        out.append(("orch", "Overlay orchestream", "à régler : Réglages → Intégrations"))
+        out.append(("orch", "Touche orchestream", "liste des touches en attente d'orchestream"))
     out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
                 else "Tally32 à régler : Réglages → Intégrations"))
     if (integ.get("multiview") or {}).get("url"):
@@ -348,11 +328,6 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
                 for name, _ in engine.multiview.choices("stream")]
     else:
         out.append(("mv_sender", "py-multiview", "à régler : Réglages → Intégrations"))
-    orch = integ.get("orchestream") or {}
-    if orch.get("url") and orch.get("token"):
-        out += [(pid, name, f"orchestream, {desc}") for pid, _, name, desc, _ in REGIE_PRESETS]
-    else:
-        out.append(("rc_advance", "Régie orchestream", "jeton API à régler : Réglages → Intégrations"))
     return out
 
 
@@ -368,15 +343,13 @@ def needs_setup(preset_id: str, engine) -> str:
             return "intercom"
         bus = preset_id[5:] if preset_id.startswith(("talk:", "talk_")) else ""
         return "always_on" if bus and engine.intercom.bus(bus).get("mode") == "always_on" else ""
-    if preset_id == "orch" or preset_id.startswith(("orch:", "ov_")):
-        return "" if (integ.get("orchestream") or {}).get("url") else "orchestream"
+    if preset_id == "orch" or preset_id.startswith("orch:"):
+        orch = integ.get("orchestream") or {}
+        return "" if orch.get("url") and orch.get("token") else "orchestream"
     if preset_id == "tallies":
         return "" if integ.get("tallies") else "tallies"
     if preset_id.startswith("mv"):
         return "" if (integ.get("multiview") or {}).get("url") else "multiview"
-    if preset_id.startswith("rc_"):
-        orch = integ.get("orchestream") or {}
-        return "" if orch.get("url") and orch.get("token") else "orchdeck"
     return ""
 
 

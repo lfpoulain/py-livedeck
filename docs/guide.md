@@ -30,7 +30,7 @@
      qu'un 2e appui sur un input déjà en preview l'envoie à l'antenne ;
    - **Convertir vers les intégrations natives** : à cocher seulement si tu utilises py-intercom, orchestream ou
      Tally32 (voir [Intégrations maison](#intégrations-maison)). Avec **Ajouter les pages**, les réglages trouvés
-     (adresse orchestream, overlays, tallys) complètent les tiens sans les remplacer.
+     (adresse orchestream, tallys) complètent les tiens sans les remplacer.
 
    Chaque Stream Deck retrouve sa page grâce à son numéro de série.
 3. Côté vMix, rien à configurer : LiveDeck utilise l'API TCP (port 8099), active par défaut.
@@ -86,9 +86,9 @@ seul **▶ Tester** reste actif. De quoi laisser l'écran ouvert pendant le dire
   partir de la touche choisie. Une seule étape d'annulation.
 - **Glisser-déposer** : glisse un ou plusieurs inputs sur le deck. Le menu « Créer » choisit le type
   (Take, Program, Preview, Preview + Program sur 2 rangées, Overlay 1-4, Couper le son).
-- **Bibliothèque « Boutons »** : CUT, Fade, Stinger, FTB, REC, STREAM, MultiCorder, talkback py-intercom, overlays
+- **Bibliothèque « Boutons »** : CUT, Fade, Stinger, FTB, REC, STREAM, MultiCorder, talkback py-intercom, touches
   orchestream, raccourci maintenu, HTTP, OSC, TCP, interrupteur, liens directs vers chaque page… à glisser sur une
-  touche ou à double-cliquer. Les bus py-intercom et les overlays orchestream découverts en direct y apparaissent.
+  touche ou à double-cliquer. Les bus py-intercom et les touches qu'orchestream décrit y apparaissent en direct.
 - **Double-clic sur une touche existante** : un input double-cliqué remplace son input, et son texte suit.
 - **Convertir en Take** : clic droit sur une touche Preview ou Program, sur sa rangée, ou menu de l'onglet pour
   toute la page.
@@ -263,8 +263,7 @@ elles sont toutes surveillées.
 | Outil | Ce que fait LiveDeck | Retour sur la touche |
 |---|---|---|
 | **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
-| **orchestream** (overlays web) | Afficher / masquer / basculer, avec l'état suivi en direct (canal `overlay` d'orchestream-v2, ou flux `/api/overlay/events` de la v1) | Jaune quand l'overlay est affiché, liseré gris si l'état est inconnu |
-| **orchestream-v2 : commandes régie** (API Stream Deck, jeton) | Jeu suivant, tirage, Twizz, sondage, prédiction, remercier, popups, files, widget, fin du live… | Ce que fera la touche (« Fermer Q3 »), viewers à remercier, live en cours ; grisée avec la raison d'orchestream quand c'est impossible, NON AUTORISÉ si le jeton n'a pas la permission |
+| **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, `GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
 
@@ -298,49 +297,53 @@ lui envoie donc aussi « off ». À la conversion d'une config Companion, l'anci
 Les adresses locales (127.0.0.1, réseau privé, noms en `.local`) ne passent jamais par le proxy de Windows :
 un proxy d'entreprise ne peut plus bloquer le talkback.
 
-### orchestream et Tally32
+### orchestream-v2
 
-- **orchestream** : indique l'adresse **locale** du serveur (par ex. `http://192.168.1.20:5174` pour
-  orchestream-v2) et la liste des overlays (`twizz, poll = Sondage, speedizz` : `nom = Libellé` pour un nom
-  affiché). Les overlays connus du serveur sont aussi proposés automatiquement. LiveDeck reconnaît tout seul
-  orchestream-v2 et l'ancienne version (v1).
-  - Avec **orchestream-v2**, l'état des overlays est lu dès la connexion : une touche est jaune tout de suite si
-    l'overlay est déjà à l'antenne. Montrer un widget vide (pas de question, pas de sondage) est refusé, et le
-    Moniteur affiche le message d'orchestream (« Aucun Twizz à afficher : lancez une partie d'abord. »).
-  - orchestream-v2 n'accepte la régie que par son adresse locale. Son adresse publique (tunnel, passerelle
-    invités) répond « introuvable » : **Tester** te le dit et te propose l'adresse locale.
-- **Tally32** : un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur
-  te demande de mettre à jour son firmware.
-
-### Commandes régie d'orchestream-v2
-
-orchestream-v2 se pilote aussi par son **API Stream Deck** : les commandes de la régie, sans identifiant de
-partie ni de tirage à recopier à chaque live. Une touche « Suivant » mène tout un jeu : elle ferme la question
-ouverte, sinon ouvre la suivante, sinon termine la partie.
+orchestream décrit lui-même **chaque touche** que ton jeton peut poser : son texte, sa couleur, si elle est
+allumée, si elle peut servir maintenant (et sinon pourquoi), et la commande qu'elle lance. LiveDeck n'a aucune
+liste de commandes en dur : une nouveauté d'orchestream (raccourci Studio, sondage préparé, message du bot,
+élément d'overlay…) apparaît sans mettre LiveDeck à jour.
 
 1. Dans orchestream : **Réglages › Sécurité › Jetons API (Stream Deck)**, crée un jeton. Il ne s'affiche
-   **qu'une fois** : copie-le. Ses **permissions** décident des commandes que les touches peuvent lancer
-   (« Piloter le live » pour terminer le live, par exemple).
-2. Dans LiveDeck, Réglages → Intégrations, section orchestream : colle-le dans **Jeton API**, puis **Tester**.
-   Le résultat donne le nom du jeton et le nombre de commandes qu'il autorise.
-3. Bibliothèque, catégorie *Intégrations* : *Jeu : suivant*, *Tirer au sort*, *Tout remercier*, *Fin du
-   live*… ou l'action **orchestream : commande régie** pour les autres. Pour *Lancer un Twizz*, le quiz se
-   choisit dans une liste fournie par orchestream.
+   **qu'une fois** : copie-le. Ses **permissions** décident des touches proposées (« Piloter le live » pour
+   terminer le live, par exemple).
+2. Dans LiveDeck, Réglages → Intégrations, section orchestream : l'adresse **locale** du serveur (par ex.
+   `http://192.168.1.20:5174`), le **Jeton API**, puis **Tester**. Le résultat donne le nom du jeton et le
+   nombre de touches qu'il permet. Son adresse publique (tunnel, passerelle invités) est refusée : **Tester** te
+   le dit et te propose l'adresse locale.
+3. Pose une touche : bibliothèque, catégorie *Intégrations* (toutes les touches d'orchestream y sont, avec leur
+   rubrique), ou l'action **Orchestream** dans l'inspecteur. La touche se choisit dans une liste groupée par
+   rubrique (« Jeux », « Overlay », « Studio », « État »…), avec une recherche. Seul son identifiant est
+   enregistré (`game.advance`, `overlay.toggle:twizz`, `studio.shortcut:…`).
 
 Sur la touche :
 
 | Affichage | Signification |
 |---|---|
-| « Fermer Q3 », « Ouvrir Q4 », « Terminer » | ce que fera la prochaine pression de *Jeu : suivant* |
-| « 5 à remercier », fond orange | des viewers restent à remercier |
-| fond rouge, « 42 viewers » | le live est en cours (touche *Fin du live*) |
-| gris + raison | impossible maintenant : la raison est celle d'orchestream (« Aucune partie en cours ») |
-| NON AUTORISÉ | le jeton n'a pas la permission de cette commande |
-| HORS LIGNE, JETON ? | orchestream ne répond pas, ou aucun jeton n'est réglé |
+| titre + ce qui est en cours | tel qu'orchestream le décrit : « Fermer Q3 / Culture G », « Tout remercier / 3 à remercier », « Lumière plateau / Allumé » |
+| couleur vive | la touche est **allumée** (widget affiché, lumière allumée, sondage en cours…) ; couleur sombre sinon |
+| gris + raison | elle ne peut pas servir maintenant (« Aucune partie en cours. ») ; l'appui part quand même, orchestream revérifie |
+| INTROUVABLE | cette touche n'existe plus dans orchestream (raccourci supprimé) ou n'est plus permise au jeton |
+| HORS LIGNE, JETON REFUSÉ, JETON ?, ADRESSE ? | orchestream ne répond pas, refuse le jeton (révoqué), ou rien n'est réglé |
 
-Le jeton part dans l'en-tête `Authorization`, jamais dans l'adresse (orchestream ne l'y lit pas). L'état est
-relu toutes les 1,5 s et aussitôt après chaque commande ; si orchestream signale trop de requêtes, LiveDeck
-attend le délai demandé au lieu d'insister. Les overlays de la section précédente fonctionnent sans jeton.
+Une touche de la rubrique « État » (live, Hype Train, intégrations d'orchestream) ne fait qu'afficher. Le retour
+d'état **Touche orchestream** colore une autre touche selon une touche d'orchestream (allumée, éteinte,
+indisponible) : par exemple une touche vMix qui s'allume quand le live est en cours.
+
+Les touches arrivent par le **flux en direct** d'orchestream (`/api/deck/events`) : elles changent dans la
+seconde, sans interroger le serveur. Flux coupé : LiveDeck se reconnecte tout seul, de plus en plus
+espacé ; s'il ne peut pas ouvrir le flux alors qu'orchestream répond, il relit l'état chaque seconde en
+attendant. Le jeton part dans l'en-tête `Authorization`, jamais dans l'adresse ; si orchestream signale trop de
+requêtes, LiveDeck attend le délai demandé.
+
+Les anciennes touches (*Overlay orchestream* sans jeton, *orchestream : commande régie*) sont converties à
+l'ouverture : un overlay devient `overlay.toggle:<widget>` (ou `overlay.show:` / `overlay.hide:` selon son
+mode), une commande devient sa touche (`game.advance`, `twizz.start:<quiz>`). Il faut alors un jeton API.
+
+### Tally32
+
+Un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur te demande de
+mettre à jour son firmware.
 
 ### Régler py-multiview
 
@@ -361,12 +364,10 @@ numéroter garde la touche juste même si l'ordre change.
 
 À l'import Companion, coche **Convertir vers les intégrations natives** pour convertir :
 les touches *Intercom* (raccourcis Shift+A/Z/E via VICREO) vers l'API py-intercom (le raccourci est gardé en
-secours), les interrupteurs show/hide d'orchestream vers l'overlay suivi en direct, et le bouton *Check Tally*
+secours), les requêtes show/hide vers les overlays d'orchestream vers ses touches `overlay.toggle:<widget>`
+(jeton API à renseigner ensuite), et le bouton *Check Tally*
 (pings + GET + variables) vers la surveillance native des Tally32. Une configuration LiveDeck 1.x est convertie
 à l'ouverture ; les touches converties sont listées une fois dans le Moniteur.
-
-Limite de l'ancienne version (orchestream v1) : elle ne mémorise pas l'état de Twizz et du Sondage. Au
-démarrage, LiveDeck l'ignore (liseré gris) jusqu'au premier changement ; orchestream-v2 n'a plus cette limite.
 
 ## Commandes réseau : OSC, TCP / UDP, API JSON
 
@@ -448,7 +449,7 @@ Lancé depuis les sources, la recherche n'est pas automatique et LiveDeck ne s'i
 | Touche talkback DÉSARMÉ | Le client tourne mais n'est pas connecté au serveur intercom : connecte-le dans py-intercom. |
 | Touche talkback BUS ABSENT | Ce bus n'existe pas dans le client : choisis-en un autre dans l'étape *Intercom* (la liste vient du client). |
 | Talkback refusé « proxy » | Un proxy intercepte la requête : les adresses locales le contournent déjà ; pour une IP publique, vérifie `HTTP_PROXY` ou le proxy de Windows. |
-| Overlay orchestream avec liseré gris | orchestream v1 : état inconnu tant que l'overlay n'a pas changé depuis le démarrage (passe à orchestream-v2). Sinon, LiveDeck n'est pas connecté : clique **Tester** dans Réglages → Intégrations. |
+| Touche orchestream grise | La raison est écrite dessous (celle d'orchestream). HORS LIGNE ou JETON REFUSÉ : clique **Tester** dans Réglages → Intégrations. INTROUVABLE : la touche a disparu d'orchestream, choisis-en une autre dans l'inspecteur. |
 | Une variable affiche « — » | vMix est hors ligne ou l'input de la variable est introuvable. |
 | Une action ne fait rien | Ouvre le **Moniteur** : chaque refus de vMix (avec la commande refusée), d'un serveur HTTP, de py-intercom, d'orchestream ou d'un tally y est écrit avec son message. |
 

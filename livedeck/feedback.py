@@ -8,12 +8,24 @@ from . import adjust
 from .actions import F
 from .adjust import WIN_TARGETS
 from .health import JSON_OPS, json_compare, json_path, json_text, parse_targets
-from .integrations import (MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, bus_label,
-                           overlay_label)
+from .integrations import MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, bus_label
 
 RED, GREEN, YELLOW, BLUE = "#e5262b", "#22c55e", "#facc15", "#4040ff"
 OFF_BG, OFF_FG = "#1a1d24", "#5a6273"  # intégration indisponible : touche grisée
 BLACK, WHITE = "#000000", "#ffffff"
+
+# Couleur d'une touche orchestream (DeckKeyTone) : (allumée, éteinte). Un sens (« live » à l'antenne,
+# « success » en marche, « warning » quelque chose attend…) ou une couleur de la palette de la régie.
+ORCH_TONES = {
+    "neutral": ("#6b7280", "#1f2937"), "accent": ("#6366f1", "#1e1b4b"), "success": ("#16a34a", "#052e16"),
+    "warning": ("#f59e0b", "#3a2604"), "danger": ("#dc2626", "#3b0a0a"), "info": ("#0ea5e9", "#082f49"),
+    "live": ("#e5262b", "#3b0a0a"), "violet": ("#8b5cf6", "#2e1065"), "pink": ("#ec4899", "#4a0d2b"),
+    "amber": ("#f59e0b", "#3a2604"), "blue": ("#3b82f6", "#0c1f4a"), "green": ("#22c55e", "#052e16"),
+    "teal": ("#14b8a6", "#042f2e"), "orange": ("#f97316", "#431407"),
+}
+ORCH_KEY_STATES = [("show", "Toujours (texte, couleur et état d'orchestream)"), ("active", "Allumée"),
+                   ("inactive", "Éteinte"), ("unavailable", "Indisponible (avec la raison)"),
+                   ("offline", "orchestream injoignable ou jeton refusé")]
 
 FLAGS = [("recording", "Enregistrement en cours"), ("streaming", "Stream en cours"),
          ("external", "Sortie externe active"), ("multicorder", "MultiCorder actif"),
@@ -36,22 +48,13 @@ CONDITIONS: dict[str, dict] = {
                             F("state", "Quand", "choice", "active",
                               [("active", "Micro ouvert"), ("offline", "Indisponible (hors ligne, désarmé, bus absent)"),
                                ("always_on", "Bus toujours ouvert (mode du client)")])]},
-    "orchestream": {"label": "Overlay orchestream",
-                    "fields": [F("overlay", "Overlay", "orch_overlay", "twizz"),
-                               F("state", "Quand", "choice", "visible", [("visible", "Affiché"), ("hidden", "Masqué"),
-                                                                         ("unknown", "État inconnu")])]},
     "tally": {"label": "Tallys (Tally32)",
               "fields": [F("target", "Tally", "tally", "all"),
                          F("state", "Quand", "choice", "ko", [("ok", "Tous connectés à vMix"),
                                                              ("ko", "Au moins un hors ligne")])]},
-    "orchdeck": {"label": "orchestream : régie",
-                 "fields": [F("command", "Commande", "orch_command", "game.advance"),
-                            F("state", "Quand", "choice", "unavailable",
-                              [("unavailable", "La commande est impossible maintenant"),
-                               ("game", "Une partie est en cours"),
-                               ("live", "Le live est en cours"),
-                               ("unthanked", "Il reste des viewers à remercier"),
-                               ("offline", "orchestream injoignable ou jeton refusé")])]},
+    "orchkey": {"label": "Touche orchestream",
+                "fields": [F("key", "Touche", "orch_key", ""),
+                           F("state", "Quand", "choice", "active", ORCH_KEY_STATES)]},
     "multiview": {"label": "py-multiview",
                   "fields": [F("target", "Cible", "choice", "sender", MULTIVIEW_TARGETS),
                              F("ref", "Lequel", "mv_item", "", placeholder="nom ou numéro (1, 2…)",
@@ -100,50 +103,56 @@ def _short(text: str, n: int = 22) -> str:
     return text if len(text) <= n else text[:n - 1] + "…"
 
 
-def _eval_orchdeck(engine, b: dict, cond: dict) -> tuple[bool, dict]:
-    """Retours d'état de l'API Stream Deck d'orchestream-v2 (GET /api/deck/state)."""
-    od = engine.orchdeck
-    cid, state = cond.get("command", "game.advance"), cond.get("state", "unavailable")
-    base = (b.get("label") or "").strip()
+def _ink(bg: str) -> str:
+    """Texte lisible sur ce fond : noir sur une couleur claire, blanc sinon."""
+    try:
+        r, g, b = (int(bg[i:i + 2], 16) for i in (1, 3, 5))
+    except (TypeError, ValueError):
+        return WHITE
+    return BLACK if 0.299 * r + 0.587 * g + 0.114 * b > 150 else WHITE
+
+
+def orch_key_look(key: dict) -> dict:
+    """Apparence d'une touche décrite par orchestream : texte (titre, puis ce qui est en cours ou la raison
+    d'indisponibilité), couleur vive si allumée, sombre sinon, grisée si elle ne peut pas servir."""
+    title = str(key.get("title") or key.get("id") or "?")
+    if key.get("available") is False:
+        return {"label": f"{title}\n{_short(key.get('reason') or 'indisponible', 26)}", "bg": OFF_BG, "fg": OFF_FG}
+    lit, dark = ORCH_TONES.get(key.get("tone"), ORCH_TONES["neutral"])
+    bg = lit if key.get("active") else dark
+    sub = key.get("subtitle")
+    return {"label": f"{title}\n{_short(sub)}" if sub else title, "bg": bg, "fg": _ink(bg),
+            "lit": lit if key.get("active") else ""}
+
+
+def _eval_orchkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
+    """Touche décrite par orchestream-v2 (flux /api/deck/events), retrouvée par son identifiant."""
+    orch = engine.orchestream
+    kid, state = cond.get("key") or "", cond.get("state", "active")
+    if not kid:
+        return False, {}
+    base = (cond.get("title") or b.get("label") or kid).strip().split("\n")[0]
+    why = orch.unavailable()
+    grey = {"bg": OFF_BG, "fg": OFF_FG}
     if state == "offline":
-        why = od.unavailable()
-        return bool(why), ({"label": f"{base or 'orchestream'}\n{why}"} if why else {})
-    if od.unavailable():
+        return bool(why), ({"label": f"{base}\n{why}", **grey} if why else {})
+    if why:
+        return state == "show", ({"label": f"{base}\n{why}", **grey} if state == "show" else {})
+    key = orch.key(kid)
+    if key is None:
+        # La liste reçue ne la contient plus (raccourci supprimé, permission retirée au jeton) : indisponible.
+        if state == "show" or (state == "unavailable" and orch.has_keys):
+            return True, {"label": f"{base}\n{'INTROUVABLE' if orch.has_keys else '…'}", **grey}
         return False, {}
-    info = od.command_state(cid)
+    if state == "show":
+        return True, orch_key_look(key)
     if state == "unavailable":
-        # L'état ne liste que les commandes permises au jeton : absente d'un état bien reçu = refusée.
-        # Sans ce cas, une touche « Fin du live » sans la permission s'affichait en rouge « 42 viewers »,
-        # prête à servir, alors qu'orchestream la refuserait.
-        if info is None:
-            return isinstance(od.get("commands"), list), {"label": f"{base or cid}\nNON AUTORISÉ"}
-        if info.get("available") is False:
-            return True, {"label": f"{base or cid}\n{_short(info.get('reason') or 'indisponible')}"}
-        return False, {}
-    if state == "game":
-        g = od.get("game") or {}
-        nxt, n = g.get("nextAction"), g.get("questionNumber")
-        if cid == "game.advance" and nxt in ("close", "open", "finish"):
-            # Ce que fera la prochaine pression, écrit sur la touche (« Fermer Q3 »)
-            return True, {"label": ("Fermer Q{n}", "Ouvrir Q{n}", "Terminer")[("close", "open", "finish").index(nxt)]
-                          .format(n=n or "?")}
-        return g.get("phase") in ("open", "closed"), {}
-    if state == "widget":
-        widget = cond.get("widget") or ""
-        return bool((od.get("overlays") or {}).get(widget)), {}
-    if state == "unthanked":
-        n = od.get("unthanked") or 0
-        return n > 0, ({"label": f"{base or 'Remercier'}\n{n} à remercier"} if n else {})
-    if state == "live":
-        # Allumée quand le live est en cours : rouge « à l'antenne », comme l'enregistrement de vMix.
-        active = bool(od.get("live.active"))
-        if not active:
-            return False, {}
-        viewers = od.get("live.viewers")
-        if cid == "live.end" and viewers is not None:
-            return True, {"label": f"{base or 'Fin du live'}\n{viewers} viewers"}
-        return True, {}
-    return False, {}
+        out = key.get("available") is False
+        return out, ({"label": f"{key.get('title') or base}\n{_short(key.get('reason') or 'indisponible', 26)}"}
+                     if out else {})
+    if state == "inactive":
+        return not key.get("active"), {}
+    return bool(key.get("active")), {}
 
 
 def _program(inp, mix=1):
@@ -196,26 +205,9 @@ def _auto_press(b: dict) -> list[dict]:
             return [fb("intercom", "#2563eb", WHITE, bus=bus, state="active"),
                     fb("intercom", "#1e3a8a", WHITE, bus=bus, state="always_on"),
                     fb("intercom", OFF_BG, OFF_FG, bus=bus, state="offline")]
-        if t == "orchestream.overlay":
-            ov = a.get("overlay", "twizz")
-            return [fb("orchestream", YELLOW, BLACK, overlay=ov, state="visible"),
-                    fb("orchestream", bar="#5a6273", overlay=ov, state="unknown")]
-        if t == "orchestream.command":
-            cid = a.get("command") or "game.advance"
-            # Tous les retours vrais s'appliquent dans l'ordre : le DERNIER l'emporte. L'état propre à la
-            # commande d'abord, puis ce qui l'empêche de servir — qui doit primer : une touche « Fin du
-            # live » refusée au jeton s'affichait sinon en rouge « à l'antenne », prête à servir.
-            out = []
-            if cid in ("game.advance", "game.next", "game.close", "game.finish"):
-                out.append(fb("orchdeck", "#1d4ed8", WHITE, command=cid, state="game"))
-            elif cid == "overlay.show":
-                out.append(fb("orchdeck", YELLOW, BLACK, command=cid, state="widget", widget=a.get("arg", "")))
-            elif cid == "activity.ackAll":
-                out.append(fb("orchdeck", "#b45309", WHITE, command=cid, state="unthanked"))
-            elif cid in ("live.start", "live.end"):
-                out.append(fb("orchdeck", RED, WHITE, command=cid, state="live"))
-            return out + [fb("orchdeck", OFF_BG, OFF_FG, command=cid, state="unavailable"),
-                          fb("orchdeck", OFF_BG, OFF_FG, command=cid, state="offline")]
+        if t == "orchestream.key" and a.get("key"):
+            # Texte, couleur et état viennent d'orchestream (« show » : toujours vrai, l'apparence suit la touche)
+            return [fb("orchkey", key=a["key"], title=a.get("title") or "", state="show")]
         if t == "tally.reconnect":
             target = a.get("target", "all")
             return [fb("tally", "#237423", WHITE, target=target, state="ok"),
@@ -301,14 +293,6 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
             on = info.get("mode") == "always_on"
             return on, {"label": f"{base}\nPERMANENT"} if on else {}
         return bool(info.get("active")), {}
-    if t == "orchestream":
-        visible = engine.orchestream.overlays.get(cond.get("overlay", "twizz"))
-        state = cond.get("state", "visible")
-        if state == "unknown":
-            return visible is None, {}
-        if state == "hidden":
-            return visible is False, {}
-        return bool(visible), {}
     if t == "http_json":
         poller = getattr(engine, "jsonpoll", None)
         r = poller.results.get((cond.get("url") or "").strip()) if poller else None
@@ -320,8 +304,8 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         ok = json_compare(val, cond.get("op", "=="), cond.get("value", ""))
         fmt = cond.get("label_fmt") or ""
         return ok, {"label": fmt.replace("\\n", "\n").replace("{value}", json_text(val))} if ok and fmt else {}
-    if t == "orchdeck":
-        return _eval_orchdeck(engine, b, cond)
+    if t == "orchkey":
+        return _eval_orchkey(engine, b, cond)
     if t == "multiview":
         mv = engine.multiview
         target, ref = cond.get("target", "sender"), cond.get("ref", "")
@@ -403,9 +387,6 @@ def describe(f: dict) -> str:
                                 "DÉSARMÉ ou BUS ABSENT)",
                      "always_on": f"le bus {bus_label(c.get('bus'))} est toujours ouvert (texte : PERMANENT)"}.get(
             c.get("state"), f"le micro {bus_label(c.get('bus'))} est ouvert"),
-        "orchestream": {"unknown": "l'état de l'overlay est inconnu (pas encore changé, ou orchestream injoignable)",
-                        "hidden": f"l'overlay {overlay_label(c.get('overlay'))} est masqué"}.get(
-            c.get("state"), f"l'overlay {overlay_label(c.get('overlay'))} est affiché"),
         "http_json": ("l'API JSON est injoignable" if c.get("op") == "error" else
                       f"« {c.get('path') or 'la réponse'} » " + (
                           "est lue" if c.get("op") == "always" else
@@ -413,12 +394,11 @@ def describe(f: dict) -> str:
                           + (f" « {c.get('value')} »" if c.get("op") not in ("truthy",) else ""))),
         "tally": "tous les tallys sont connectés" if c.get("state") == "ok" else "un tally est hors ligne",
         "multiview": _multiview_text(c),
-        "orchdeck": {"offline": "orchestream est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
-                     "unavailable": "la commande est impossible maintenant (texte : la raison d'orchestream)",
-                     "game": "une partie est en cours (texte : ce que fera la prochaine pression)",
-                     "widget": "le widget est affiché",
-                     "unthanked": "il reste des viewers à remercier (texte : leur nombre)",
-                     "live": "le live est en cours"}.get(c.get("state"), "état de la régie orchestream"),
+        "orchkey": {"show": "toujours : texte, couleur et état de la touche d'orchestream",
+                    "offline": "orchestream est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
+                    "unavailable": "la touche ne peut pas servir maintenant (texte : la raison d'orchestream)",
+                    "inactive": f"la touche « {c.get('title') or c.get('key')} » est éteinte"}.get(
+            c.get("state"), f"la touche « {c.get('title') or c.get('key')} » est allumée"),
         "flag": dict(FLAGS).get(c.get("flag"), "").lower(),
         "toggle": "interrupteur activé",
         "pressed": "bouton enfoncé",
@@ -429,6 +409,8 @@ def describe(f: dict) -> str:
     }.get(t, t)
     if t == "level":
         return "Jauge et valeur du niveau réglé"
+    if t == "orchkey" and c.get("state") == "show":
+        return "Texte, couleur et état donnés par orchestream (grisée avec la raison si elle ne peut pas servir)"
     effect = "liseré" if f.get("bar") and not f.get("bg") else "fond"
     color = f.get("bar") if effect == "liseré" else f.get("bg")
     name = {RED: "rouge", GREEN: "vert", YELLOW: "jaune", BLUE: "bleu", "#2563eb": "bleu", "#237423": "vert",

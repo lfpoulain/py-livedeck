@@ -1,6 +1,5 @@
-"""Faux serveurs vMix, py-intercom, orchestream et Tally32 pour les tests."""
+"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32 et py-multiview pour les tests."""
 import json
-import queue
 import socket
 import sys
 import threading
@@ -126,147 +125,6 @@ class FakeIntercom:
     def stop(self):
         self.srv.shutdown()
         self.srv.server_close()
-
-
-class FakeOrchestream:
-    """orchestream-v2 (par défaut) ou v1 (v1=True).
-    v2 : GET /api/overlay/state, /api/overlay/<w>/show|hide (GET ou POST, 409 OVERLAY_EMPTY sans contenu),
-    temps réel Transmit (GET /__transmit/events?uid=…, POST /__transmit/subscribe {uid, channel}).
-    external=True imite une requête arrivée par l'adresse publique : 404 NOT_FOUND partout."""
-
-    def __init__(self, port, v1=False):
-        self.v1 = v1
-        self.external = False
-        self.visible = {"twizz": False, "poll": False, "speedizz": False}
-        self.content = {"twizz": True, "poll": True, "speedizz": False}  # v2 : un widget sans contenu refuse « show »
-        self.speedizz_run = False
-        self.clients: list[queue.Queue] = []
-        self.streams: dict[str, queue.Queue] = {}  # v2 : uid → file du flux
-        self.subscribed: dict[str, set] = {}
-        fake = self
-
-        class H(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def _send(self, code, data):
-                body = json.dumps(data).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def _stream(self, q, first: bytes, fmt):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
-                try:  # le client peut refermer tout de suite (bouton « Tester »)
-                    self.wfile.write(first)
-                    self.wfile.flush()
-                    while True:
-                        self.wfile.write(fmt(q.get()))
-                        self.wfile.flush()
-                except OSError:
-                    pass
-
-            def do_GET(self):
-                path = self.path.split("?", 1)[0]
-                if fake.external:
-                    return self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
-                if fake.v1:
-                    if path == "/api/overlay/events":
-                        q = queue.Queue()
-                        fake.clients.append(q)
-                        snap = {"isVisible": fake.visible["speedizz"]} if fake.speedizz_run else None
-                        # comme orchestream v1 : instantanés au branchement, puis battements de cœur
-                        self._stream(q, b"event: polls:snapshot\ndata: []\n\n:heartbeat\n\n"
-                                     + f"event: speedizz:snapshot\ndata: {json.dumps(snap)}\n\n".encode(),
-                                     lambda m: f"event: {m[0]}\ndata: {json.dumps(m[1])}\n\n".encode())
-                        fake.clients.remove(q)
-                        return
-                    return self.do_POST()
-                if path == "/api/overlay/state":
-                    return self._send(200, {"widgets": {w: fake.widget(w) for w in fake.visible}})
-                if path == "/__transmit/events":
-                    uid = self.path.split("uid=", 1)[-1] if "uid=" in self.path else ""
-                    if not uid:
-                        return self._send(500, {"error": {"code": "E_RUNTIME", "message": "Missing uid"}})
-                    q = queue.Queue()
-                    fake.streams[uid], fake.subscribed[uid] = q, set()
-                    self._stream(q, b":ok\n\n", lambda m: f"data: {json.dumps(m)}\n\n".encode())
-                    fake.streams.pop(uid, None)
-                    fake.subscribed.pop(uid, None)
-                    return
-                self.do_POST()
-
-            def do_POST(self):
-                path = self.path.split("?", 1)[0]
-                if fake.external:
-                    return self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
-                if path == "/__transmit/subscribe" and not fake.v1:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(n) or b"{}")
-                    if body.get("uid") not in fake.subscribed or body.get("channel") != "overlay":
-                        return self._send(400, {"error": {"code": "BAD_REQUEST", "message": "Requête invalide."}})
-                    fake.subscribed[body["uid"]].add("overlay")
-                    self.send_response(204)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                parts = path.strip("/").split("/")  # api overlay <name> <show|hide>
-                if len(parts) == 4 and parts[:2] == ["api", "overlay"]:
-                    name, act = parts[2], parts[3]
-                    if fake.v1:
-                        if name == "speedizz" and act == "show" and not fake.speedizz_run:
-                            return self._send(404, {"success": False, "message": "Aucun Speedizz à afficher"})
-                        fake.set(name, act == "show")
-                        return self._send(200, {"success": True, "isVisible": act == "show"})
-                    if name not in fake.visible:
-                        return self._send(422, {"error": {"code": "E_VALIDATION_ERROR", "message": "Requête invalide."}})
-                    if act == "show" and not fake.content[name]:
-                        return self._send(409, {"error": {"code": "OVERLAY_EMPTY",
-                                                          "message": "Aucun Speedizz à afficher : lancez une partie d’abord."}})
-                    fake.set(name, act == "show")
-                    return self._send(200, fake.widget(name))
-                if fake.v1:  # route inconnue d'AdonisJS 6 (orchestream v1)
-                    return self._send(404, {"errors": [{"message": f"Cannot {self.command}:{path}",
-                                                        "code": "E_ROUTE_NOT_FOUND"}]})
-                self._send(404, {"error": {"code": "NOT_FOUND", "message": "Ressource introuvable."}})
-
-            def log_message(self, *a):
-                pass
-
-        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-
-    def widget(self, name):
-        return {"widget": name, "visible": self.visible.get(name, False),
-                "data": {"name": name} if self.content.get(name, True) else None}
-
-    def set(self, name, visible):
-        """L'overlay change (depuis LiveDeck ou la régie d'orchestream) : diffusé aux clients abonnés."""
-        self.visible[name] = visible
-        self.content.setdefault(name, True)
-        if self.v1:
-            self.emit(f"{name}:overlay:toggle", {"isVisible": visible})
-        else:
-            self.broadcast("widget.update", self.widget(name))
-
-    def emit(self, ev, data):
-        """v1 : événement SSE nommé."""
-        for q in list(self.clients):
-            q.put((ev, data))
-
-    def broadcast(self, type_, data):
-        """v2 : message Transmit du canal « overlay »."""
-        msg = {"channel": "overlay", "payload": {"type": type_, "data": data, "at": "2026-11-04T12:00:00Z"}}
-        for uid, q in list(self.streams.items()):
-            if "overlay" in self.subscribed.get(uid, ()):
-                q.put(msg)
-
-    def ping(self):
-        for q in list(self.streams.values()):
-            q.put({"channel": "$$transmit/ping", "payload": {}})
 
 
 class FakeKeys:
@@ -484,36 +342,87 @@ class FakeMultiview:
 
 
 class FakeOrchDeck:
-    """API Stream Deck d'orchestream-v2, d'après packages/back (deck_controller, api_token_middleware) :
-    jeton dans « Authorization: Bearer » ou « X-Orchestream-Token » (jamais dans l'URL), 401
-    INVALID_TOKEN, 403 FORBIDDEN_ROLE selon les permissions du jeton, erreurs métier 409 avec message en
-    français, 429 TOO_MANY_REQUESTS + Retry-After, réponse { ok, message } des commandes."""
+    """API Stream Deck d'orchestream-v2, d'après packages/back (deck_controller, deck_keys, deck_stream_service,
+    api_token_middleware) : jeton dans « Authorization: Bearer » ou « X-Orchestream-Token » (jamais dans
+    l'URL), 401 INVALID_TOKEN, 403 FORBIDDEN_ROLE selon les permissions du jeton, erreurs métier 409 avec
+    message en français, 429 TOO_MANY_REQUESTS + Retry-After, réponse { ok, message } des commandes.
+    Touches décrites par le serveur (« keys ») et flux /api/deck/events : « state », puis « patch »."""
     TOKEN = "osk_test_123"
     PERMS = {"game.advance": "games.run", "game.next": "games.run", "draw.run": "games.run",
              "twizz.start": "games.run", "activity.ackAll": "thanks", "overlay.show": "overlay.control",
-             "live.end": "live.control"}
+             "overlay.hide": "overlay.control", "overlay.toggle": "overlay.control",
+             "studio.shortcut": "studio.control", "live.end": "live.control"}
+    WIDGETS = {"twizz": "Twizz", "poll": "Sondage", "speedizz": "Speedizz"}
 
-    def __init__(self, port):
-        self.permissions = {"read", "games.run", "thanks", "overlay.control"}  # pas live.control
+    def __init__(self, port, stream=True):
+        self.permissions = {"read", "games.run", "thanks", "overlay.control", "studio.control"}  # pas live.control
+        self.stream = stream  # False : orchestream sans /api/deck/events (le client lit l'état en secours)
         self.live = True
         self.game = {"kind": "twizz", "runName": "Culture G", "phase": "open", "questionIndex": 2,
                      "questionNumber": 3, "totalQuestions": 10, "nextAction": "close"}
         self.unthanked = 5
         self.overlays = {"twizz": True, "poll": False, "speedizz": False, "hypeTrain": False, "prediction": False}
+        self.shortcuts = {"s1": {"name": "Lumière plateau", "on": False, "tone": "amber"}}
         self.calls = []       # (commande, args, en-tête utilisé)
         self.reads = 0
+        self.streams = 0      # flux ouverts depuis le début
+        self.stream_headers = []  # en-têtes reçus à l'ouverture du flux
         self.throttle = 0     # nombre de 429 à renvoyer
+        self.revoked = False  # jeton révoqué : flux fermés, 401 ensuite
         self.quizzes = [{"value": "q-1", "label": "Culture G"}, {"value": "q-2", "label": "Cinéma"}]
         fake = self
+
+        def allowed(cid):
+            return self.PERMS[cid] in fake.permissions
 
         def info(cid):
             return {"id": cid, "label": cid, "permission": self.PERMS[cid], "description": "",
                     "available": not (cid == "draw.run" and not fake.live),
                     "reason": None if fake.live or cid != "draw.run" else "Aucune session live en cours.",
-                    "argNames": ["quizId"] if cid == "twizz.start" else (["widget"] if cid == "overlay.show" else [])}
+                    "argNames": {"twizz.start": ["quizId"], "studio.shortcut": ["shortcut"]}.get(
+                        cid, ["widget"] if cid.startswith("overlay.") else [])}
 
-        def allowed(cid):
-            return self.PERMS[cid] in fake.permissions
+        def key(kid, group, command, title, args=None, subtitle=None, active=False, tone="neutral",
+                available=True, reason=None):
+            return {"id": kid, "group": group, "command": command, "args": args or {}, "title": title,
+                    "subtitle": subtitle, "active": active, "tone": tone, "available": available,
+                    "reason": None if available else reason}
+
+        def keys():
+            g, out = fake.game, []
+            if allowed("game.advance"):
+                nxt = g["nextAction"]
+                title = {"close": "Fermer Q{n}", "open": "Ouvrir Q{n}", "finish": "Terminer"}.get(nxt, "Suivant")
+                out.append(key("game.advance", "Jeux", "game.advance", title.format(n=g["questionNumber"]),
+                               subtitle=g["runName"], tone="accent", available=g["phase"] != "idle",
+                               reason="Aucune partie en cours."))
+            if allowed("twizz.start"):
+                out += [key(f"twizz.start:{q['value']}", "Jeux", "twizz.start", f"Twizz {q['label']}",
+                            {"quizId": q["value"]}, tone="accent") for q in fake.quizzes]
+            if allowed("draw.run"):
+                out.append(key("draw.run", "Tirages", "draw.run", "Tirer au sort", available=fake.live,
+                               reason="Aucune session live en cours."))
+            if allowed("activity.ackAll"):
+                n = fake.unthanked
+                out.append(key("activity.ackAll", "Chat et remerciements", "activity.ackAll", "Tout remercier",
+                               subtitle=f"{n} à remercier" if n else None, active=n > 0,
+                               tone="warning" if n else "neutral"))
+            for verb in ("toggle", "show", "hide"):
+                if allowed(f"overlay.{verb}"):
+                    out += [key(f"overlay.{verb}:{w}", "Overlay", f"overlay.{verb}", label, {"widget": w},
+                                subtitle="Affiché" if fake.overlays.get(w) else None,
+                                active=bool(fake.overlays.get(w)), tone="violet")
+                            for w, label in fake.WIDGETS.items()]
+            if allowed("studio.shortcut"):
+                out += [key(f"studio.shortcut:{sid}", "Studio", "studio.shortcut", s["name"], {"shortcut": sid},
+                            subtitle="Allumé" if s["on"] else "Éteint", active=s["on"], tone=s["tone"])
+                        for sid, s in fake.shortcuts.items()]
+            if allowed("live.end"):
+                out.append(key("live.end", "Live", "live.end", "Fin du live", tone="danger", available=fake.live,
+                               reason="Aucun live en cours."))
+            out.append(key("status:live", "État", None, "Live", subtitle="42 viewers" if fake.live else None,
+                           active=fake.live, tone="live"))
+            return out
 
         def state():
             return {"token": {"name": "Stream Deck plateau", "permissions": sorted(fake.permissions)},
@@ -525,9 +434,25 @@ class FakeOrchDeck:
                     "prediction": {"active": False, "status": None, "title": None, "locksAt": None},
                     "unthanked": fake.unthanked, "overlays": dict(fake.overlays),
                     "lanes": {"pending": 0, "running": 0},
-                    "commands": [info(c) for c in fake.PERMS if allowed(c)], "updatedAt": "2026-11-06T12:00:00Z"}
+                    "commands": [info(c) for c in fake.PERMS if allowed(c)], "keys": keys(),
+                    "updatedAt": "2026-11-06T12:00:00Z"}
+
+        def patch(old, new):
+            """Comme deckStatePatch : sections changées (entières), touches changées ou nouvelles, disparues."""
+            changed = {k: v for k, v in new.items() if k not in ("keys", "updatedAt") and old.get(k) != v}
+            before = {k["id"]: k for k in old["keys"]}
+            now = {k["id"]: k for k in new["keys"]}
+            keys_ = [k for kid, k in now.items() if before.get(kid) != k]
+            removed = [kid for kid in before if kid not in now]
+            if not (changed or keys_ or removed):
+                return None
+            return {"changed": changed, "keys": keys_, "removedKeys": removed, "updatedAt": new["updatedAt"]}
+
+        self.state, self.patch = state, patch
 
         class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def _send(self, code, data, headers=None):
                 body = json.dumps(data, ensure_ascii=False).encode()
                 self.send_response(code)
@@ -546,7 +471,7 @@ class FakeOrchDeck:
                 auth = self.headers.get("Authorization") or ""
                 raw = auth[7:].strip() if auth.lower().startswith("bearer ") else (
                     self.headers.get("X-Orchestream-Token") or "").strip()
-                if raw != fake.TOKEN:
+                if raw != fake.TOKEN or fake.revoked:
                     self._err(401, "INVALID_TOKEN", "Jeton API manquant, invalide ou révoqué.")
                     return None
                 if fake.throttle:
@@ -556,11 +481,44 @@ class FakeOrchDeck:
                     return None
                 return "bearer" if auth else "custom"
 
+            def _events(self):
+                fake.streams += 1
+                fake.stream_headers.append(dict(self.headers))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                last = state()
+                self.wfile.write(f"event: state\ndata: {json.dumps(last, ensure_ascii=False)}\n\n".encode())
+                self.wfile.flush()
+                beat = time.monotonic()
+                while not fake.revoked:  # le serveur regarde régulièrement (chaque seconde ; ici plus vite)
+                    time.sleep(0.05)
+                    new = state()
+                    p = patch(last, new)
+                    if p:
+                        last = new
+                        self.wfile.write(f"event: patch\ndata: {json.dumps(p, ensure_ascii=False)}\n\n".encode())
+                        self.wfile.flush()
+                    elif time.monotonic() - beat > 1:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        beat = time.monotonic()
+
             def do_GET(self):
                 if self._auth() is None:
                     return
                 fake.reads += 1
                 path = self.path.split("?")[0]
+                if path == "/api/deck/events":
+                    if not fake.stream:  # orchestream sans le flux : route inconnue d'AdonisJS
+                        return self._err(404, "E_ROUTE_NOT_FOUND", "Cannot GET:/api/deck/events")
+                    try:
+                        return self._events()
+                    except OSError:
+                        return
                 if path == "/api/deck/state":
                     return self._send(200, state())
                 if path == "/api/deck/commands":
@@ -582,17 +540,32 @@ class FakeOrchDeck:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
                 cid = unquote(self.path.split("/api/deck/commands/", 1)[-1].split("?")[0])
-                fake.calls.append((cid, (body or {}).get("args") or {}, how))
+                args = (body or {}).get("args") or {}
+                fake.calls.append((cid, args, how))
                 if cid not in fake.PERMS:
                     return self._err(404, "COMMAND_NOT_FOUND", f"Commande inconnue : {cid}")
                 if not allowed(cid):
                     return self._err(403, "FORBIDDEN_ROLE",
                                      "Action non autorisée pour le jeton « Stream Deck plateau ».")
                 if cid == "twizz.start":
-                    quiz = ((body or {}).get("args") or {}).get("quizId")
-                    if quiz not in {q["value"] for q in fake.quizzes}:
+                    if args.get("quizId") not in {q["value"] for q in fake.quizzes}:
                         return self._err(422, "VALIDATION_FAILED", "Quiz inconnu.")
                     return self._send(200, {"ok": True, "message": "Twizz lancé"})
+                if cid.startswith("overlay."):
+                    w = args.get("widget")
+                    if w not in fake.overlays:
+                        return self._err(422, "VALIDATION_FAILED", "Widget inconnu.")
+                    if w == "speedizz" and cid != "overlay.hide":
+                        return self._err(409, "OVERLAY_EMPTY", "Aucun Speedizz à afficher.")
+                    fake.overlays[w] = {"overlay.show": True, "overlay.hide": False}.get(cid, not fake.overlays[w])
+                    return self._send(200, {"ok": True, "message": f"{fake.WIDGETS.get(w, w)} "
+                                                                   f"{'affiché' if fake.overlays[w] else 'masqué'}"})
+                if cid == "studio.shortcut":
+                    s = fake.shortcuts.get(args.get("shortcut"))
+                    if not s:
+                        return self._err(422, "VALIDATION_FAILED", "Raccourci inconnu.")
+                    s["on"] = not s["on"]
+                    return self._send(200, {"ok": True, "message": f"{s['name']} {'allumé' if s['on'] else 'éteint'}"})
                 if cid == "game.advance":
                     if fake.game["phase"] == "idle":
                         return self._err(409, "NO_ACTIVE_GAME", "Aucune partie en cours.")
@@ -615,4 +588,5 @@ class FakeOrchDeck:
                 pass
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()

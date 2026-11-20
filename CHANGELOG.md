@@ -1,5 +1,28 @@
 # Journal des versions
 
+## 1.10.0 — 2026-11-20
+
+### Touches orchestream décrites par le serveur
+- **Une seule action « Orchestream »** : la touche se choisit dans la liste qu'orchestream-v2 envoie, groupée par
+  rubrique (« Jeux », « Overlay », « Studio », « État »…) et avec une recherche. Plus aucune liste de commandes en
+  dur : chaque raccourci Studio, widget, élément d'overlay, sondage préparé, quiz… a sa touche, et une nouveauté
+  d'orchestream apparaît sans mettre LiveDeck à jour. La bibliothèque propose aussi toutes ces touches.
+- **Texte, couleur et état viennent d'orchestream** : titre et ce qui est en cours (« Fermer Q3 / Culture G »,
+  « Tout remercier / 3 à remercier »), couleur vive quand la touche est allumée, grisée avec la raison quand elle
+  ne peut pas servir. Une touche supprimée dans orchestream s'affiche INTROUVABLE ; un jeton révoqué, JETON REFUSÉ.
+- **En direct** : les touches suivent le flux `/api/deck/events` (changement visible dans la seconde, sans
+  interroger le serveur), avec reconnexion automatique ; si le flux ne s'ouvre pas, l'état est relu chaque seconde.
+- Nouveau retour d'état **Touche orchestream** (allumée, éteinte, indisponible, injoignable) pour colorer n'importe
+  quelle touche selon orchestream.
+- Le jeton API est maintenant nécessaire pour toutes les touches orchestream ; il part toujours dans l'en-tête.
+
+### Retiré
+- L'ancienne action *Overlay orchestream* (raccourcis publics `/api/overlay/<widget>/show|hide` sans jeton), la
+  prise en charge d'orchestream v1, la liste des overlays dans les Réglages et l'action *orchestream : commande
+  régie*. Les touches existantes sont **converties à l'ouverture** : un overlay devient `overlay.toggle:<widget>`
+  (ou `overlay.show:` / `overlay.hide:` selon son mode), une commande devient sa touche (`game.advance`,
+  `twizz.start:<quiz>`). Une page importée ou un import Companion avec « intégrations natives » sont convertis aussi.
+
 ## 1.9.1 — 2026-11-12
 
 ### Corrections
