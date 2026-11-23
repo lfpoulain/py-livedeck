@@ -1,6 +1,6 @@
 # Journal des versions
 
-## 1.10.0 — 2026-11-20
+## 1.10.0 — 2026-11-23
 
 ### Touches orchestream décrites par le serveur
 - **Une seule action « Orchestream »** : la touche se choisit dans la liste qu'orchestream-v2 envoie, groupée par
