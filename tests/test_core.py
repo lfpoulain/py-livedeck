@@ -1427,7 +1427,7 @@ def test_integration_settings_and_details(tmp_path):
     assert not e.intercom.forced and not e.orchestream.forced
     # bibliothèque : intégrations d'après les services réglés
     from livedeck import presets
-    lib = dict(presets.library(e))["Intégrations"]
+    lib = [it for c, items in presets.library(e) if c in presets.TOOL_NAMES for it in items]
     assert {"talk:regie", "deck:orchestream", "tallies"} <= {pid_ for pid_, _, _ in lib}, lib  # jeton changé
     # tally à l'ancien firmware : la reconnexion explique quoi faire
     tap(e, pid, "0,0")
@@ -1524,12 +1524,12 @@ def test_empty_key_picker_and_take(tmp_path):
     w.grid.select("0,0")
     # touche vide : toutes les familles, intégrations comprises, par catégorie et avec recherche
     cats = [c for c, _ in ins.picker_items()]
-    assert cats[:2] == ["Vidéo", "Intégrations"] and {"Production", "Clavier", "Web", "Réseau", "Deck"} <= set(cats)
+    assert cats[:3] == ["Vidéo", "py-intercom", "orchestream"] and set(presets.TOOL_NAMES) <= set(cats) and {"Production", "Clavier", "Web", "Réseau", "Deck"} <= set(cats)
     ids = {pid_ for _, items in ins.picker_items() for pid_, *_ in items}
     assert {"take", "tallies", "talk_alloff", "http", "osc", "page_next"} <= ids
     assert any(i.startswith("talk:") for i in ids) and {"deck:orchestream", "deck:multiview"} <= ids
     ins._pick_filter(text="intercom")
-    assert {c for c, _ in ins.picker_items()} == {"Intégrations"}
+    assert {c for c, _ in ins.picker_items()} == {"py-intercom"}
     names = [n for _, items in ins.picker_items() for _, n, _, _ in items]
     assert "Raccourci maintenu" not in names        # le PTT clavier n'est pas confondu avec py-intercom
     ins._pick_filter(text="", cat="Clavier")
@@ -1608,10 +1608,26 @@ def test_rows_pages_monitor_and_import_options(tmp_path):
     assert "py-intercom" in w.integ_pills["intercom"].toolTip() and not w.integ_all.isVisibleTo(w)
     # bibliothèque « Boutons » : recherche (les en-têtes sans résultat disparaissent)
     lib = w.library.presets
-    lib.search.setText("intercom")
+    lib.search.setText("stinger")
     shown = [lib.list.item(r) for r in range(lib.list.count()) if not lib.list.item(r).isHidden()]
-    heads = [it.data(Qt.UserRole + 4) for it in shown if it.data(Qt.UserRole + 2) == "head"]
-    assert heads == ["Intégrations"] and len(shown) > 1, heads
+    heads = [it.data(Qt.UserRole + 4) for it in shown if it.data(Qt.UserRole + 2)]
+    assert heads == ["Vidéo"] and len(shown) == 3, heads
+    assert not set(presets.TOOL_NAMES) & {lib.list.item(r).data(Qt.UserRole + 4) for r in range(lib.list.count())}
+    # … les outils ont leur onglet : un titre par outil (avec son état), ses rubriques, un filtre par outil
+    tools = w.library.tools
+
+    def visible(kind=None):
+        its = [tools.list.item(r) for r in range(tools.list.count()) if not tools.list.item(r).isHidden()]
+        return [it.data(Qt.UserRole + 4) for it in its if kind is None or it.data(Qt.UserRole + 2) == kind]
+
+    assert visible("tool") == presets.TOOL_NAMES, visible("tool")
+    tools.search.setText("talkback")
+    assert visible("tool") == ["py-intercom"] and visible("sub") == ["Talkback"] and len(visible("")) >= 1
+    tools.search.clear()
+    w.library.show_tools("Tally32")
+    assert w.library.stack.currentWidget() is tools and visible("tool") == ["Tally32"] and visible("") == ["Tallys"]
+    tools.show_tool("")
+    lib.search.clear()
     lib.search.clear()
     # info-bulle d'une touche du deck : ce qu'elle fait et ce qui cloche
     e.set_button(pid, "0,0", new_button(label="X", actions=[new_action("vmix.program", input="Inconnu au bataillon")]))
@@ -1831,7 +1847,7 @@ def test_review_small_fixes(tmp_path):
     assert wait(lambda: e.intercom.buses)
     tiles = {p: (d, s) for _, items in presets.catalog(e) for p, _, d, s in items}
     assert tiles["talk:vmix"][1] == "always_on" and "toujours ouvert" in tiles["talk:vmix"][0]
-    assert tiles["talk:plateau"] == ("py-intercom, bascule", "") and tiles["talk:regie"][1] == ""
+    assert tiles["talk:plateau"] == ("Talkback · bascule", "") and tiles["talk:regie"][1] == ""
     # import « Ajouter les pages » : les réglages trouvés par la conversion sont repris
     imp = {"integrations": {"orchestream": {"url": "http://orch.local"},
         "tallies": [{"name": "Cam 1", "host": "10.0.0.11"}, {"name": "Cam 2", "host": "10.0.0.12"}]}}
@@ -3622,7 +3638,7 @@ def test_orchestream_catalog_and_picker(tmp_path):
     assert presets.make("deck:orchestream")["actions"][0] == {"type": "deck.key", "app": "orchestream", "key": ""}
     e, od, pg, _ = orch_engine(tmp_path, 18264)
     assert wait(lambda: e.orchestream.has_keys, 5)
-    lib = dict(presets.library(e))["Intégrations"]
+    lib = [it for c, items in presets.library(e) if c in presets.TOOL_NAMES for it in items]
     ids = {pid_ for pid_, _, _ in lib}
     assert {"deck:orchestream:game.advance", "deck:orchestream:studio.shortcut:s1",
             "deck:orchestream:status:live"} <= ids, ids
@@ -3695,7 +3711,7 @@ def test_multiview_deck_keys_follow_the_stream(tmp_path):
     row = next(r for r in integrations.integration_status(e) if r[0] == "multiview")
     assert row[2] is True and "touche(s)" in row[3] and "flux en direct" in row[3], row
     # Bibliothèque : les touches que décrit py-multiview
-    lib = dict(presets.library(e))["Intégrations"]
+    lib = [it for c, items in presets.library(e) if c in presets.TOOL_NAMES for it in items]
     ids = {pid_ for pid_, _, _ in lib}
     assert {"deck:multiview:sender.toggle", "deck:multiview:stream.toggle:s-1"} <= ids, ids
     b = presets.make("deck:multiview:stream.toggle:s-2", e)
@@ -3845,7 +3861,7 @@ def test_mixpanel_deck_keys_follow_the_stream(tmp_path):
     row = next(r for r in integrations.integration_status(e) if r[0] == "mixpanel")
     assert row[1] == "MixPanel" and row[2] is True and "touche(s)" in row[3] and "flux en direct" in row[3], row
     # Bibliothèque et sélecteur de l'inspecteur : les touches que décrit MixPanel
-    lib = dict(presets.library(e))["Intégrations"]
+    lib = [it for c, items in presets.library(e) if c in presets.TOOL_NAMES for it in items]
     ids = {pid_ for pid_, _, _ in lib}
     assert {"deck:mixpanel:scene.recall:s1", "deck:mixpanel:macro.run:m1", "deck:mixpanel:page.toggle",
             "deck:mixpanel:console.modeToggle", "deck:mixpanel:status.xtouch"} <= ids, ids
@@ -4120,7 +4136,7 @@ def test_dmaix_catalog_picker_and_settings(tmp_path):
     assert "touche(s)" in dlg.deck_status["dmaix"].text(), dlg.deck_status["dmaix"].text()
     dlg._test("dmaix")
     assert wait(lambda: "touche(s)" in dlg._tests["dmaix"][1].text(), 6), dlg._tests["dmaix"][1].text()
-    lib = dict(presets.library(e))["Intégrations"]
+    lib = [it for c, items in presets.library(e) if c in presets.TOOL_NAMES for it in items]
     ids = {pid_ for pid_, _, _ in lib}
     assert {"deck:dmaix:scene.play:sc-1", "deck:dmaix:effect.toggle:fx-2", "deck:dmaix:effects.stopAll",
             "deck:dmaix:dmx.blackout", "deck:dmaix:output.status", "deck:dmaix:scene.current"} <= ids, ids
@@ -4548,6 +4564,83 @@ def test_key_labels_have_no_missing_glyph():
     old = render.render({"label": "▶", "bg": "#000000", "fg": "#ffffff"}, 72)
     new = render.render({"label": "►", "bg": "#000000", "fg": "#ffffff"}, 72)
     assert old.tobytes() == new.tobytes()
+
+
+
+def test_deck_key_own_text_and_colors(tmp_path):
+    """Touche décrite par une app : on peut garder son texte et ses couleurs. L'état de l'app reste visible
+    (liseré quand elle est allumée) et une touche qui ne peut pas servir reste grisée avec sa raison."""
+    from livedeck.feedback import ORCH_TONES
+    e, dm, pg, logs = dmaix_engine(tmp_path, 18283)
+    d = e.deck("dmaix")
+    assert wait(lambda: d.connected and d.has_keys, 5), d.error
+
+    def key_(text=None, colors=None, kid="scene.play:sc-2", label="BLEU", bg="#102030"):
+        opts = {k: v for k, v in (("text", text), ("colors", colors)) if v}
+        return new_button(label=label, bg=bg, fg="#ffeedd", actions=[new_action("deck.key", app="dmaix", key=kid, **opts)])
+
+    assert "text" not in new_action("deck.key") and "colors" not in new_action("deck.key")  # rien d'ajouté par défaut
+    assert "text" not in auto(key_())[0]["cond"] and auto(key_("own", "own"))[0]["cond"]["text"] == "own"
+    for k, b in {"2,0": key_(), "2,1": key_("title"), "2,2": key_("own"), "2,3": key_("own_state"),
+                 "2,4": key_("own", "own")}.items():
+        e.set_button(pg, k, b)
+    assert vis_of(e, pg, "2,0")["label"] == "Ambiance bleue" and vis_of(e, pg, "2,0")["bg"] == ORCH_TONES["neutral"][1]
+    assert vis_of(e, pg, "2,2")["label"] == "BLEU" and vis_of(e, pg, "2,2")["bg"] == ORCH_TONES["neutral"][1]
+    v = vis_of(e, pg, "2,4")
+    assert (v["label"], v["bg"], v["fg"], v["bar"]) == ("BLEU", "#102030", "#ffeedd", ""), v
+    tap(e, pg, "2,0")                                      # la scène joue : chaque touche le montre à sa façon
+    assert wait(lambda: vis_of(e, pg, "2,0")["label"] == "Ambiance bleue\nEn cours", 2)
+    lit = ORCH_TONES["success"][0]
+    assert vis_of(e, pg, "2,1")["label"] == "Ambiance bleue" and vis_of(e, pg, "2,1")["bg"] == lit
+    assert vis_of(e, pg, "2,2")["label"] == "BLEU" and vis_of(e, pg, "2,2")["bg"] == lit
+    assert vis_of(e, pg, "2,3")["label"] == "BLEU\nEn cours"
+    v = vis_of(e, pg, "2,4")
+    assert (v["label"], v["bg"], v["fg"], v["bar"]) == ("BLEU", "#102030", "#ffeedd", lit), v
+    # un retour d'état ajouté à la main passe par-dessus : sa propre couleur quand la touche est allumée
+    b = key_("own", "own")
+    b["feedbacks"] = [fb("deckkey", "#ff00ff", "#000000", app="dmaix", key="scene.play:sc-2", state="active")]
+    e.set_button(pg, "2,4", b)
+    assert vis_of(e, pg, "2,4")["bg"] == "#ff00ff" and vis_of(e, pg, "2,4")["label"] == "BLEU"
+    # touche qui ne peut pas servir : grisée avec la raison, même avec ses propres couleurs et son texte
+    e.set_button(pg, "2,4", key_("own", "own", kid="effects.stopAll", label="STOP"))
+    v = vis_of(e, pg, "2,4")
+    assert v["bg"] == OFF_BG and v["label"].startswith("STOP\nAucun effet"), v
+    # sans texte à soi, « Mon texte » retombe sur le titre de l'app
+    e.set_button(pg, "2,4", key_("own", kid="scene.play:sc-1", label=""))
+    assert vis_of(e, pg, "2,4")["label"] == "Plein feu"
+    # l'inspecteur propose les deux réglages
+    keys = [f["key"] for f in ACTIONS["deck.key"]["fields"]]
+    assert keys == ["app", "key", "text", "colors"]
+    e.stop()
+
+
+def test_tools_have_their_own_sections(tmp_path):
+    """Chaque outil a sa section (état, rubriques annoncées par l'app) au lieu d'un bloc « Intégrations »,
+    dans la bibliothèque comme dans le choix d'une touche vide ; la vignette montre la touche de l'app."""
+    from livedeck.ui.deck_view import preset_thumb
+    e, dm, pg, logs = dmaix_engine(tmp_path, 18284)
+    assert wait(lambda: e.deck("dmaix").has_keys, 5)
+    tools = {t["name"]: t for t in presets.tools(e)}
+    assert list(tools) == presets.TOOL_NAMES == ["py-intercom", "orchestream", "py-multiview", "MixPanel", "DMAIX",
+                                                  "Caméras ONVIF", "Tally32"]
+    dmx = tools["DMAIX"]
+    assert dmx["ok"] is True and "touche(s)" in dmx["status"]
+    assert [g for g, _ in dmx["groups"]] == ["État", "Scènes", "Effets", "Commandes"]
+    scenes = dict(dmx["groups"])["Scènes"]
+    assert ("deck:dmaix:scene.play:sc-2", "Ambiance bleue", "") in scenes, scenes
+    assert tools["py-intercom"]["groups"][0][0] == "Talkback"
+    assert tools["orchestream"]["ok"] is None and tools["orchestream"]["groups"][0][1][0][0] == "deck:orchestream"
+    cats = [c for c, _ in presets.library(e)]
+    assert "Intégrations" not in cats and set(presets.TOOL_NAMES) <= set(cats)
+    assert dict(presets.library(e))["DMAIX"][0][2].startswith("État")       # la rubrique précède la description
+    assert presets.color("DMAIX") == "#ec4899" and presets.color("Vidéo") and presets.color("?", "x") == "x"
+    assert [c for c, _ in presets.catalog(e)][:6] == ["Vidéo", *presets.TOOL_NAMES[:5]]
+    a = preset_thumb(e, "deck:dmaix:scene.play:sc-2", "Ambiance bleue", 32).toImage()
+    tap(e, pg, "0,2")
+    assert wait(lambda: (e.deck("dmaix").key("scene.play:sc-2") or {}).get("active"), 2)
+    b = preset_thumb(e, "deck:dmaix:scene.play:sc-2", "Ambiance bleue", 32).toImage()
+    assert a != b, "la vignette suit l'état de la touche"
+    e.stop()
 
 
 if __name__ == "__main__":

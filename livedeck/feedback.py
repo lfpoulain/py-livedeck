@@ -122,6 +122,27 @@ def deck_key_look(key: dict) -> dict:
             "lit": lit if key.get("active") else ""}
 
 
+def _own_look(look: dict, key: dict, text: str, colors: str, mine: str) -> dict:
+    """Apparence de l'app, corrigée par les choix de l'utilisateur. Une touche qui ne peut pas servir reste
+    grisée avec sa raison : c'est une information à ne jamais masquer."""
+    out = key.get("available") is False
+    title = str(key.get("title") or key.get("id") or "?")
+    extra = look.get("label", "").partition("\n")[2]  # ce qui est en cours, ou la raison d'indisponibilité
+    if text == "title" and not out:
+        look["label"] = title
+    elif text in ("own", "own_state") and mine:
+        if text == "own" and not out:
+            look.pop("label")  # le libellé de la touche (Apparence), variables comprises
+        else:
+            look["label"] = f"{mine}\n{extra}" if extra else mine
+    if colors == "own" and not out:
+        lit = look.get("lit")
+        look = {k: v for k, v in look.items() if k not in ("bg", "fg", "lit")}
+        if lit:
+            look["bar"] = lit  # allumée : liseré à la couleur de l'app, sur les couleurs de la touche
+    return look
+
+
 def _eval_deckkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
     """Touche décrite par une app (flux /api/deck/events), retrouvée par son app et son identifiant."""
     orch = engine.deck(cond.get("app") or DECK_DEFAULT_APP)
@@ -129,6 +150,9 @@ def _eval_deckkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
     if not kid:
         return False, {}
     base = (cond.get("title") or b.get("label") or kid).strip().split("\n")[0]
+    text, mine = cond.get("text") or "app", (b.get("label") or "").strip()
+    if text in ("own", "own_state") and mine:  # texte de l'utilisateur : il reste en tête, quoi qu'il arrive
+        base = mine
     why = orch.unavailable()
     grey = {"bg": OFF_BG, "fg": OFF_FG}
     if state == "offline":
@@ -142,7 +166,7 @@ def _eval_deckkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
             return True, {"label": f"{base}\n{'INTROUVABLE' if orch.has_keys else '…'}", **grey}
         return False, {}
     if state == "show":
-        return True, deck_key_look(key)
+        return True, _own_look(deck_key_look(key), key, text, cond.get("colors") or "app", mine)
     if state == "unavailable":
         out = key.get("available") is False
         return out, ({"label": f"{key.get('title') or base}\n{_short(key.get('reason') or 'indisponible', 26)}"}
@@ -204,8 +228,10 @@ def _auto_press(b: dict) -> list[dict]:
                     fb("intercom", OFF_BG, OFF_FG, bus=bus, state="offline")]
         if t == "deck.key" and a.get("key"):
             # Texte, couleur et état viennent de l'app (« show » : toujours vrai, l'apparence suit la touche)
+            # « text » / « colors » : seulement s'ils ne sont pas ceux de l'app (rien de plus dans les autres cas)
+            own = {k: a[k] for k in ("text", "colors") if a.get(k) not in (None, "", "app")}
             return [fb("deckkey", app=a.get("app") or DECK_DEFAULT_APP, key=a["key"], title=a.get("title") or "",
-                       state="show")]
+                       state="show", **own)]
         if t in ("vmix.ptz", "onvif.ptz"):
             # bleu tant que la caméra bouge (touche enfoncée) ; ONVIF : grisée si la caméra ne répond pas
             held = [fb("pressed", BLUE, WHITE)] if is_momentary(a) else []

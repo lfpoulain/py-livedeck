@@ -431,7 +431,7 @@ DECK_APPS: dict[str, dict] = {
                  "section": "CONSOLE X-TOUCH",
                  "hint": "MixPanel décrit lui-même ses touches (scènes, macros, ducking, page A / B, "
                          "verrouillage, mode de la X-Touch, état de vMix et de la X-Touch) et les met à jour en "
-                         "direct : bibliothèque (Intégrations) ou action « Touche d'une app »."},
+                         "direct : bibliothèque (onglet Outils) ou action « Touche d'une app »."},
     # DMAIX (contrôleur DMX, dmaix-v2) : scènes, effets, Stop effets, Blackout, état de la sortie DMX. Souvent sur
     # un autre poste : pas d'adresse par défaut ; une IP seule suffit, le port 6174 est ajouté.
     "dmaix": {"name": "DMAIX", "label": "DMAIX", "cfg": "dmaix", "default": "", "example": "192.168.1.30:6174",
@@ -439,7 +439,7 @@ DECK_APPS: dict[str, dict] = {
               "public_404": False, "port": 6174, "section": "CONTRÔLEUR DMX",
               "hint": "DMAIX décrit lui-même ses touches (une par scène et par effet de sa bibliothèque, Stop "
                       "effets, Blackout, sortie DMX et scène en cours) et les met à jour en direct : bibliothèque "
-                      "(Intégrations) ou action « Touche d'une app »."},
+                      "(onglet Outils) ou action « Touche d'une app »."},
     # py-intercom : adresse réglée en hôte + port (bloc « intercom », partagé avec la parole), jeton facultatif
     "intercom": {"name": "py-intercom", "label": "py-intercom", "cfg": "intercom",
                  "default": f"http://127.0.0.1:{INTERCOM_PORT}", "example": f"192.168.1.30:{INTERCOM_PORT}",

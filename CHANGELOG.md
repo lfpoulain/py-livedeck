@@ -1,6 +1,27 @@
 # Journal des versions
 
-## 1.12.1 — 2026-11-23
+## 1.13.0 — 2026-11-23
+
+### Les outils, chacun à sa place
+- **Nouvel onglet « Outils »** dans le panneau de gauche, à côté de *Inputs* et *Boutons* : py-intercom,
+  orchestream, py-multiview, MixPanel, DMAIX, les caméras ONVIF et Tally32 ont chacun leur section, au lieu d'un
+  seul bloc *Intégrations*. Chaque section montre l'**état de l'outil** (pastille verte, rouge ou grise et son
+  texte) et ses touches rangées par **rubrique**, telles que l'outil les annonce (« Scènes », « Effets »,
+  « Jeux », « Overlay », « Flux »…). Un menu n'affiche qu'un seul outil ; la recherche porte sur tout.
+- **Les vignettes sont les vraies touches** : texte, couleur et état de l'outil, mis à jour en direct.
+- **Touche vide** : une pastille par outil dans « Que doit faire cette touche ? », avec sa couleur.
+- L'onglet *Boutons* ne garde que les familles d'actions (Vidéo, Audio, Windows, Clavier, Web…).
+
+### Texte et couleurs d'une touche d'app
+- Une touche décrite par un outil prend par défaut son texte, sa couleur et son état de l'outil. L'action
+  **Touche d'une app** a maintenant deux réglages :
+  - **Texte affiché** : celui de l'app (titre et état), le titre seul, *mon texte puis l'état de l'app*, ou
+    *mon texte seul* (le texte de la touche, variables comprises) ;
+  - **Couleurs** : celles de l'app, ou **celles de la touche** (Apparence), avec un liseré à la couleur de l'app
+    quand elle est allumée.
+- Une touche qui ne peut pas servir reste toujours grisée avec sa raison, et HORS LIGNE s'affiche toujours.
+- Pour une couleur à toi selon l'état : **＋ Personnaliser** → *Touche d'une app* (allumée, éteinte,
+  indisponible, injoignable). Ce retour passe par-dessus celui de l'outil.
 
 ### Corrigé
 - **Flèches en carré vide sur les touches** : les boutons *Page suivante*, *Page précédente*, *Lecture / pause* et

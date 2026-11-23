@@ -271,7 +271,7 @@ class SettingsDialog(QDialog):
                           "(même port) ; si LiveDeck tourne sur un autre PC, coche aussi « Accepter les commandes "
                           "du réseau local ». py-intercom décrit lui-même ses touches (une par bus, « Tout "
                           "couper », l'état de la liaison) : action « Touche d'une app » ou bibliothèque "
-                          "(Intégrations).", "Hint", True))
+                          "(onglet Outils).", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("ORCHESTREAM  ·  TOUCHES DE LA RÉGIE", "H2"))
@@ -283,7 +283,7 @@ class SettingsDialog(QDialog):
         self.orch_status = self._test_row(v, "orchestream")
         v.addWidget(label("orchestream décrit lui-même chaque touche (texte, couleur, état) et l'envoie en direct : "
                           "choisis-la dans l'action « Touche d'une app » de l'inspecteur, ou dans la "
-                          "bibliothèque (Intégrations).", "Hint", True))
+                          "bibliothèque (onglet Outils).", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
@@ -331,7 +331,7 @@ class SettingsDialog(QDialog):
                                "l'API locale, en décochant « Ce poste uniquement » si LiveDeck tourne sur un autre PC.")
         self.mv_status = self._test_row(v, "multiview")
         v.addWidget(label("py-multiview décrit lui-même ses touches (réception, flux, son, émission OMT, retour, "
-                          "routes) et les met à jour en direct : bibliothèque (Intégrations) ou action « Touche "
+                          "routes) et les met à jour en direct : bibliothèque (onglet Outils) ou action « Touche "
                           "d'une app ».", "Hint", True))
         # Autres apps qui exposent l'API Stream Deck commune : une section chacune
         self.deck_status: dict = {}

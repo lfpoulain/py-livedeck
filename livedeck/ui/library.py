@@ -6,10 +6,9 @@ import json
 from PySide6.QtCore import QMimeData, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QLineEdit, QListWidget, QListWidgetItem,
-                               QMenu, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
+                               QMenu, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
 from .. import presets
-from ..actions import CATEGORIES
 from . import theme as T
 from .deck_view import MIME_INPUTS, MIME_PRESET, preset_thumb
 from .dialogs import ROW_STYLES
@@ -189,27 +188,54 @@ class InputsPage(QWidget):
 # --- bibliothèque de boutons ------------------------------------------------------------
 
 
+HEAD_H = {"head": 30, "tool": 46, "sub": 24}  # hauteur des lignes de titre ; un bouton : 46
+
+
 class _PresetDelegate(QStyledItemDelegate):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
 
     def sizeHint(self, option, index):
-        return QSize(200, 30 if index.data(ROLE + 2) == "head" else 46)
+        return QSize(200, HEAD_H.get(index.data(ROLE + 2), 46))
 
     def paint(self, p: QPainter, option, index):
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(option.rect).adjusted(2, 2, -2, -2)
         color = QColor(index.data(ROLE + 3) or T.MUTED)
-        if index.data(ROLE + 2) == "head":
+        kind = index.data(ROLE + 2)
+        if kind == "tool":
+            # Un outil : pastille d'état (vert relié, rouge en défaut, gris inactif), son nom, puis son état
+            ok = index.data(ROLE + 6)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T.OK if ok else T.FAINT if ok is None else T.DANGER))
+            p.drawEllipse(QRectF(r.x() + 7, r.y() + 13, 8, 8))
             f = QFont(option.font)
-            f.setPointSizeF(7.6)
+            f.setPointSizeF(10)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(color)
+            w = r.width() - 30
+            p.drawText(QRectF(r.x() + 24, r.y() + 6, w, 20), Qt.AlignLeft | Qt.AlignVCenter,
+                       QFontMetricsF(f).elidedText(index.data(ROLE + 4), Qt.ElideRight, w))
+            f2 = QFont(option.font)
+            f2.setPointSizeF(7.5)
+            p.setFont(f2)
+            p.setPen(QColor(T.FAINT))
+            p.drawText(QRectF(r.x() + 24, r.y() + 24, w, 16), Qt.AlignLeft | Qt.AlignVCenter,
+                       QFontMetricsF(f2).elidedText(index.data(ROLE + 5) or "", Qt.ElideRight, w))
+            p.setPen(QColor(T.BORDER))
+            p.drawLine(r.topLeft(), r.topRight())
+        elif kind in ("head", "sub"):
+            f = QFont(option.font)
+            f.setPointSizeF(7.6 if kind == "head" else 7.2)
             f.setBold(True)
             f.setLetterSpacing(QFont.AbsoluteSpacing, 1.2)
             p.setFont(f)
-            p.setPen(color)
-            p.drawText(r.adjusted(6, 6, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, index.data(ROLE + 4).upper())
+            p.setPen(color if kind == "head" else QColor(T.MUTED))
+            p.drawText(r.adjusted(6 if kind == "head" else 24, 6 if kind == "head" else 2, 0, 0),
+                       Qt.AlignLeft | Qt.AlignVCenter, index.data(ROLE + 4).upper())
         else:
             _row_bg(p, option, r)
             sw = QRectF(r.x() + 6, r.center().y() - 16, 32, 32)
@@ -239,17 +265,30 @@ class _PresetList(QListWidget):
 
 
 class PresetsPage(QWidget):
+    """Liste de boutons à glisser sur le deck. tools=False : les familles d'actions (Vidéo, Audio, Windows…).
+    tools=True : les outils pilotés, un par section avec son état en direct, ses boutons rangés par rubrique
+    et un filtre pour n'en voir qu'un."""
     activated = Signal(str)
 
-    def __init__(self, engine):
+    def __init__(self, engine, tools: bool = False):
         super().__init__()
-        self.engine = engine
+        self.engine, self.tools = engine, tools
         self._sig = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
+        self.pick = None
+        if tools:
+            self.pick = tame_combo(QComboBox(), 12)
+            self.pick.addItem("Tous les outils", "")
+            for _, name, _ in presets.TOOLS:
+                self.pick.addItem(name, name)
+            self.pick.setToolTip("N'afficher qu'un seul outil")
+            self.pick.currentIndexChanged.connect(lambda _: self._filter(self.search.text()))
+            lay.addWidget(self.pick)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Rechercher : intercom, http, page…")
+        self.search.setPlaceholderText("Rechercher : scène, flux, talkback…" if tools else
+                                       "Rechercher : take, http, page…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter)
         lay.addWidget(self.search)
@@ -261,49 +300,99 @@ class PresetsPage(QWidget):
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.itemDoubleClicked.connect(lambda it: it.data(ROLE) and self.activated.emit(it.data(ROLE)))
         lay.addWidget(self.list, 1)
-        lay.addWidget(label("Glisser sur le deck, ou double-clic : pose le bouton sur la touche sélectionnée.",
+        lay.addWidget(label("Chaque outil décrit ses propres touches : texte, couleur et état suivent l'outil en "
+                            "direct. Glisser sur le deck, ou double-clic. Adresses : Réglages → Intégrations."
+                            if tools else
+                            "Glisser sur le deck, ou double-clic : pose le bouton sur la touche sélectionnée.",
                             "Hint", True))
         self.refresh()
 
+    def rows(self) -> list[dict]:
+        """Lignes à afficher : titres (famille, outil, rubrique) et boutons, chacun avec sa section."""
+        out = []
+        if not self.tools:
+            for cat, items in presets.library(self.engine):
+                if cat in presets.TOOL_NAMES:
+                    continue  # les outils ont leur onglet
+                color = presets.color(cat, T.MUTED)
+                out.append({"kind": "head", "name": cat, "color": color, "cat": cat})
+                out += [{"kind": "", "pid": pid, "name": name, "desc": desc, "color": color, "cat": cat}
+                        for pid, name, desc in items]
+            return out
+        for tool in presets.tools(self.engine):
+            cat, color = tool["name"], tool["color"]
+            out.append({"kind": "tool", "name": cat, "color": color, "cat": cat, "desc": tool["status"],
+                        "ok": tool["ok"]})
+            for rubric, items in tool["groups"]:
+                if rubric:
+                    out.append({"kind": "sub", "name": rubric, "color": color, "cat": cat})
+                out += [{"kind": "", "pid": pid, "name": name, "desc": desc, "color": color, "cat": cat,
+                         "sub": rubric} for pid, name, desc in items]
+        return out
+
+    @staticmethod
+    def _apply(it: QListWidgetItem, row: dict) -> None:
+        for role, k in ((ROLE, "pid"), (ROLE + 2, "kind"), (ROLE + 3, "color"), (ROLE + 4, "name"),
+                        (ROLE + 5, "desc"), (ROLE + 6, "ok"), (ROLE + 7, "cat"), (ROLE + 8, "sub")):
+            it.setData(role, row.get(k))
+        tip = row.get("desc") or ""
+        it.setToolTip(f"{row['name']} : {tip}" if row["kind"] == "tool" and tip else tip)
+
     def refresh(self) -> None:
-        groups = presets.library(self.engine)
-        sig = json.dumps(groups)
+        rows = self.rows()
+        sig = json.dumps(rows)
         if sig == self._sig:
+            self.list.viewport().update()  # vignettes des touches d'app : leur état change en direct
             return
-        self._sig = sig
+        shape = [(r["kind"], r.get("pid"), r["name"]) for r in rows]
+        same = shape == getattr(self, "_shape", None)
+        self._sig, self._shape = sig, shape
+        if same:
+            # Seuls un état ou une description ont changé : mise à jour sur place, sans perdre la position
+            # dans la liste (un outil en direct change souvent : « 3 à remercier », « En cours »…).
+            for i, row in enumerate(rows):
+                self._apply(self.list.item(i), row)
+            self.list.viewport().update()
+            return
+        pos = self.list.verticalScrollBar().value()
         self.list.clear()
-        for cat, items in groups:
-            color = CATEGORIES.get(cat, T.MUTED)
-            head = QListWidgetItem()
-            head.setFlags(Qt.NoItemFlags)
-            for role, v in ((ROLE + 2, "head"), (ROLE + 3, color), (ROLE + 4, cat)):
-                head.setData(role, v)
-            self.list.addItem(head)
-            for pid, name, desc in items:
-                it = QListWidgetItem()
-                for role, v in ((ROLE, pid), (ROLE + 3, color), (ROLE + 4, name), (ROLE + 5, desc)):
-                    it.setData(role, v)
-                it.setToolTip(desc)
-                self.list.addItem(it)
+        for row in rows:
+            it = QListWidgetItem()
+            if row["kind"]:
+                it.setFlags(Qt.NoItemFlags)
+            self._apply(it, row)
+            self.list.addItem(it)
         self._filter(self.search.text())
+        self.list.verticalScrollBar().setValue(pos)
 
     def _filter(self, text: str) -> None:
-        """Filtre sur nom, description et catégorie ; un en-tête disparaît si plus rien ne le suit."""
+        """Filtre sur nom, description, section et rubrique ; un titre disparaît si plus rien ne le suit."""
         words = [w for w in text.lower().split() if w]
-        head, shown = None, 0
+        only = self.pick.currentData() if self.pick is not None else ""
+        heads = {}  # titre en cours par niveau -> [ligne, nombre de boutons visibles]
         for row in range(self.list.count()):
             it = self.list.item(row)
-            if it.data(ROLE + 2) == "head":
-                if head is not None:
-                    head.setHidden(shown == 0)
-                head, shown = it, 0
+            kind = it.data(ROLE + 2)
+            if kind:
+                level = 1 if kind == "sub" else 0
+                for lv in [lv for lv in heads if lv >= level]:
+                    head, n = heads.pop(lv)
+                    head.setHidden(n == 0)
+                heads[level] = [it, 0]
                 continue
-            hay = f"{head.data(ROLE + 4) if head else ''} {it.data(ROLE)} {it.data(ROLE + 4)} {it.data(ROLE + 5)}".lower()
-            ok = all(w in hay for w in words)
+            hay = (f"{it.data(ROLE + 7) or ''} {it.data(ROLE + 8) or ''} {it.data(ROLE)} {it.data(ROLE + 4)} "
+                   f"{it.data(ROLE + 5) or ''}").lower()
+            ok = all(w in hay for w in words) and (not only or it.data(ROLE + 7) == only)
             it.setHidden(not ok)
-            shown += ok
-        if head is not None:
-            head.setHidden(shown == 0)
+            for h in heads.values():
+                h[1] += ok
+        for head, n in heads.values():
+            head.setHidden(n == 0)
+
+    def show_tool(self, name: str) -> None:
+        """N'afficher que cet outil ("" : tous)."""
+        if self.pick is not None:
+            self.pick.setCurrentIndex(max(0, self.pick.findData(name)))
 
 
 class LibraryPanel(QFrame):
@@ -318,14 +407,33 @@ class LibraryPanel(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(12)
-        self.tabs = Seg([("inputs", "Inputs vMix"), ("presets", "Boutons")], "inputs")
+        self.tabs = Seg([("inputs", "Inputs"), ("presets", "Boutons"), ("tools", "Outils")], "inputs")
+        for b in self.tabs.buttons.values():  # trois onglets dans la colonne la plus étroite : ils se partagent la place
+            b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.tabs.buttons["inputs"].setToolTip("Les inputs de vMix, en direct")
+        self.tabs.buttons["presets"].setToolTip("Boutons prêts à l'emploi : vidéo, audio, Windows, clavier, web…")
+        self.tabs.buttons["tools"].setToolTip("py-intercom, orchestream, py-multiview, MixPanel, DMAIX, caméras "
+                                              "ONVIF, Tally32 : chaque outil, son état et ses touches")
         lay.addWidget(self.tabs)
         self.stack = QStackedWidget()
         self.inputs = InputsPage(engine)
         self.presets = PresetsPage(engine)
-        self.stack.addWidget(self.inputs)
-        self.stack.addWidget(self.presets)
+        self.tools = PresetsPage(engine, tools=True)
+        for page in (self.inputs, self.presets, self.tools):
+            self.stack.addWidget(page)
         lay.addWidget(self.stack, 1)
-        self.tabs.changed.connect(lambda v: self.stack.setCurrentIndex(0 if v == "inputs" else 1))
+        self.tabs.changed.connect(lambda v: self.stack.setCurrentIndex(["inputs", "presets", "tools"].index(v)))
         self.inputs.activated.connect(self.input_activated)
         self.presets.activated.connect(self.preset_activated)
+        self.tools.activated.connect(self.preset_activated)
+
+    def refresh_buttons(self) -> None:
+        """Boutons et outils : bus, touches des apps et presets des caméras découverts en direct."""
+        self.presets.refresh()
+        self.tools.refresh()
+
+    def show_tools(self, name: str = "") -> None:
+        """Ouvre l'onglet « Outils », sur un seul outil si son nom est donné."""
+        self.tabs.set("tools")
+        self.stack.setCurrentWidget(self.tools)
+        self.tools.show_tool(name)

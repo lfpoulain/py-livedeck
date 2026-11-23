@@ -56,6 +56,11 @@ AUDIO_MODES = [("toggle", "Couper / rétablir"), ("off", "Couper"), ("on", "Rét
 
 PTT_MODES = [("hold", "Maintenu (push-to-talk)"), ("toggle", "Basculer"),
              ("on", "Ouvrir le micro"), ("off", "Fermer le micro"), ("alloff", "Couper tous les bus")]
+# Touche décrite par une app : d'où viennent son texte et ses couleurs (par défaut : tout vient de l'app)
+DECK_TEXTS = [("app", "Celui de l'app (titre et état)"), ("title", "Le titre de l'app seul"),
+              ("own_state", "Mon texte, puis l'état de l'app"), ("own", "Mon texte seul")]
+DECK_COLORS = [("app", "Celles de l'app (vive si allumée)"),
+               ("own", "Celles de la touche (liseré quand elle est allumée)")]
 SHOW_MODES = [("toggle", "Basculer (afficher / masquer)"), ("show", "Afficher"), ("hide", "Masquer")]
 NET_PROTOS = [("tcp", "TCP"), ("udp", "UDP")]
 
@@ -106,11 +111,12 @@ VMIX_FUNCTIONS = [
 ]
 
 
-def F(key, label, kind, default, options=None, placeholder="", when=None):
+def F(key, label, kind, default, options=None, placeholder="", when=None, store=True):
     """Champ d'une action. when : {champ: (valeurs…)} — le champ n'est montré que si l'action a l'une
-    de ces valeurs (ex. l'input n'apparaît que pour une cible qui en demande un)."""
+    de ces valeurs (ex. l'input n'apparaît que pour une cible qui en demande un). store=False : réglage
+    facultatif, absent d'une action neuve et enregistré seulement quand on le change."""
     return {"key": key, "label": label, "kind": kind, "default": default, "options": options,
-            "placeholder": placeholder, "when": when}
+            "placeholder": placeholder, "when": when, "store": store}
 
 
 def shown(spec: dict, a: dict) -> bool:
@@ -190,11 +196,15 @@ ACTIONS: dict[str, dict] = {
                  "help": "Une touche décrite par l'app elle-même (API Stream Deck) : orchestream (jeu suivant, "
                          "tirage, widget, raccourci Studio, fin du live…), py-multiview (flux, émission OMT, "
                          "retour audio, routes…). Texte, couleur et état viennent de l'app, en direct ; la "
-                         "touche se grise avec la raison quand elle ne peut pas servir. Adresse (et jeton API "
+                         "touche se grise avec la raison quand elle ne peut pas servir. Tu peux garder ton "
+                         "propre texte et tes couleurs (ci-dessous, puis Apparence) ; pour une couleur à toi "
+                         "selon l'état, ajoute un retour d'état « Touche d'une app ». Adresse (et jeton API "
                          "si l'app en demande un) : Réglages → Intégrations.",
                  "fields": [F("app", "App", "choice", DECK_DEFAULT_APP,
                               [(k, v["label"]) for k, v in DECK_APPS.items()]),
-                            F("key", "Touche", "deck_key", "")]},
+                            F("key", "Touche", "deck_key", ""),
+                            F("text", "Texte affiché", "choice", "app", DECK_TEXTS, store=False),
+                            F("colors", "Couleurs", "choice", "app", DECK_COLORS, store=False)]},
     "onvif.ptz": {"label": "Caméra ONVIF (PTZ)", "cat": "Intégrations", "color": "#0f2a3d",
                   "help": "Pilote une caméra ONVIF sans passer par vMix. Un mouvement ou un zoom dure tant que "
                           "la touche est enfoncée et s'arrête au relâché. Un preset se désigne par son nom ou "
@@ -294,7 +304,8 @@ def change_type(a: dict, type_: str) -> dict:
 def new_action(type_: str, **values) -> dict:
     a = {"type": type_}
     for f in ACTIONS[type_]["fields"]:
-        a[f["key"]] = f["default"]
+        if f.get("store", True):
+            a[f["key"]] = f["default"]
     a.update(values)
     return a
 

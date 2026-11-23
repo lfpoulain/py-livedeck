@@ -497,7 +497,7 @@ class Inspector(QFrame):
             b.setCheckable(True)
             b.setChecked(cat == self._pick_cat)
             b.setCursor(Qt.PointingHandCursor)
-            color = CATEGORIES.get(cat, T.ACCENT)
+            color = presets.color(cat, T.ACCENT)
             b.setStyleSheet(f"QPushButton#Chip:checked{{color:#0b0d10;background:{color};border-color:{color}}}")
             b.clicked.connect(lambda _=False, c=cat: self._pick_filter(cat=c))
             chips.addWidget(b)
@@ -546,7 +546,7 @@ class Inspector(QFrame):
             self.pick_lay.addWidget(wrap(label("Rien ne correspond. Essaie « vmix », « web », « clavier »…",
                                                "Hint")))
         for cat, items in groups:
-            color = CATEGORIES.get(cat, T.MUTED)
+            color = presets.color(cat, T.MUTED)
             head = label(cat.upper(), "H2")
             head.setStyleSheet(f"color:{color}")
             self.pick_lay.addWidget(head)

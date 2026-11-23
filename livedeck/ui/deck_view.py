@@ -196,7 +196,14 @@ _THUMBS: dict = {}
 def preset_thumb(engine, pid: str, name: str, size: int, dpr: float = 1.0) -> QPixmap | None:
     """Vignette d'un bouton prêt à l'emploi : la touche telle qu'elle sera créée. Un bouton sans
     texte (Take, Program… qui prendront le nom de l'input) montre son nom à la place."""
-    sig = (pid, name, size, dpr)
+    look = None
+    if pid.startswith("deck:") and pid.count(":") >= 2:
+        # Touche décrite par une app : la vignette montre son texte, sa couleur et son état du moment
+        from ..feedback import deck_key_look
+        app, _, kid = pid[5:].partition(":")
+        k = engine.deck(app).key(kid)
+        look = deck_key_look(k) if k else None
+    sig = (pid, name, size, dpr, tuple(sorted((look or {}).items())))
     pm = _THUMBS.get(sig)
     if pm is None:
         from .. import presets
@@ -206,6 +213,8 @@ def preset_thumb(engine, pid: str, name: str, size: int, dpr: float = 1.0) -> QP
                 return None
             v = {"bg": b.get("bg"), "fg": b.get("fg"), "label": b.get("label") or name, "size": 0,
                  "icon": "", "bar": "", "pressed": False, "warn": False, "lit": ""}
+            if look:
+                v.update({k: look[k] for k in ("bg", "fg", "label") if look.get(k)})
             pm = key_pixmap(v, size, dpr)
         except Exception:  # une vignette ne doit jamais empêcher d'afficher la liste
             return None

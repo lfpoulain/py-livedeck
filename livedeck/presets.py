@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import feedback
 from .actions import ACTIONS, new_action
-from .integrations import DECK_APPS, bus_label, de, deck_configured, deck_name
+from .integrations import DECK_APPS, bus_label, de, deck_configured, deck_name, integration_status
 from .model import new_button
 
 
@@ -315,51 +315,81 @@ def make(preset_id: str, engine=None) -> dict | None:
     return entry[3]() if entry else None
 
 
-def _integrations(engine) -> list[tuple[str, str, str]]:
-    """Intégrations d'après ce qui est réglé et découvert : bus proposés par py-intercom, touches décrites par
-    orchestream ; un service non réglé n'apparaît qu'une fois, marqué « à régler »."""
+# Outils pilotés (clé de Réglages → Intégrations, nom affiché, couleur) : chacun a sa section dans la
+# bibliothèque (onglet « Outils ») et dans le choix d'une touche vide, au lieu d'un seul bloc « Intégrations ».
+TOOLS = [("intercom", "py-intercom", "#3b82f6"), ("orchestream", "orchestream", "#f59e0b"),
+         ("multiview", "py-multiview", "#14b8a6"), ("mixpanel", "MixPanel", "#8b5cf6"),
+         ("dmaix", "DMAIX", "#ec4899"), ("onvif", "Caméras ONVIF", "#38bdf8"), ("tallies", "Tally32", "#22c55e")]
+TOOL_NAMES = [name for _, name, _ in TOOLS]
+TOOL_COLORS = {name: color for _, name, color in TOOLS}
+
+
+def color(cat: str, default: str = "") -> str:
+    """Couleur d'une catégorie de la bibliothèque (famille d'actions ou outil)."""
+    from .actions import CATEGORIES
+    return CATEGORIES.get(cat) or TOOL_COLORS.get(cat) or default
+
+
+def tools(engine) -> list[dict]:
+    """Chaque outil avec son état en direct et ses boutons rangés par rubrique :
+    [{"key", "name", "color", "ok", "status", "groups": [(rubrique, [(id, nom, description)])]}].
+    Les rubriques des apps à touches décrites sont celles que l'app annonce (« Jeux », « Scènes », « Flux »…)."""
     integ = engine.cfg.get("integrations", {})
-    modes = {"toggle": "py-intercom, bascule", "always_on": "py-intercom, toujours ouvert"}
-    out = [(f"talk:{k}", f"Talkback {name}", modes.get(engine.intercom.bus(k).get("mode"), "py-intercom, maintenu"))
-           for k, name in engine.intercom.bus_choices()]
-    out.append(("talk_alloff", "Couper l'intercom", "Relâche tous les bus"))
-    for app in DECK_APPS:
-        out += _deck_keys(engine, app)
-    out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
-                else "Tally32 à régler : Réglages → Intégrations"))
-    out += _onvif_keys(engine)
+    status = {k: (ok, text) for k, _, ok, text in integration_status(engine)}
+    modes = {"toggle": "bascule", "always_on": "toujours ouvert"}
+    out = []
+    for key, name, col in TOOLS:
+        groups: list[tuple[str, list]] = []
+        if key == "intercom":
+            talk = [(f"talk:{k}", f"Talkback {label}", modes.get(engine.intercom.bus(k).get("mode"), "maintenu"))
+                    for k, label in engine.intercom.bus_choices()]
+            groups.append(("Talkback", talk + [("talk_alloff", "Couper l'intercom", "Relâche tous les bus")]))
+        if key in DECK_APPS:
+            groups += _deck_groups(engine, key)
+        elif key == "onvif":
+            groups += _onvif_groups(engine)
+        elif key == "tallies":
+            groups.append(("", [("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
+                                 else "Tally32 à régler : Réglages → Intégrations")]))
+        ok, text = status.get(key, (None, ""))
+        out.append({"key": key, "name": name, "color": col, "ok": ok, "status": text, "groups": groups})
     return out
+
+
+def _deck_groups(engine, app: str) -> list[tuple[str, list]]:
+    """Touches que l'app décrit elle-même (aucune liste en dur), par rubrique ; ou une entrée « à choisir »
+    tant que la liste n'est pas là : une touche posée réveille le client, qui la reçoit alors en direct."""
+    d, name = engine.deck(app), deck_name(app)
+    if not deck_configured(engine.cfg, app):
+        return [("", [(f"deck:{app}", f"Touche {name}", "adresse et jeton API à régler : Réglages → Intégrations")])]
+    if not d.has_keys:
+        return [("", [(f"deck:{app}", f"Touche {name}",
+                       f"liste des touches en attente {de(name)} ({d.error})" if d.error else
+                       f"liste des touches en attente {de(name)}")])]
+    groups: dict[str, list] = {}
+    for k in d.key_list():
+        desc = str(k.get("subtitle") or "") or ("" if k.get("command") else "affichage seul")
+        groups.setdefault(str(k.get("group") or "Autres"), []).append(
+            (f"deck:{app}:{k['id']}", str(k.get("title") or k["id"]), desc))
+    return list(groups.items())
 
 
 ONVIF_QUICK = ("left", "right", "up", "down", "zoomin", "zoomout", "home")
 
 
-def _onvif_keys(engine) -> list[tuple[str, str, str]]:
+def _onvif_groups(engine) -> list[tuple[str, list]]:
     """Par caméra ONVIF réglée : les mouvements, l'origine et un rappel par preset lu sur la caméra."""
     cams = engine.onvif.cameras
     if not cams:
-        return [("onvif:left:", "Caméra ONVIF", "caméras à régler : Réglages → Intégrations")]
+        return [("", [("onvif:left:", "Caméra ONVIF", "caméras à régler : Réglages → Intégrations")])]
     out = []
     for c in cams:
-        out += [(f"onvif:{cmd}:{c.name}", f"{c.name} {_ptz_label(cmd)}",
-                 "ONVIF, position d'origine" if cmd == "home" else "ONVIF, tant qu'on appuie") for cmd in ONVIF_QUICK]
-        out += [(f"onvif:preset:{c.name}|{name or tok}", f"{c.name} → {name or tok}", "ONVIF, rappel du preset")
-                for tok, name in c.preset_list]
+        items = [(f"onvif:{cmd}:{c.name}", f"{c.name} {_ptz_label(cmd)}",
+                  "position d'origine" if cmd == "home" else "tant qu'on appuie") for cmd in ONVIF_QUICK]
+        items += [(f"onvif:preset:{c.name}|{name or tok}", f"{c.name} → {name or tok}", "rappel du preset")
+                  for tok, name in c.preset_list]
+        out.append((c.name, items))
     return out
-
-
-def _deck_keys(engine, app: str) -> list[tuple[str, str, str]]:
-    """Touches que l'app décrit elle-même (aucune liste en dur), ou une entrée « à choisir » tant que la
-    liste n'est pas là : une touche posée réveille le client, qui la reçoit alors en direct."""
-    d, name = engine.deck(app), deck_name(app)
-    if not deck_configured(engine.cfg, app):
-        return [(f"deck:{app}", f"Touche {name}", "adresse et jeton API à régler : Réglages → Intégrations")]
-    if d.has_keys:
-        return [(f"deck:{app}:{k['id']}", str(k.get("title") or k["id"]), f"{name} · {k.get('group') or 'Autres'}")
-                for k in d.key_list()]
-    return [(f"deck:{app}", f"Touche {name}",
-             f"liste des touches en attente {de(name)} ({d.error})" if d.error else
-             f"liste des touches en attente {de(name)}")]
 
 
 def needs_setup(preset_id: str, engine) -> str:
@@ -384,7 +414,7 @@ def needs_setup(preset_id: str, engine) -> str:
     return ""
 
 
-PICKER_ORDER = ["Vidéo", "Intégrations", "Production", "Audio", "Molette", "Windows", "Clavier", "Web", "Réseau",
+PICKER_ORDER = ["Vidéo", *TOOL_NAMES, "Production", "Audio", "Molette", "Windows", "Clavier", "Web", "Réseau",
                 "Deck", "vMix avancé"]
 
 
@@ -406,11 +436,13 @@ def library(engine, with_inputs: bool = False) -> list[tuple[str, list[tuple[str
         if pid in NEEDS_INPUT and not with_inputs:
             continue  # ceux-là se créent en glissant un input
         if cat == "Intégrations":
-            continue  # liste construite d'après les services réglés
+            continue  # listes construites d'après les outils réglés (voir tools)
         groups.setdefault(cat, []).append((pid, name, desc))
-    groups["Intégrations"] = _integrations(engine)
+    for tool in tools(engine):  # un groupe par outil ; la rubrique de l'app précède la description
+        groups[tool["name"]] = [(pid, name, " · ".join(x for x in (rubric, desc) if x))
+                                for rubric, items in tool["groups"] for pid, name, desc in items]
     groups["Deck"] = [(f"page:{p['id']}", f"→ {p['name']}", f"Afficher cette page ({p['cols']}×{p['rows']})")
                       for p in engine.pages] + groups.get("Deck", [])
-    order = ["Vidéo", "Production", "Audio", "Molette", "Windows", "Intégrations", "Clavier", "Web", "Réseau", "Deck",
+    order = ["Vidéo", "Production", "Audio", "Molette", "Windows", *TOOL_NAMES, "Clavier", "Web", "Réseau", "Deck",
              "vMix avancé"]
     return [(cat, groups[cat]) for cat in order if cat in groups]

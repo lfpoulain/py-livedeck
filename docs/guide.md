@@ -44,7 +44,7 @@
 | Zone | Rôle |
 |---|---|
 | **En-tête** | Pastilles d'état : Stream Decks (clic = Diagnostic), vMix (version, latence ; clic = Réglages) et une pastille par intégration utilisée (clic = Réglages → Intégrations). Puis Édition / Live, *Suivre le deck*, **Fichier**, Moniteur, Réglages |
-| **Gauche** | **Inputs vMix** en direct (pastille rouge = antenne, verte = preview, badge OV = en overlay) et **Boutons** prêts à l'emploi, avec recherche |
+| **Gauche** | Trois onglets : **Inputs** de vMix en direct (pastille rouge = antenne, verte = preview, badge OV = en overlay), **Boutons** prêts à l'emploi par famille (vidéo, audio, Windows…) et **Outils** : py-intercom, orchestream, py-multiview, MixPanel, DMAIX, caméras ONVIF, Tally32, chacun avec son état et ses touches. Recherche partout |
 | **Centre** | Le Stream Deck à l'écran, avec sa colonne d'état (deck, vMix, REC, STREAM, PGM, PVW). Un onglet par page ; ● = page affichée sur un deck branché |
 | **Droite** | L'inspecteur de la touche : apparence, étapes, retour d'état, **▶ Tester** |
 
@@ -272,7 +272,8 @@ de l'installation : mettre à jour ou désinstaller LiveDeck ne la touche pas
 
 ## Intégrations maison
 
-Réglages → **Intégrations**, et les boutons prêts dans la bibliothèque (catégorie *Intégrations*).
+Réglages → **Intégrations** pour les adresses, et l'onglet **Outils** du panneau de gauche pour les touches :
+chaque outil y a sa section, avec son état et ses touches rangées par rubrique.
 Chaque intégration ne travaille que si une touche l'utilise ; pendant que la fenêtre Réglages est ouverte,
 elles sont toutes surveillées.
 
@@ -331,6 +332,18 @@ choisit l'app puis la touche ; la touche enregistre l'app et l'identifiant de la
 (`orchestream` + `game.advance`, `multiview` + `sender.toggle`, `mixpanel` + `scene.recall:<scène>`). Le retour d'état **Touche d'une app** colore
 une autre touche selon une touche d'une app. Ce qui suit vaut pour toutes ; seuls le jeton et l'adresse changent.
 
+**Qui décide de l'affichage ?** L'outil, par défaut : c'est lui qui déclare ses touches, leur texte, leur
+couleur et leur état, et LiveDeck les suit en direct. Tu gardes la main dans l'action **Touche d'une app** :
+
+| Réglage | Choix |
+|---|---|
+| **Texte affiché** | Celui de l'app (titre et état) · le titre seul · *mon texte, puis l'état de l'app* · *mon texte seul* (le texte de la touche, variables comprises) |
+| **Couleurs** | Celles de l'app (vive quand la touche est allumée) · **celles de la touche** (Apparence), avec un liseré à la couleur de l'app quand elle est allumée |
+
+Pour une couleur à toi selon l'état, ajoute dans **＋ Personnaliser** un retour **Touche d'une app** (allumée,
+éteinte, indisponible, injoignable) : il passe par-dessus celui de l'outil. Dans tous les cas, une touche qui
+ne peut pas servir reste grisée avec sa raison.
+
 ### orchestream-v2
 
 orchestream décrit lui-même **chaque touche** que ton jeton peut poser : son texte, sa couleur, si elle est
@@ -345,7 +358,7 @@ liste de commandes en dur : une nouveauté d'orchestream (raccourci Studio, sond
    `http://192.168.1.20:5174`), le **Jeton API**, puis **Tester**. Le résultat donne le nom du jeton et le
    nombre de touches qu'il permet. Son adresse publique (tunnel, passerelle invités) est refusée : **Tester** te
    le dit et te propose l'adresse locale.
-3. Pose une touche : bibliothèque, catégorie *Intégrations* (toutes les touches d'orchestream y sont, avec leur
+3. Pose une touche : onglet **Outils** (toutes les touches d'orchestream y sont, avec leur
    rubrique), ou l'action **Touche d'une app** (app *Orchestream*) dans l'inspecteur. La touche se choisit dans une liste groupée par
    rubrique (« Jeux », « Overlay », « Studio », « État »…), avec une recherche. Seul son identifiant est
    enregistré (`game.advance`, `overlay.toggle:twizz`, `studio.shortcut:…`).
@@ -383,7 +396,7 @@ passe** valent pour toutes les caméras ; c'est souvent un compte ONVIF à crée
 de sa page web. Une caméra qui a les siens : `Plateau = utilisateur:motdepasse@192.168.1.60`. **Tester** dit,
 caméra par caméra, si le PTZ répond et combien de presets elle contient.
 
-L'action **Caméra ONVIF (PTZ)**, ou la bibliothèque (*Intégrations* : les mouvements de chaque caméra et une
+L'action **Caméra ONVIF (PTZ)**, ou l'onglet **Outils** (les mouvements de chaque caméra et une
 touche par preset) :
 
 | Commande | Ce que fait la touche |
@@ -406,7 +419,7 @@ décochant *Ce poste uniquement* pour y accéder depuis cette machine. Le **Jeto
 remplis que si un jeton est réglé dans py-multiview (il part alors dans l'en-tête `Authorization`). **Tester**
 vérifie l'accès et compte les touches proposées.
 
-**Touches décrites** (py-multiview avec `/api/deck`) : bibliothèque, catégorie *Intégrations*, ou l'action
+**Touches décrites** (py-multiview avec `/api/deck`) : onglet **Outils**, ou l'action
 **Touche d'une app** (app *py-multiview*). Une touche par bascule : la réception, chaque flux, le son de chaque
 flux, l'émission OMT, le retour audio, volume + et −, la fenêtre de retour, chaque route. Texte, couleur et état
 viennent de py-multiview, en direct, comme pour orchestream ; un flux est désigné par son identifiant interne,
@@ -423,7 +436,7 @@ aussitôt, sans rien régler dans LiveDeck.
    ajouté s'il manque), puis **Tester**. Pas d'adresse par défaut : DMAIX tourne souvent sur un autre poste.
 2. **Jeton API** : seulement si un jeton est réglé dans DMAIX (Réglages → Intégration). Vide, l'API est ouverte
    sur le réseau local.
-3. Pose une touche : bibliothèque, catégorie *Intégrations*, ou l'action **Touche d'une app** (app *DMAIX*),
+3. Pose une touche : onglet **Outils**, ou l'action **Touche d'une app** (app *DMAIX*),
    groupée en « État », « Scènes », « Effets », « Commandes ».
 
 Sur la touche : une scène est verte quand c'est la scène en cours, un effet rouge quand il tourne (sous-titre :
@@ -441,7 +454,7 @@ est facultatif : ne le remplis que si un jeton est réglé dans MixPanel (bouton
 l'en-tête `Authorization`. **Tester** donne le nom et la version de MixPanel et le nombre de touches ; si rien ne
 répond, il rappelle où ouvrir l'API, et si un autre logiciel répond à cette adresse, il le dit.
 
-Les touches : bibliothèque, catégorie *Intégrations*, ou l'action **Touche d'une app** (app *MixPanel*), rangées
+Les touches : onglet **Outils**, ou l'action **Touche d'une app** (app *MixPanel*), rangées
 par rubrique :
 
 | Touche | Rubrique | Ce qu'elle fait et affiche |

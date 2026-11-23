@@ -445,7 +445,7 @@ class MainWindow(QMainWindow):
             self.grid.update()
             self.controls.refresh()
             self.inspector.on_config()
-            self.library.presets.refresh()
+            self.library.refresh_buttons()
         elif kind == "log":
             self._log(*payload)
         elif kind == "decks":
@@ -635,7 +635,7 @@ class MainWindow(QMainWindow):
         self.integ_all.set(False if False in oks else None if None in oks else True, "")
         self.integ_all.setToolTip("\n".join(f"{name} : {text}" for _, name, _, text in used)
                                   + "\nClic : Réglages → Intégrations")
-        self.library.presets.refresh()  # bus et touches des apps découverts en direct
+        self.library.refresh_buttons()  # bus et touches des apps découverts en direct
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
