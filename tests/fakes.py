@@ -27,21 +27,28 @@ def serve_vmix(port: int) -> "fake_vmix.FakeVmix":
 
 
 class FakeIntercom:
-    """Comme l'API HTTP du client py-intercom (client/remote.py + gui._handle_remote_command) :
-    route avec numéros de bus et paramètres d'URL, 403 navigateur, 409 hors ligne (avec l'état), 404 bus
-    inconnu / non proposé par le serveur, 400 si /ptt/all/<autre que off>, Always On (« on » accepté sans effet,
-    off / toggle refusés en 409), 503 « interface occupée » à la demande. Seuls les bus de self.buses sont
-    proposés ; « active » est faux pour tous quand le client n'est pas en ligne."""
+    """Comme l'API Stream Deck du client py-intercom (client/deck.py + remote.py), seule API servie : /api/deck
+    (state, events SSE, commands, POST commands/<id>), jeton facultatif (token=None : accès libre), 403 si
+    Origin / Referer, 409 COMMAND_REFUSED hors ligne ou bus Permanent, 422 bus manquant / inconnu, 404
+    COMMAND_NOT_FOUND, 503 « interface occupée » à la demande ; toute autre route : 404 ROUTE_NOT_FOUND.
+    Seuls les bus de self.buses sont proposés ; « active » est faux pour tous quand le client n'est pas en ligne."""
     KEYS = {"regie": 0, "plateau": 1, "vmix": 2}
+    NAMES = {"regie": "Régie", "plateau": "Plateau", "vmix": "VMix"}
+    TONES = {"regie": "blue", "plateau": "amber", "vmix": "violet"}
 
-    def __init__(self, port):
+    def __init__(self, port, token=None):
         self.online = True
+        self.token = token
         self.buses = {"regie": {"mode": "ptt", "active": False}, "plateau": {"mode": "toggle", "active": False},
                       "vmix": {"mode": "always_on", "active": True}}
         self.log = []
+        self.seen_origin = []  # Origin / Referer reçus (LiveDeck n'en envoie jamais)
+        self.auth = []  # en-têtes Authorization reçus
+        self.requests = []  # (méthode, chemin)
         self.ignore_off = 0  # nombre de « off » acceptés (200) mais sans effet : « off » perdu côté client
         self.busy = 0  # nombre de réponses 503 « interface occupée » à renvoyer
         self.slow: list[float] = []  # délais (s) des prochaines commandes : client lent mais vivant
+        self.no_stream = False  # flux SSE indisponible : le client lit l'état en secours
         self._gui = threading.Lock()
         fake = self
 
@@ -57,52 +64,112 @@ class FakeIntercom:
                 except OSError:  # LiveDeck a abandonné (délai dépassé) : la commande est appliquée quand même
                     pass
 
+            def _err(self, code, name, message, details=None):
+                err = {"code": name, "message": message}
+                if details:
+                    err["details"] = details
+                self._send(code, {"error": err})
+
+            def _stream(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                old = fake.state()
+                try:
+                    self.wfile.write(f"event: state\ndata: {json.dumps(old, ensure_ascii=False)}\n\n".encode())
+                    self.wfile.flush()
+                    idle = 0
+                    while True:
+                        time.sleep(0.05)
+                        new = fake.state()
+                        a = {k: v for k, v in old.items() if k != "updatedAt"}
+                        b = {k: v for k, v in new.items() if k != "updatedAt"}
+                        if a != b:
+                            keys = {k["id"]: k for k in old["keys"]}
+                            patch = {"changed": {k: v for k, v in b.items() if k != "keys" and a.get(k) != v},
+                                     "keys": [k for k in new["keys"] if keys.get(k["id"]) != k],
+                                     "removedKeys": [], "updatedAt": new["updatedAt"]}
+                            self.wfile.write(f"event: patch\ndata: {json.dumps(patch, ensure_ascii=False)}\n\n".encode())
+                            self.wfile.flush()
+                            old, idle = new, 0
+                        else:
+                            idle += 1
+                            if idle % 100 == 0:
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
+                except OSError:
+                    pass
+
             def _handle(self, method):
+                fake.requests.append((method, self.path))
                 if self.headers.get("Origin") or self.headers.get("Referer"):
-                    return self._send(403, {"error": "requêtes de navigateur refusées"})
+                    fake.seen_origin.append(self.headers.get("Origin") or self.headers.get("Referer"))
+                    return self._err(403, "FORBIDDEN", "requêtes de navigateur refusées")
+                fake.auth.append(self.headers.get("Authorization"))
+                if fake.token is not None and self.headers.get("Authorization") != f"Bearer {fake.token}":
+                    return self._err(401, "INVALID_TOKEN", "jeton API absent ou incorrect")
                 parts = [p for p in self.path.split("?", 1)[0].split("/") if p]
-                if parts == ["status"]:
-                    if method != "GET":
-                        return self._send(405, {"error": "utilisez GET /status"})
-                    return self._send(200, fake.payload())
-                if len(parts) != 3 or parts[0] != "ptt":
-                    return self._send(404, {"error": "routes : GET /status, POST /ptt/<bus>/<on|off|toggle>"})
-                if method != "POST":
-                    return self._send(405, {"error": "les commandes PTT exigent POST"})
-                _, token, cmd = parts
-                cmd = cmd.lower()
-                fake.log.append((token.lower(), cmd))
+                if parts[:2] != ["api", "deck"]:
+                    return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                rest = parts[2:]
+                if rest == ["state"] and method == "GET":
+                    return self._send(200, fake.state())
+                if rest == ["events"] and method == "GET":
+                    if fake.no_stream:
+                        return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                    return self._stream()
+                if rest == ["commands"] and method == "GET":
+                    return self._send(200, {"commands": fake.state()["commands"]})
+                if len(rest) != 2 or rest[0] != "commands" or method != "POST":
+                    if method == "GET":
+                        return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                    return self._err(405, "METHOD_NOT_ALLOWED", "méthode non permise")
+                cid = rest[1]
+                if cid not in ("ptt.toggle", "ptt.on", "ptt.off", "ptt.allOff"):
+                    return self._err(404, "COMMAND_NOT_FOUND", f"commande « {cid} » inconnue")
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                except ValueError:
+                    return self._err(422, "VALIDATION_FAILED", "JSON illisible")
+                args = body.get("args") if isinstance(body, dict) else None
+                bus, cmd = None, cid.split(".")[1]
+                if cid == "ptt.allOff":
+                    cmd = "off"
+                else:
+                    value = str((args or {}).get("bus") or "").strip().lower()
+                    if not value:
+                        return self._err(422, "VALIDATION_FAILED", "argument « bus » manquant",
+                                         {"args.bus": "argument « bus » manquant"})
+                    bus = next((k for k, i in fake.KEYS.items() if value in (k, str(i))), None)
+                    if bus is None:
+                        return self._err(422, "VALIDATION_FAILED", f"bus « {value} » inconnu",
+                                         {"args.bus": f"bus « {value} » inconnu"})
+                fake.log.append((bus or "all", cmd))
                 with fake._gui:  # comme le QtDispatcher du client : une commande à la fois, dans l'ordre
                     if fake.slow:  # interface occupée : la commande est appliquée (et répondue) en retard
                         time.sleep(fake.slow.pop(0))
-                    if token.lower() == "all":
-                        if cmd != "off":
-                            return self._send(400, {"error": "seul POST /ptt/all/off est accepté"})
-                        bus = None
-                    else:
-                        bus = next((k for k, i in fake.KEYS.items() if token.lower() in (k, str(i))), None)
-                        if bus is None:
-                            return self._send(404, {"error": f"bus inconnu « {token} » ; attendus : regie, plateau, vmix"})
-                        if cmd not in ("on", "off", "toggle"):
-                            return self._send(404, {"error": "action attendue : on, off ou toggle"})
                     if fake.busy > 0:
                         fake.busy -= 1
-                        return self._send(503, {"error": "interface occupée, réessayez"})
-                    if not fake.online:
-                        return self._send(409, {"error": "PTT désarmé : le client n'est pas en ligne", **fake.payload()})
+                        return self._err(503, "BUSY", "Interface occupée, réessayez.")
+                    if not fake.online and cmd != "off":
+                        return self._err(409, "COMMAND_REFUSED", "PTT désarmé : le client n'est pas en ligne")
                     if bus is not None and bus not in fake.buses:
-                        return self._send(404, {"error": "bus non proposé par ce serveur"})
+                        return self._err(422, "VALIDATION_FAILED", "bus non proposé par ce serveur",
+                                         {"args.bus": "bus non proposé"})
                     for b in ([bus] if bus else list(fake.buses)):
                         st = fake.buses[b]
                         if st["mode"] == "always_on":
                             if bus is not None and cmd != "on":
-                                return self._send(409, {"error": "bus en mode Always On : changez son mode dans le client"})
+                                return self._err(409, "COMMAND_REFUSED",
+                                                 "Bus en mode Permanent : changez son mode dans le poste.")
                             continue
                         if cmd == "off" and fake.ignore_off > 0:
                             fake.ignore_off -= 1
                             continue
                         st["active"] = (not st["active"]) if cmd == "toggle" else cmd == "on"
-                    self._send(200, fake.payload())
+                    self._send(200, {"ok": True, "message": "fait", "data": fake.payload()})
 
             def do_GET(self):
                 self._handle("GET")
@@ -115,12 +182,48 @@ class FakeIntercom:
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         self.srv.daemon_threads = True
+        self.port = self.srv.server_address[1]  # port 0 : celui que le système a donné
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
+    def buses_list(self) -> list[dict]:
+        on = self.online
+        return [{"id": k, "name": self.NAMES[k], "mode": v["mode"],
+                 "active": bool(on and (v["mode"] == "always_on" or v["active"]))} for k, v in self.buses.items()]
+
     def payload(self) -> dict:
+        """Ce que renvoie une commande : data = état de la fenêtre (buses : dictionnaire)."""
         return {"state": "En ligne" if self.online else "Hors ligne", "online": self.online,
-                "buses": {k: {"mode": v["mode"], "active": bool(self.online and (v["mode"] == "always_on" or v["active"]))}
-                          for k, v in self.buses.items()}}
+                "operational": "online" if self.online else "disconnected", "detail": None,
+                "buses": {b["id"]: {"mode": b["mode"], "active": b["active"]} for b in self.buses_list()}}
+
+    def state(self) -> dict:
+        """GET /api/deck/state : token, client, buses, commands, keys, updatedAt (comme client/deck.py)."""
+        online = self.online
+        buses = self.buses_list()
+        keys = [{"id": "client.status", "group": "État", "command": None, "args": {}, "title": "Intercom",
+                 "subtitle": "En ligne" if online else "Hors ligne", "active": online,
+                 "tone": "success" if online else "neutral", "available": True, "reason": None}]
+        for b in buses:
+            reason = None
+            if not online:
+                reason = "Le poste n'est pas en ligne."
+            elif b["mode"] == "always_on":
+                reason = "Bus en mode Permanent : changez son mode dans le poste."
+            keys.append({"id": f"ptt.toggle:{b['id']}", "group": "Parole", "command": "ptt.toggle",
+                         "args": {"bus": b["id"]}, "title": b["name"],
+                         "subtitle": "Hors ligne" if not online else ("Tu parles" if b["active"] else "Prêt"),
+                         "active": b["active"], "tone": "live" if b["active"] else self.TONES[b["id"]],
+                         "available": reason is None, "reason": reason})
+        keys.append({"id": "ptt.allOff", "group": "Parole", "command": "ptt.allOff", "args": {},
+                     "title": "Tout couper", "subtitle": None, "active": False, "tone": "danger",
+                     "available": True, "reason": None})
+        cmds = [{"id": c, "label": c, "argNames": [] if c == "ptt.allOff" else ["bus"], "available": True,
+                 "reason": None} for c in ("ptt.toggle", "ptt.on", "ptt.off", "ptt.allOff")]
+        return {"token": {"name": "jeton API" if self.token else "accès libre", "permissions": []},
+                "client": {"state": "online" if online else "disconnected",
+                           "label": "En ligne" if online else "Hors ligne", "online": online, "detail": None},
+                "buses": buses, "commands": cmds, "keys": keys,
+                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
 
     def stop(self):
         self.srv.shutdown()

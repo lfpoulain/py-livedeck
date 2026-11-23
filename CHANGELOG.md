@@ -16,6 +16,18 @@
   d'origine et les touches décrites. Sans adresse, py-multiview est cherché sur ce poste (`127.0.0.1:5090`).
 - Messages d'erreur et Moniteur au nom de l'app (« py-multiview · Émission OMT : aucun écran assigné »).
 
+- **py-intercom décrit ses touches** : une par bus (Régie, Plateau, vMix : bleu, ambre, violet, rouge « live » quand
+  le bus transmet), *Tout couper* et l'état de la liaison. Choisis-les dans la bibliothèque (*Intégrations*) ou
+  l'action *Touche d'une app* (app *py-intercom*) ; elles suivent le flux `/api/deck/events` du poste et se
+  grisent avec la raison (hors ligne, bus en mode Permanent). Adresse `127.0.0.1:5080` par défaut, **jeton API
+  facultatif** (champ dans Réglages → Intégrations).
+- **La parole (action *Intercom*) passe elle aussi par `/api/deck`** : py-intercom ne sert plus que cette API, les
+  anciennes routes `/ptt/<bus>/…` et `/status` n'existent plus (404). LiveDeck lit l'état sur
+  `GET /api/deck/state` et commande `POST /api/deck/commands/ptt.on | ptt.off | ptt.toggle | ptt.allOff`.
+  Il faut un client py-intercom qui sert `/api/deck` ; **Tester** le dit sinon. Rien à refaire sur les touches
+  existantes, mais elles ne marchent plus avec un ancien client.
+- Aucun en-tête `Origin` ni `Referer` n'est envoyé (py-intercom les refuse comme venant d'un navigateur).
+
 ### Compatibilité
 - Les touches orchestream existantes sont **converties à l'ouverture** en touches de l'app orchestream, avec le
   même identifiant : rien à refaire. Une configuration enregistrée par cette version ne s'ouvre plus correctement

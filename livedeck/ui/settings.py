@@ -258,9 +258,21 @@ class SettingsDialog(QDialog):
         row.addWidget(label("Port", "Muted"))
         row.addWidget(self.ic_port)
         v.addLayout(row)
+        row = QHBoxLayout()
+        self.ic_token = QLineEdit(integ["intercom"].get("token", ""))
+        self.ic_token.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
+        self.ic_token.setPlaceholderText("facultatif")
+        self.ic_token.setToolTip("Jeton API facultatif : seulement s'il est réglé dans py-intercom (Réglages → "
+                                 "Contrôle à distance). Vide : accès libre.")
+        row.addWidget(label("Jeton API", "Muted"))
+        row.addWidget(self.ic_token, 1)
+        v.addLayout(row)
         self.ic_status = self._test_row(v, "intercom")
-        v.addWidget(label("Dans py-intercom, zone Parler : coche « Contrôle HTTP » (même port) ; si LiveDeck tourne "
-                          "sur un autre PC, coche aussi « Depuis le réseau ».", "Hint", True))
+        v.addWidget(label("Dans py-intercom, Réglages → Contrôle à distance : coche « Activer le contrôle HTTP » "
+                          "(même port) ; si LiveDeck tourne sur un autre PC, coche aussi « Accepter les commandes "
+                          "du réseau local ». py-intercom décrit lui-même ses touches (une par bus, « Tout "
+                          "couper », l'état de la liaison) : action « Touche d'une app » ou bibliothèque "
+                          "(Intégrations).", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("ORCHESTREAM  ·  TOUCHES DE LA RÉGIE", "H2"))
@@ -299,7 +311,7 @@ class SettingsDialog(QDialog):
         # Autres apps qui exposent l'API Stream Deck commune : une section chacune
         self.deck_status: dict = {}
         for app, spec in DECK_APPS.items():
-            if app in ("orchestream", "multiview"):
+            if app in ("orchestream", "multiview", "intercom"):  # py-intercom : section du dessus
                 continue
             v.addSpacing(6)
             v.addWidget(label(f"{spec['name'].upper()}  ·  TOUCHES DÉCRITES PAR L'APP", "H2"))
@@ -338,9 +350,10 @@ class SettingsDialog(QDialog):
         result.setText(_dot(None) + "Test en cours…")
         if key == "intercom":
             host, port = self.ic_host.text().strip() or "127.0.0.1", self.ic_port.value()
+            ic_token = self.ic_token.text().strip()
 
             def run():
-                return probe_intercom(host, port)
+                return probe_intercom(host, port, token=ic_token)
         elif key == "multiview":
             mv_url, mv_token = self.mv_url.text(), self.mv_token.text()
 
@@ -403,6 +416,7 @@ class SettingsDialog(QDialog):
         moved = [s for s, (pg, _, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
         tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
         deck = {app: (u.text().strip(), t.text().strip()) for app, (u, t) in self._deck_edits.items()}
+        ic_token = self.ic_token.text().strip()
 
         def apply(cfg):
             cfg["vmix"] = {"host": host, "port": int(port)}
@@ -421,6 +435,8 @@ class SettingsDialog(QDialog):
             integ = cfg["integrations"]
             integ["intercom"] = {**(integ.get("intercom") or {}), "host": self.ic_host.text().strip() or "127.0.0.1",
                                  "port": self.ic_port.value()}
+            if ic_token or "token" in integ["intercom"]:
+                integ["intercom"]["token"] = ic_token  # pas de clé vide ajoutée : rien de modifié
             integ["tallies"] = tallies
             for app, (url, token) in deck.items():
                 block = integ[DECK_APPS[app]["cfg"]] = {**(integ.get(DECK_APPS[app]["cfg"]) or {}), "url": url}

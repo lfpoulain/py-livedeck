@@ -623,6 +623,7 @@ class MainWindow(QMainWindow):
         wanted = {"intercom": e.intercom.wanted, "tallies": e.tallies.wanted,
                   **{app: d.wanted for app, d in e.deck_apps.items()}}
         wanted["multiview"] = wanted.get("multiview") or e.multiview.wanted  # ancienne API ou touches décrites
+        wanted["intercom"] = e.intercom.wanted  # parole ou touches décrites : un seul client le surveille
         used = [(k, name, ok, text) for k, name, ok, text in integration_status(e) if wanted.get(k)]
         for k, pill in self.integ_pills.items():
             row = next((u for u in used if u[0] == k), None)

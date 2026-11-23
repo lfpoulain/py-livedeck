@@ -263,7 +263,7 @@ elles sont toutes surveillées.
 
 | Outil | Ce que fait LiveDeck | Retour sur la touche |
 |---|---|---|
-| **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
+| **py-intercom** (API Stream Deck du client, `http://127.0.0.1:5080`, jeton facultatif) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus ; ou les touches que py-intercom décrit (une par bus, *Tout couper*, état de la liaison) | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon ; pour les touches décrites : texte, couleur et état donnés par py-intercom, en direct |
 | **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, API Stream Deck, jeton facultatif) | Toute touche que py-multiview décrit : réception, un flux, le son d'un flux, émission OMT, retour audio et son volume, fenêtre de retour, route multicast | Texte, couleur et état donnés par py-multiview, en direct ; grisée avec la raison (« Aucun écran assigné. ») |
@@ -271,19 +271,24 @@ elles sont toutes surveillées.
 
 ### Régler py-intercom
 
-1. Il faut le **client py-intercom compilé le 29/10/2026 ou plus récent** (version 2.0.x).
-2. Dans le client, zone **Parler** : coche **« Contrôle HTTP »** (port 5080 par défaut).
-   Si LiveDeck tourne sur un autre PC que le client, coche aussi **« Depuis le réseau »** et indique l'IP du PC
-   intercom dans LiveDeck.
-3. Dans LiveDeck, Réglages → Intégrations : adresse et port du client, puis **Tester**. Le résultat dit en clair ce
-   qui ne va pas : client fermé ou « Contrôle HTTP » non coché, mauvaise IP ou pare-feu, proxy, client désarmé
-   (pas connecté au serveur intercom), bus absent…
+1. Il faut un **client py-intercom qui sert l'API Stream Deck commune** (`/api/deck`) : les anciennes routes
+   `/ptt/…` et `/status` n'existent plus.
+2. Dans le client, **Réglages → Contrôle à distance** : coche **« Activer le contrôle HTTP »** (port 5080 par
+   défaut). Si LiveDeck tourne sur un autre PC que le client, coche aussi **« Accepter les commandes du réseau
+   local »** et indique l'IP du PC intercom dans LiveDeck. Un **jeton** est facultatif : vide, l'API est ouverte ;
+   rempli, colle-le dans le champ *Jeton API* de LiveDeck.
+3. Dans LiveDeck, Réglages → Intégrations : adresse, port et jeton du client, puis **Tester**. Le résultat dit en
+   clair ce qui ne va pas : client fermé ou contrôle HTTP désactivé, mauvaise IP ou pare-feu, jeton, proxy, client
+   désarmé (pas connecté au serveur intercom), bus absent…
+
+py-intercom décrit aussi ses propres touches (**Touche d'une app**, app *py-intercom*, ou bibliothèque →
+Intégrations) : une par bus, *Tout couper* et l'état de la liaison, mises à jour en direct.
 
 La liste des **bus** vient du client lui-même : choisis-le dans l'étape *Intercom*. Sur la touche :
 
 | Libellé | Signification |
 |---|---|
-| HORS LIGNE | le client ne répond pas (fermé, « Contrôle HTTP » non coché, réseau) |
+| HORS LIGNE | le client ne répond pas (fermé, contrôle HTTP désactivé, réseau) |
 | DÉSARMÉ | le client répond mais n'est pas connecté au serveur intercom |
 | BUS ABSENT | ce bus n'est pas proposé par le client |
 | PERMANENT | le bus est en « Toujours actif » dans le client : LiveDeck ne le coupe jamais au relâché |
@@ -463,8 +468,8 @@ Lancé depuis les sources, la recherche n'est pas automatique et LiveDeck ne s'i
 | Point orange sur une touche | L'input n'existe pas (ou plus) dans vMix : choisis-le à nouveau dans l'inspecteur. |
 | vMix « hors ligne » dans l'en-tête | Vérifie l'adresse dans **Réglages** et que l'API TCP de vMix (port 8099) n'est pas bloquée par le pare-feu. Un vMix figé est détecté après 3,5 s et LiveDeck se reconnecte seul. |
 | Take : le 2e appui ne fait rien | La touche est rouge : l'input est déjà à l'antenne, Take ne le recoupe pas. Sur une touche **Preview**, le 2e appui ne fait rien par défaut : règle l'option *2e appui* ou convertis-la en Take. |
-| **L'intercom ne marche pas** | Réglages → Intégrations → **Tester** : le message dit quoi faire. Le plus souvent : client py-intercom trop ancien (il faut celui du 29/10/2026 ou plus récent), « Contrôle HTTP » non coché dans la zone Parler, ou « Depuis le réseau » non coché si LiveDeck est sur un autre PC. |
-| Touche talkback HORS LIGNE | Le client ne répond pas : lance-le, coche « Contrôle HTTP », vérifie l'IP et le port (5080). Un raccourci de secours peut prendre le relais. |
+| **L'intercom ne marche pas** | Réglages → Intégrations → **Tester** : le message dit quoi faire. Le plus souvent : client py-intercom trop ancien (il faut celui qui sert `/api/deck`), « Activer le contrôle HTTP » non coché (Réglages → Contrôle à distance), « Accepter les commandes du réseau local » non coché si LiveDeck est sur un autre PC, ou jeton manquant. |
+| Touche talkback HORS LIGNE | Le client ne répond pas : lance-le, active le contrôle HTTP, vérifie l'IP et le port (5080). Un raccourci de secours peut prendre le relais. |
 | Touche talkback DÉSARMÉ | Le client tourne mais n'est pas connecté au serveur intercom : connecte-le dans py-intercom. |
 | Touche talkback BUS ABSENT | Ce bus n'existe pas dans le client : choisis-en un autre dans l'étape *Intercom* (la liste vient du client). |
 | Talkback refusé « proxy » | Un proxy intercepte la requête : les adresses locales le contournent déjà ; pour une IP publique, vérifie `HTTP_PROXY` ou le proxy de Windows. |

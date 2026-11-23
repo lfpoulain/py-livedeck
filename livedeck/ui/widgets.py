@@ -488,7 +488,7 @@ def make_field(engine, spec: dict, value, on_change, page_names=None, item: dict
                                                      for d in engine.cfg.get("integrations", {}).get("tallies", [])]
         elif kind == "page":
             items = [("next", "Page suivante"), ("prev", "Page précédente")] + list((page_names or {}).items())
-        elif kind == "intercom_bus":  # bus proposés par le client py-intercom (lus sur /status)
+        elif kind == "intercom_bus":  # bus proposés par le client py-intercom (lus sur /api/deck/state)
             items = engine.intercom.bus_choices()
             if value and value not in dict(items):
                 items = items + [(value, f"{value} (absent)" if engine.intercom.buses else str(value))]
