@@ -1,5 +1,13 @@
 # Journal des versions
 
+## 1.12.1 — 2026-11-23
+
+### Corrigé
+- **Flèches en carré vide sur les touches** : les boutons *Page suivante*, *Page précédente*, *Lecture / pause* et
+  *Piste suivante* de la bibliothèque affichaient un carré à la place de ▶, ◀ et ❚, absents de la police des
+  touches. Ils utilisent maintenant ►, ◄ et ‖. Les touches déjà posées sont corrigées à l'affichage, sans rien
+  refaire, comme tout texte où tu as tapé ces signes.
+
 ## 1.12.0 — 2026-11-23
 
 ### Caméras ONVIF

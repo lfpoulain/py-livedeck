@@ -138,9 +138,9 @@ PRESETS: dict[str, tuple] = {
     "osc": ("Réseau", "Message OSC", "QLab, Reaper, X32…", lambda: new_button(
         label="OSC", bg=ACTIONS["osc"]["color"], actions=[new_action("osc")])),
     "page_next": ("Deck", "Page suivante", "Navigation du deck", lambda: new_button(
-        label="Page ▶", bg="#262626", actions=[new_action("page", page="next")])),
+        label="Page ►", bg="#262626", actions=[new_action("page", page="next")])),
     "page_prev": ("Deck", "Page précédente", "Navigation du deck", lambda: new_button(
-        label="◀ Page", bg="#262626", actions=[new_action("page", page="prev")])),
+        label="◄ Page", bg="#262626", actions=[new_action("page", page="prev")])),
     "health": ("Deck", "Surveillance réseau", "Vert si tout répond", _health),
     "label": ("Deck", "Texte seul", "Étiquette, séparateur", lambda: new_button(label="Texte", bg="#1f2937")),
     "function": ("vMix avancé", "Fonction vMix", "Toute l'API vMix", lambda: new_button(
@@ -191,9 +191,9 @@ PRESETS: dict[str, tuple] = {
     "win_vol_down": ("Windows", "Volume −", "Son de Windows", lambda: new_button(
         label="Vol −", bg="#1e1b4b", actions=[new_action("win.audio", target="output", mode="adjust", amount=-5)])),
     "win_play": ("Windows", "Lecture / pause", "Lecteur actif (Spotify…)", lambda: new_button(
-        label="▶ ❚❚", bg="#1e1b4b", actions=[new_action("win.media", what="playpause")])),
+        label="► ‖", bg="#1e1b4b", actions=[new_action("win.media", what="playpause")])),
     "win_next": ("Windows", "Piste suivante", "Lecteur actif", lambda: new_button(
-        label="▶▶", bg="#1e1b4b", actions=[new_action("win.media", what="next")])),
+        label="►►", bg="#1e1b4b", actions=[new_action("win.media", what="next")])),
     "win_launch": ("Windows", "Ouvrir un programme", "Logiciel, fichier, dossier ou site", lambda: new_button(
         label="Ouvrir", bg="#1e1b4b", actions=[new_action("win.launch")])),
     "win_focus": ("Windows", "Fenêtre au premier plan", "Puis un raccourci dans ce logiciel", lambda: new_button(

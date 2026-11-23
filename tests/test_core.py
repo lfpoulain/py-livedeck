@@ -4526,6 +4526,30 @@ def test_onvif_settings_and_inspector(tmp_path):
     w.quit_app()
 
 
+
+def test_key_labels_have_no_missing_glyph():
+    """Aucun bouton prêt à l'emploi n'affiche un carré vide : chaque signe de son texte existe dans la police
+    des touches, et les flèches absentes (◀ ▶ ❚) d'une touche déjà enregistrée sont remplacées au dessin."""
+    from livedeck import render
+    f = render.font(24)
+    if not render._font_path() or "segoe" not in render._font_path().lower():
+        return  # autre police (Linux) : ses signes ne sont pas ceux de l'exe Windows
+    tofu = bytes(f.getmask("￿"))
+
+    def missing(text):
+        return [ch for ch in text.translate(render.GLYPH_FALLBACK) if not ch.isspace() and bytes(f.getmask(ch)) == tofu]
+
+    for pid in presets.PRESETS:
+        assert not missing(presets.make(pid)["label"]), pid
+    for cmd in onvif.MOVES:
+        assert not missing(presets.make(f"onvif:{cmd}:Cam")["label"]), cmd
+    assert not missing("Page ▶ ◀ ▶ ❚❚ ✕")
+    assert presets.make("page_next")["label"] == "Page ►" and presets.make("win_play")["label"] == "► ‖"
+    old = render.render({"label": "▶", "bg": "#000000", "fg": "#ffffff"}, 72)
+    new = render.render({"label": "►", "bg": "#000000", "fg": "#ffffff"}, 72)
+    assert old.tobytes() == new.tobytes()
+
+
 if __name__ == "__main__":
     import tempfile
     failed = 0

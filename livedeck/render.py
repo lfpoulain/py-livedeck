@@ -14,6 +14,12 @@ FONT_CANDIDATES = [
 ]
 
 
+# Signes courants que la police des touches (Segoe UI Bold) ne sait pas dessiner : sans ce remplacement, la
+# touche affiche un carré vide. Vaut aussi pour les touches déjà enregistrées avec ces signes.
+GLYPH_FALLBACK = str.maketrans({"◀": "◄", "▶": "►", "⏴": "◄", "⏵": "►", "❚": "|", "❙": "|", "⏸": "‖",
+                                "⏭": "►|", "⏮": "|◄", "⏯": "►‖", "✕": "×", "✖": "×"})
+
+
 @lru_cache(maxsize=None)
 def _font_path() -> str | None:
     return next((p for p in FONT_CANDIDATES if Path(p).exists()), None)
@@ -106,6 +112,7 @@ def _render(size: int, bg: str, fg: str, label: str, text_px: int, icon: str,
             pass
 
     if label:
+        label = label.translate(GLYPH_FALLBACK)
         f, lines, lh = _layout(draw, label, int(text_px * s / 72) if text_px else 0, int(w * 0.9), text_h)
         y = top + max(0, (text_h - lh * len(lines)) // 2)
         for line in lines:
