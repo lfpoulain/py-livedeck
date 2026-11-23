@@ -699,14 +699,22 @@ class DeckApp(_Service):
         self._abort()
 
     def _abort(self) -> None:
-        """Coupe le flux ouvert : la lecture bloquée se termine aussitôt (sinon jusqu'au prochain message)."""
+        """Coupe le flux ouvert : la lecture bloquée se termine d'elle-même (sinon au prochain message).
+
+        Jamais de `resp.close()` ici : il attend le verrou du tampon, tenu par le fil qui lit, donc la fin de
+        la lecture en cours. Appelé depuis l'interface (Réglages enregistrés ou fermés), il la figeait une
+        seconde ou plus par app. Couper la connexion suffit ; le fil du flux ferme sa réponse lui-même."""
         resp = self._resp
         if resp is None:
             return
         try:
             resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
         except Exception:
-            pass
+            # connexion introuvable ou déjà fermée : fermeture hors de l'interface, sans rien attendre
+            threading.Thread(target=self._close_quietly, args=(resp,), name="deck-abort", daemon=True).start()
+
+    @staticmethod
+    def _close_quietly(resp) -> None:
         try:
             resp.close()
         except Exception:

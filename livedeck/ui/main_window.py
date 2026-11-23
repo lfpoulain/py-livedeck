@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         self.integ_pills = {}
         for k, name in INTEG_PILLS:
             pill = StatusPill(name)
-            pill.clicked.connect(lambda: self.open_settings("integ"))
+            pill.clicked.connect(lambda *_, k=k: self.open_settings("integ", k))
             pill.hide()
             lay.addWidget(pill, 0, Qt.AlignVCenter)
             self.integ_pills[k] = pill
@@ -1223,11 +1223,12 @@ class MainWindow(QMainWindow):
         self.grid.set_page(self.page_id)
         self.controls.set_page(self.page_id)
 
-    def open_settings(self, tab: str = "general"):
+    def open_settings(self, tab: str = "general", tool: str = ""):
+        """tool : outil dont la page s'ouvre dans l'onglet Intégrations (clé de presets.TOOLS)."""
         if self.locked:
             self.toast(HINT_LOCK, error=True)
             return
-        self._run_dialog(SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general"))
+        self._run_dialog(SettingsDialog(self.engine, self, tab if isinstance(tab, str) else "general", tool))
         self._update_pills()
 
     @staticmethod

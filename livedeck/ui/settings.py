@@ -6,18 +6,18 @@ import copy
 import html
 import threading
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
+                               QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
 from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
 from ..integrations import DECK_APPS, integration_status, probe_deck, probe_intercom, probe_tally
-from .. import onvif
+from .. import onvif, presets
 from . import theme as T
-from .widgets import Seg, label
+from .widgets import Seg, dot_icon, label
 
 
 def _dot(ok: bool | None) -> str:
@@ -48,12 +48,13 @@ def _scroll(page: QWidget) -> QScrollArea:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, engine, parent=None, tab: str = "general"):
+    def __init__(self, engine, parent=None, tab: str = "general", tool: str = ""):
         super().__init__(parent)
         self.engine = engine
+        self._tool_ok: dict = {}
         self.setWindowTitle("Réglages")
-        self.setMinimumSize(680, 560)
-        self.resize(700, 660)
+        self.setMinimumSize(720, 560)
+        self.resize(780, 640)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 20)
         lay.setSpacing(12)
@@ -67,6 +68,7 @@ class SettingsDialog(QDialog):
             tabs.set(tab)
             stack.setCurrentIndex(["general", "decks", "integ"].index(tab))
         self.tabs, self.stack = tabs, stack
+        self.show_tool(tool)
         lay.addWidget(stack, 1)
 
         btns = QHBoxLayout()
@@ -240,12 +242,29 @@ class SettingsDialog(QDialog):
         self._tests[key] = (btn, result)
         return status
 
+    def _tool_page(self, key: str, title: str) -> QVBoxLayout:
+        """Page des réglages d'un outil (affichée quand il est choisi dans la liste de gauche)."""
+        page, v = _page()
+        v.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(label(title, "H2"))
+        self._tool_pages[key] = page
+        return v
+
+    def show_tool(self, key: str) -> None:
+        """Affiche les réglages de cet outil (clé de presets.TOOLS)."""
+        keys = [k for k, _, _ in presets.TOOLS]
+        if key in keys:
+            self.tool_list.setCurrentRow(keys.index(key))
+
     def _integrations(self) -> QWidget:
+        """Un outil à la fois : la liste de gauche (avec l'état de chacun) choisit la page affichée, au lieu
+        d'une seule longue page où tout se suit."""
         integ = self.engine.cfg["integrations"]
-        w, v = _page()
+        w, outer = _page()
         self._tests: dict = {}
         self._deck_edits: dict = {}  # app -> (adresse, jeton)
-        v.addWidget(label("PY-INTERCOM  ·  TALKBACK", "H2"))
+        self._tool_pages: dict = {}
+        v = self._tool_page("intercom", "PY-INTERCOM  ·  TALKBACK")
         row = QHBoxLayout()
         self.ic_host = QLineEdit(integ["intercom"].get("host", "127.0.0.1"))
         self.ic_host.setPlaceholderText("127.0.0.1 (même PC)")
@@ -273,8 +292,7 @@ class SettingsDialog(QDialog):
                           "couper », l'état de la liaison) : action « Touche d'une app » ou bibliothèque "
                           "(onglet Outils).", "Hint", True))
 
-        v.addSpacing(6)
-        v.addWidget(label("ORCHESTREAM  ·  TOUCHES DE LA RÉGIE", "H2"))
+        v = self._tool_page("orchestream", "ORCHESTREAM  ·  TOUCHES DE LA RÉGIE")
         # API Stream Deck d'orchestream-v2 : jeton dans l'en-tête, jamais dans l'URL.
         self.orch_url, self.orch_token = self._deck_fields(
             v, "orchestream", "Jeton de l'API Stream Deck d'orchestream-v2 : dans orchestream, Réglages › "
@@ -285,17 +303,18 @@ class SettingsDialog(QDialog):
                           "choisis-la dans l'action « Touche d'une app » de l'inspecteur, ou dans la "
                           "bibliothèque (onglet Outils).", "Hint", True))
 
-        v.addSpacing(6)
-        v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
+        v = self._tool_page("tallies", "TALLY32  ·  TALLYS ESP32")
         self.tallies = QPlainTextEdit("\n".join(f"{d.get('name')} = {d.get('host')}" for d in integ.get("tallies", [])))
         self.tallies.setObjectName("Field")
         self.tallies.setPlaceholderText("Caméra 1 = 192.168.1.51\nCaméra 2 = 192.168.1.52")
-        self.tallies.setFixedHeight(72)
+        self.tallies.setMinimumHeight(120)
+        self.tallies.setMaximumHeight(200)
         v.addWidget(self.tallies)
         self.tally_status = self._test_row(v, "tallies")
+        v.addWidget(label("Un tally par ligne : Nom = adresse IP. La touche « Tallys » (onglet Outils) est verte "
+                          "quand tous sont connectés à vMix, et les reconnecte à l'appui.", "Hint", True))
 
-        v.addSpacing(6)
-        v.addWidget(label("ONVIF  ·  CAMÉRAS PTZ", "H2"))
+        v = self._tool_page("onvif", "ONVIF  ·  CAMÉRAS PTZ")
         ov = integ.get("onvif") if isinstance(integ.get("onvif"), dict) else {}
         self.onvif_cams = QPlainTextEdit(onvif.cameras_text(ov))
         self.onvif_cams.setObjectName("Field")
@@ -303,7 +322,8 @@ class SettingsDialog(QDialog):
         self.onvif_cams.setToolTip("Une caméra par ligne : Nom = adresse (port 80 par défaut ; beaucoup de caméras "
                                    "servent ONVIF sur 8080, 8000 ou 2020).\nIdentifiants propres à une caméra : "
                                    "Nom = utilisateur:motdepasse@adresse")
-        self.onvif_cams.setFixedHeight(72)
+        self.onvif_cams.setMinimumHeight(120)
+        self.onvif_cams.setMaximumHeight(200)
         v.addWidget(self.onvif_cams)
         row = QHBoxLayout()
         self.onvif_user = QLineEdit(str(ov.get("user") or ""))
@@ -321,8 +341,7 @@ class SettingsDialog(QDialog):
                           "mouvement et zoom tant que la touche est enfoncée, presets, position d'origine.",
                           "Hint", True))
 
-        v.addSpacing(6)
-        v.addWidget(label("PY-MULTIVIEW  ·  MULTIVIEWER SRT/OMT", "H2"))
+        v = self._tool_page("multiview", "PY-MULTIVIEW  ·  MULTIVIEWER SRT/OMT")
         self.mv_url, self.mv_token = self._deck_fields(
             v, "multiview", "Facultatif : seulement si un jeton est réglé dans py-multiview (Préférences → "
             "Pilotage à distance). Vide : accès libre.", "facultatif")
@@ -338,9 +357,8 @@ class SettingsDialog(QDialog):
         for app, spec in DECK_APPS.items():
             if app in ("orchestream", "multiview", "intercom"):  # py-intercom : section du dessus
                 continue
-            v.addSpacing(6)
             section = spec.get("section") or "TOUCHES DÉCRITES PAR L'APP"
-            v.addWidget(label(f"{spec['name'].upper()}  ·  {section}", "H2"))
+            v = self._tool_page(app, f"{spec['name'].upper()}  ·  {section}")
             url, _ = self._deck_fields(
                 v, app, f"Jeton API {'(obligatoire)' if spec['token_required'] else '(facultatif)'} : "
                 f"{spec['token_where']}." + ("" if spec["token_required"] else " Vide : accès libre."),
@@ -356,10 +374,30 @@ class SettingsDialog(QDialog):
             if spec.get("hint"):
                 v.addWidget(label(spec["hint"], "Hint", True))
 
-        v.addWidget(label("Une intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
-                          "Intégrations) ; pendant que cette fenêtre est ouverte, elles sont toutes surveillées.",
-                          "Hint", True))
-        v.addStretch()
+        # Liste des outils (pastille : vert relié, rouge en défaut, gris inactif) + la page de l'outil choisi
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        self.tool_list = QListWidget()
+        self.tool_list.setObjectName("Nav")
+        self.tool_list.setFixedWidth(176)
+        self.tool_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tool_stack = QStackedWidget()
+        for key, name, _ in presets.TOOLS:
+            it = QListWidgetItem(dot_icon(T.FAINT), name)
+            it.setData(Qt.UserRole, key)
+            it.setSizeHint(QSize(160, 36))
+            self.tool_list.addItem(it)
+            page = self._tool_pages[key]
+            page.layout().addStretch()
+            self.tool_stack.addWidget(page)
+        self.tool_list.currentRowChanged.connect(self.tool_stack.setCurrentIndex)
+        self.tool_list.setCurrentRow(0)
+        row.addWidget(self.tool_list)
+        row.addWidget(self.tool_stack, 1)
+        outer.addLayout(row, 1)
+        outer.addWidget(label("Un outil ne travaille que si une touche l'utilise (panneau de gauche, onglet "
+                              "« Outils ») ; pendant que cette fenêtre est ouverte, ils sont tous surveillés.",
+                              "Hint", True))
         return w
 
     def _deck_fields(self, v, app: str, token_tip: str, token_hint: str) -> tuple[QLineEdit, QLineEdit]:
@@ -440,9 +478,15 @@ class SettingsDialog(QDialog):
                                  "si vMix tourne sur un autre PC, indique son IP.")
         labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
                   "multiview": self.mv_status, "onvif": self.onvif_status, **self.deck_status}
+        keys = [k for k, _, _ in presets.TOOLS]
         for key, _, ok, text in integration_status(e):
             if key in labels:
                 labels[key].setText(_dot(ok) + html.escape(text))
+            if key in keys and ok != self._tool_ok.get(key, 0):  # pastille de la liste : seulement si elle change
+                self._tool_ok[key] = ok
+                item = self.tool_list.item(keys.index(key))
+                item.setIcon(dot_icon(T.OK if ok else T.FAINT if ok is None else T.DANGER))
+                item.setToolTip(text)
 
     def _save(self):
         """Une seule étape « annuler » ; le moteur applique ensuite vMix, luminosité et intégrations.

@@ -99,6 +99,9 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
 - **PTZ maintenu** : un mouvement de caméra (`vmix.ptz`, `onvif.ptz`) est une action maintenue comme le
   talkback : son arrêt part au relâché, sur la copie de la touche, et `release_all()` l'envoie aussi. Seul l'axe
   lancé est arrêté (panoramique ou zoom) ; un arrêt ONVIF qui échoue est retenté une fois.
+- **Rien de bloquant dans l'interface** : `DeckApp._abort()` (appelé quand les Réglages sont enregistrés ou
+  fermés) coupe la connexion du flux sans appeler `close()` sur la réponse, qui attendrait la lecture en cours
+  dans le fil du flux ; ce fil ferme sa réponse lui-même.
 - **Configuration** : toute modification passe par `Engine.mutate()` (verrou, annuler / rétablir). La sauvegarde
   prend un instantané sous verrou et l'écrit de façon atomique (`config.json.tmp`, `fsync`, `os.replace`) ; une
   copie par jour et avant chaque import dans `backups/`. Les clés commençant par `_` ne sont jamais enregistrées.

@@ -4643,6 +4643,50 @@ def test_tools_have_their_own_sections(tmp_path):
     e.stop()
 
 
+
+def test_settings_one_page_per_tool_and_save_never_freezes(tmp_path):
+    """Réglages → Intégrations : un outil par page, choisi dans une liste qui montre son état. Enregistrer
+    ou fermer ne fige jamais l'interface : couper le flux en direct d'une app n'attend pas sa lecture."""
+    dm = fakes.FakeDmaix(18285)
+    fakes.FakeDmaix(18286)
+    e, w, pg = ui_window(tmp_path, {"0,0": new_button(actions=[new_action("deck.key", app="dmaix", key="output.status")])},
+                         {"dmaix": {"url": "127.0.0.1:18285"}, "mixpanel": {"url": "127.0.0.1:18286"}})
+    d = e.deck("dmaix")
+    assert wait(lambda: d.connected and d.mode == "stream", 5), d.error
+    dlg = SettingsDialog(e, w, tab="integ", tool="dmaix")
+    dlg.show()
+    names = [dlg.tool_list.item(i).text() for i in range(dlg.tool_list.count())]
+    assert names == presets.TOOL_NAMES and dlg.tool_stack.count() == len(names)
+    assert dlg.tool_list.currentItem().data(Qt.UserRole) == "dmaix"
+    url = dlg._deck_edits["dmaix"][0]
+    assert url.isVisibleTo(dlg) and not dlg.ic_host.isVisibleTo(dlg) and not dlg.onvif_cams.isVisibleTo(dlg)
+    dlg.show_tool("onvif")
+    assert dlg.onvif_cams.isVisibleTo(dlg) and not url.isVisibleTo(dlg)
+    # fenêtre ouverte : MixPanel (aucune touche) est surveillé lui aussi, son flux est ouvert
+    mp = e.deck("mixpanel")
+    assert wait(lambda: mp.connected and mp._resp is not None and d._resp is not None, 5), mp.error
+    dlg._refresh_status()
+    assert "touche(s)" in dlg.tool_list.item(names.index("DMAIX")).toolTip()
+    # adresse changée + fermeture : deux flux coupés (DMAIX reconfiguré, MixPanel plus surveillé), sans attendre
+    url.setText("127.0.0.1:18286")
+    t0 = time.perf_counter()
+    dlg._save()
+    took = time.perf_counter() - t0
+    assert took < 0.3, f"l'enregistrement a figé l'interface {took:.2f} s"
+    assert wait(lambda: mp._resp is None and not mp.connected or not mp.active, 3)
+    assert wait(lambda: d.connected and d.url.endswith(":18286"), 5), d.error   # … et DMAIX repart sur la nouvelle adresse
+    assert dm is not None
+    # la pastille d'un outil et « Réglages… » de l'inspecteur ouvrent directement sa page
+    opened = []
+    with mock.patch.object(MainWindow, "_run_dialog", staticmethod(lambda dlg_: opened.append(dlg_) or 0)):
+        w.integ_pills["dmaix"].clicked.emit()
+        w.open_settings("integ", "tallies")
+    assert [o.tool_list.currentItem().data(Qt.UserRole) for o in opened] == ["dmaix", "tallies"]
+    for o in opened:
+        o.reject()
+    w.quit_app()
+
+
 if __name__ == "__main__":
     import tempfile
     failed = 0

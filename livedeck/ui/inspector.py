@@ -662,7 +662,7 @@ class Inspector(QFrame):
         st = QPushButton("Réglages…")
         st.setObjectName("Ghost")
         st.setToolTip("Réglages → Intégrations")
-        st.clicked.connect(lambda: self.main.open_settings("integ"))
+        st.clicked.connect(lambda: self.main.open_settings("integ", key))
         row.addWidget(st)
         row.addStretch()
         v.addLayout(row)

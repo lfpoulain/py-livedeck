@@ -12,6 +12,13 @@
 - **Touche vide** : une pastille par outil dans « Que doit faire cette touche ? », avec sa couleur.
 - L'onglet *Boutons* ne garde que les familles d'actions (Vidéo, Audio, Windows, Clavier, Web…).
 
+### Réglages : une page par outil
+- **Réglages → Intégrations** n'est plus une longue page où tout se suit : une liste à gauche (py-intercom,
+  orchestream, py-multiview, MixPanel, DMAIX, caméras ONVIF, Tally32) avec la **pastille d'état** de chacun, et à
+  droite les réglages du seul outil choisi.
+- La pastille d'un outil dans la barre d'état et le bouton **Réglages…** de l'inspecteur ouvrent directement sa
+  page.
+
 ### Texte et couleurs d'une touche d'app
 - Une touche décrite par un outil prend par défaut son texte, sa couleur et son état de l'outil. L'action
   **Touche d'une app** a maintenant deux réglages :
@@ -24,6 +31,10 @@
   indisponible, injoignable). Ce retour passe par-dessus celui de l'outil.
 
 ### Corrigé
+- **Gel de quelques secondes à l'enregistrement des Réglages** (et à leur fermeture) : LiveDeck coupait le flux
+  en direct des apps (orchestream, py-multiview, MixPanel, DMAIX, py-intercom) en attendant, dans l'interface, que
+  la lecture en cours se termine, soit une seconde ou plus par app. La connexion est maintenant coupée sans rien
+  attendre.
 - **Flèches en carré vide sur les touches** : les boutons *Page suivante*, *Page précédente*, *Lecture / pause* et
   *Piste suivante* de la bibliothèque affichaient un carré à la place de ▶, ◀ et ❚, absents de la police des
   touches. Ils utilisent maintenant ►, ◄ et ‖. Les touches déjà posées sont corrigées à l'affichage, sans rien

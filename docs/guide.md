@@ -272,7 +272,8 @@ de l'installation : mettre à jour ou désinstaller LiveDeck ne la touche pas
 
 ## Intégrations maison
 
-Réglages → **Intégrations** pour les adresses, et l'onglet **Outils** du panneau de gauche pour les touches :
+Réglages → **Intégrations** pour les adresses (une page par outil : choisis-le dans la liste de gauche, sa
+pastille donne son état), et l'onglet **Outils** du panneau de gauche pour les touches :
 chaque outil y a sa section, avec son état et ses touches rangées par rubrique.
 Chaque intégration ne travaille que si une touche l'utilise ; pendant que la fenêtre Réglages est ouverte,
 elles sont toutes surveillées.
