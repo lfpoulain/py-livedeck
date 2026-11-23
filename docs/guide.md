@@ -9,6 +9,7 @@
 - [Créer des touches vite](#créer-des-touches-vite)
 - [Les étapes d'une touche](#les-étapes-dune-touche)
 - [Take : preview puis antenne](#take--preview-puis-antenne)
+- [Caméras PTZ dans vMix](#caméras-ptz-dans-vmix)
 - [Texte dynamique](#texte-dynamique)
 - [Retours d'état automatiques](#retours-détat-automatiques)
 - [Ce qui change par rapport à Companion](#ce-qui-change-par-rapport-à-companion)
@@ -127,10 +128,10 @@ La case **Sécurité** impose de maintenir la touche ½ s pour la déclencher : 
 stream (la bibliothèque propose *FTB sécurisé* et *Arrêt du stream*). Elle vaut aussi pour un **Interrupteur** :
 un appui bref ne le fait pas basculer.
 
-### Actions maintenues (talkback, raccourci maintenu)
+### Actions maintenues (talkback, raccourci maintenu, PTZ)
 
-Un talkback py-intercom en mode *Maintenu* ou un raccourci clavier *Maintenir* reste actif tant que tu gardes le
-doigt sur la touche, quel que soit le type de touche :
+Un talkback py-intercom en mode *Maintenu*, un raccourci clavier *Maintenir* ou un mouvement de caméra PTZ
+(vMix ou ONVIF) reste actif tant que tu gardes le doigt sur la touche, quel que soit le type de touche :
 
 | Touche | Le maintien commence… | … et s'arrête |
 |---|---|---|
@@ -166,6 +167,21 @@ reste sur « Rien », comme dans Companion. Pour passer d'un coup à Take, utili
 
 La liste des transitions reprend celle de vMix : effets (et leurs versions inversées), **Stinger 1-4** et
 **Bouton transition 1-4** (la transition réglée sur ce bouton dans vMix). La durée à 0 garde celle de vMix.
+
+## Caméras PTZ dans vMix
+
+L'action **Caméra PTZ (vMix)** (catégorie *Vidéo*) pilote la caméra réglée dans un input vMix. Choisis l'input,
+puis la commande :
+
+| Commande | Ce que fait la touche |
+|---|---|
+| ◀ ▶ ▲ ▼, diagonales, Zoom + / −, mise au point plus près / plus loin | Tant que la touche est enfoncée, à la vitesse réglée ; l'arrêt part au relâché |
+| Arrêter le mouvement, Position d'origine | Un simple appui |
+| Mise au point automatique / manuelle | Un simple appui |
+| Aller à la position de cet input (PTZ virtuel) | L'input choisi est une position enregistrée de la caméra : elle s'y rend, sans changer ce qui est à l'antenne |
+| Enregistrer la position dans cet input / Créer un input PTZ virtuel | Met à jour la position d'un PTZ virtuel, ou en crée un à la position actuelle |
+
+Pour une caméra qui n'est pas dans vMix, ou pour ses presets internes : [Caméras ONVIF](#caméras-onvif).
 
 ## Texte dynamique
 
@@ -203,6 +219,7 @@ Rien à configurer : la touche s'allume selon ce qu'elle fait.
 | Rec / Stream / FTB / MultiCorder | rouge quand actif |
 | Talkback py-intercom | bleu micro ouvert ; grisée avec HORS LIGNE, DÉSARMÉ ou BUS ABSENT ; bleu foncé PERMANENT pour un bus « Toujours actif » |
 | Raccourci maintenu | bleu tant que la touche est enfoncée |
+| Mouvement PTZ (vMix ou ONVIF) | bleu tant que la caméra bouge ; ONVIF : grisée avec HORS LIGNE si la caméra ne répond pas |
 | Interrupteur | jaune quand il est actif |
 
 **＋ Personnaliser** ajoute ses propres conditions : n'importe quel input, Mix 2 à 16, overlay, son,
@@ -265,6 +282,7 @@ elles sont toutes surveillées.
 |---|---|---|
 | **py-intercom** (API Stream Deck du client, `http://127.0.0.1:5080`, jeton facultatif) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus ; ou les touches que py-intercom décrit (une par bus, *Tout couper*, état de la liaison) | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon ; pour les touches décrites : texte, couleur et état donnés par py-intercom, en direct |
 | **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
+| **Caméras ONVIF** (PTZ, utilisateur et mot de passe) | Pan, tilt et zoom tant que la touche est enfoncée, arrêt, position d'origine, rappel et enregistrement d'un preset | Bleu tant que la caméra bouge ; grisée avec HORS LIGNE si elle ne répond pas |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, API Stream Deck, jeton facultatif) | Toute touche que py-multiview décrit : réception, un flux, le son d'un flux, émission OMT, retour audio et son volume, fenêtre de retour, route multicast | Texte, couleur et état donnés par py-multiview, en direct ; grisée avec la raison (« Aucun écran assigné. ») |
 | **MixPanel** (console X-Touch pour vMix, API Stream Deck, jeton facultatif) | Toute touche que MixPanel décrit : rappeler une scène, lancer une macro, ducking, page A / B, verrouillage, mode de la X-Touch ; état de vMix et de la X-Touch (affichage seul) | Texte, couleur et état donnés par MixPanel, en direct (« Jeu / En place », « Ducking / Musique baissée ») ; grisée avec la raison (« Macro vide. », « X-Touch non connectée. ») |
@@ -356,6 +374,27 @@ requêtes, LiveDeck attend le délai demandé.
 
 Un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur te demande de
 mettre à jour son firmware.
+
+### Caméras ONVIF
+
+Une caméra par ligne, `Nom = adresse`. Le port `80` est utilisé s'il n'est pas écrit ; beaucoup de caméras
+servent ONVIF ailleurs (`8080`, `8000`, `2020`) : `Plateau = 192.168.1.60:8080`. **Utilisateur** et **Mot de
+passe** valent pour toutes les caméras ; c'est souvent un compte ONVIF à créer dans la caméra, distinct de celui
+de sa page web. Une caméra qui a les siens : `Plateau = utilisateur:motdepasse@192.168.1.60`. **Tester** dit,
+caméra par caméra, si le PTZ répond et combien de presets elle contient.
+
+L'action **Caméra ONVIF (PTZ)**, ou la bibliothèque (*Intégrations* : les mouvements de chaque caméra et une
+touche par preset) :
+
+| Commande | Ce que fait la touche |
+|---|---|
+| ◀ ▶ ▲ ▼, diagonales, Zoom + / − | La caméra bouge **tant que la touche est enfoncée**, à la vitesse réglée, et s'arrête au relâché. Deux touches en même temps : zoom et panoramique ensemble |
+| Arrêter le mouvement | Arrête tout (utile après un mouvement lancé par un interrupteur) |
+| Aller à un preset | Par son nom ou son numéro ; la liste proposée est lue sur la caméra |
+| Enregistrer la position dans un preset | Remplace le preset s'il existe, sinon le crée à ce nom. Coche **Sécurité** pour ne pas l'écraser par erreur |
+| Position d'origine | La position « Home » de la caméra |
+
+Les mots de passe sont enregistrés en clair dans `config.json`, comme les jetons API : garde ce fichier pour toi.
 
 ### Régler py-multiview
 

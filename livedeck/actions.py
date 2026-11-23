@@ -7,6 +7,7 @@ import time
 from . import adjust, hotkeys, netsend, webreq, winsys
 from .adjust import BUSES, VMIX_STEP, VMIX_TARGETS, WIN_MODES, WIN_TARGETS
 from .integrations import DECK_APPS, DECK_DEFAULT_APP, UNREACHABLE, bus_label, deck_spec
+from .onvif import ARROWS as PTZ_ARROWS, COMMANDS as ONVIF_COMMANDS, MOVE_CHOICES, MOVES
 from .webreq import error_text
 
 # Fonctions de transition de l'API vMix (FadeToBlack n'en est pas une : c'est un interrupteur, voir PRODUCTION)
@@ -28,7 +29,8 @@ MEDIA = [("playpause", "Lecture / pause"), ("next", "Piste suivante"), ("previou
 SCROLL_DIRS = [("vertical", "Verticale (haut / bas)"), ("horizontal", "Horizontale (gauche / droite)")]
 # action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
 # (touche décrite par une app, « deck.key » / « deckkey » : l'intégration est son app, voir integration_of)
-INTEGRATION_OF = {"intercom.ptt": "intercom", "tally.reconnect": "tallies", "intercom": "intercom", "tally": "tallies"}
+INTEGRATION_OF = {"intercom.ptt": "intercom", "tally.reconnect": "tallies", "intercom": "intercom", "tally": "tallies",
+                  "onvif.ptz": "onvif", "onvif": "onvif"}
 DECK_TYPES = ("deck.key", "deckkey")  # action et condition d'une touche décrite par une app (/api/deck)
 
 
@@ -60,6 +62,29 @@ NET_PROTOS = [("tcp", "TCP"), ("udp", "UDP")]
 OVERLAY_MODES = [("toggle", "Basculer (afficher / masquer)"), ("in", "Afficher"), ("out", "Masquer"),
                  ("off", "Couper sans transition"), ("preview", "Envoyer en preview")]
 
+# PTZ de vMix (caméra réglée dans l'input) : commande -> fonction de l'API. Les mouvements et la mise au point
+# durent tant que la touche est enfoncée ; le relâché envoie l'arrêt du même axe (_ptz_vmix_stop).
+PTZ_VMIX = {"left": "PTZMoveLeft", "right": "PTZMoveRight", "up": "PTZMoveUp", "down": "PTZMoveDown",
+            "upleft": "PTZMoveUpLeft", "upright": "PTZMoveUpRight", "downleft": "PTZMoveDownLeft",
+            "downright": "PTZMoveDownRight", "zoomin": "PTZZoomIn", "zoomout": "PTZZoomOut",
+            "focusnear": "PTZFocusNear", "focusfar": "PTZFocusFar", "focusauto": "PTZFocusAuto",
+            "focusmanual": "PTZFocusManual", "home": "PTZHome", "virtual": "PTZMoveToVirtualInputPosition",
+            "update": "PTZUpdateVirtualInput", "create": "PTZCreateVirtualInput"}
+PTZ_VMIX_HELD = (*MOVES, "focusnear", "focusfar")
+PTZ_VMIX_COMMANDS = MOVE_CHOICES + [
+    ("stop", "Arrêter le mouvement"), ("home", "Position d'origine"),
+    ("virtual", "Aller à la position de cet input (PTZ virtuel)"),
+    ("update", "Enregistrer la position dans cet input (PTZ virtuel)"),
+    ("create", "Créer un input PTZ virtuel à cette position"),
+    ("focusnear", "Mise au point : plus près"), ("focusfar", "Mise au point : plus loin"),
+    ("focusauto", "Mise au point automatique"), ("focusmanual", "Mise au point manuelle")]
+
+
+def _ptz_vmix_stop(command: str) -> str:
+    return ("PTZZoomStop" if command.startswith("zoom") else "PTZFocusStop" if command.startswith("focus")
+            else "PTZMoveStop")
+
+
 VMIX_FUNCTIONS = [
     "PreviewInput", "CutDirect", "ActiveInput", "Cut", "Fade", "Merge", "Stinger1", "Stinger2",
     "Transition1", "Transition2", "Transition3", "Transition4", "QuickPlay", "FadeToBlack",
@@ -73,7 +98,10 @@ VMIX_FUNCTIONS = [
     "MultiViewOverlay", "MultiViewOverlayOn", "MultiViewOverlayOff", "KeyPress", "ScriptStart",
     "ScriptStop", "ScriptStopAll", "DataSourceAutoNextOn", "DataSourceNextRow", "ReplayMarkIn",
     "ReplayMarkOut", "ReplayPlay", "ReplayStopEvents", "PTZMoveToVirtualInputPosition",
-    "PTZHome", "SetDynamicInput1", "SetDynamicValue1", "SelectTitlePreset", "TitleBeginAnimation",
+    "PTZMoveToVirtualInputPositionByIndex", "PTZCreateVirtualInput", "PTZUpdateVirtualInput", "PTZHome",
+    "PTZMoveUp", "PTZMoveDown", "PTZMoveLeft", "PTZMoveRight", "PTZMoveUpLeft", "PTZMoveUpRight",
+    "PTZMoveDownLeft", "PTZMoveDownRight", "PTZMoveStop", "PTZZoomIn", "PTZZoomOut", "PTZZoomStop",
+    "PTZFocusNear", "PTZFocusFar", "PTZFocusStop", "PTZFocusAuto", "PTZFocusManual", "SetDynamicInput1", "SetDynamicValue1", "SelectTitlePreset", "TitleBeginAnimation",
     "SetCountdown", "StartCountdown", "StopCountdown", "ResetCountdown",
 ]
 
@@ -120,6 +148,14 @@ ACTIONS: dict[str, dict] = {
                      "help": "Affiche ou masque un input sur un canal d'overlay.",
                      "fields": [F("input", "Input", "input", ""), F("overlay", "Overlay", "overlay", 1),
                                 F("mode", "Mode", "choice", "toggle", OVERLAY_MODES)]},
+    "vmix.ptz": {"label": "Caméra PTZ (vMix)", "cat": "Vidéo", "color": "#0f2a3d",
+                 "help": "Pilote la caméra PTZ réglée dans un input vMix. Un mouvement, un zoom ou une mise au "
+                         "point dure tant que la touche est enfoncée et s'arrête au relâché. « PTZ virtuel » : "
+                         "l'input choisi est une position enregistrée de la caméra (dans vMix, réglages de "
+                         "l'input → PTZ → Create Input at this Position).",
+                 "fields": [F("input", "Input", "input", ""),
+                            F("command", "Commande", "choice", "left", PTZ_VMIX_COMMANDS),
+                            F("speed", "Vitesse", "percent", 50, when={"command": PTZ_VMIX_HELD})]},
     "vmix.audio": {"label": "Couper un son", "cat": "Audio", "color": "#0b2e2a",
                    "help": "Coupe ou rétablit l'audio d'un input (micro, musique…).",
                    "fields": [F("input", "Input", "input", ""), F("mode", "Mode", "choice", "toggle", AUDIO_MODES)]},
@@ -159,6 +195,15 @@ ACTIONS: dict[str, dict] = {
                  "fields": [F("app", "App", "choice", DECK_DEFAULT_APP,
                               [(k, v["label"]) for k, v in DECK_APPS.items()]),
                             F("key", "Touche", "deck_key", "")]},
+    "onvif.ptz": {"label": "Caméra ONVIF (PTZ)", "cat": "Intégrations", "color": "#0f2a3d",
+                  "help": "Pilote une caméra ONVIF sans passer par vMix. Un mouvement ou un zoom dure tant que "
+                          "la touche est enfoncée et s'arrête au relâché. Un preset se désigne par son nom ou "
+                          "son numéro. Caméras, utilisateur et mot de passe : Réglages → Intégrations.",
+                  "fields": [F("camera", "Caméra", "onvif_cam", ""),
+                             F("command", "Commande", "choice", "left", ONVIF_COMMANDS),
+                             F("speed", "Vitesse", "percent", 50, when={"command": tuple(MOVES)}),
+                             F("preset", "Preset (nom ou numéro)", "onvif_preset", "",
+                               when={"command": ("preset", "save")})]},
     "tally.reconnect": {"label": "Tallys : reconnecter", "cat": "Intégrations", "color": "#000000",
                         "help": "Demande aux Tally32 de se reconnecter à vMix. Le retour d'état montre en "
                                 "direct les tallys hors ligne.",
@@ -258,7 +303,9 @@ def is_momentary(a: dict) -> bool:
     """Action « maintenue » : elle commence à l'appui et doit être relâchée (phase « up »)."""
     t = a.get("type")
     return ((t == "intercom.ptt" and a.get("mode", "hold") == "hold")
-            or (t == "hotkey" and bool(a.get("hold")) and bool(a.get("keys"))))
+            or (t == "hotkey" and bool(a.get("hold")) and bool(a.get("keys")))
+            or (t == "vmix.ptz" and a.get("command", "left") in PTZ_VMIX_HELD)
+            or (t == "onvif.ptz" and a.get("command", "left") in MOVES))
 
 
 def momentary(acts) -> list[dict]:
@@ -310,11 +357,16 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
             hotkeys.release(a["keys"])
         elif t == "intercom.ptt" and a.get("mode", "hold") == "hold":
             _ptt_release(engine, a)
+        elif t == "vmix.ptz" and a.get("command", "left") in PTZ_VMIX_HELD and str(a.get("input") or "").strip():
+            # arrêt du mouvement : envoyé même si l'input vient de disparaître de la liste lue
+            engine.vmix.function(_ptz_vmix_stop(a.get("command", "left")), Input=engine.vmix.input_param(a["input"]))
+        elif t == "onvif.ptz":
+            engine.onvif.run(a, "up")
         return
     vm = engine.vmix
     st = vm.state
     mix = int(a.get("mix") or 1)
-    if t in ("vmix.preview", "vmix.program", "vmix.take", "vmix.audio") or (
+    if t in ("vmix.preview", "vmix.program", "vmix.take", "vmix.audio", "vmix.ptz") or (
             t == "vmix.overlay" and a.get("mode", "toggle") != "off"):
         got = _input(engine, a)
         if not got:
@@ -357,6 +409,18 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
     elif t == "vmix.audio":
         name = {"toggle": "Audio", "off": "AudioOff", "on": "AudioOn"}.get(a.get("mode", "toggle"), "Audio")
         vm.function(name, Input=vm.input_param(ref))
+    elif t == "vmix.ptz":
+        command, inp = a.get("command", "left"), vm.input_param(ref)
+        if command == "stop":
+            vm.function("PTZMoveStop", Input=inp)
+            vm.function("PTZZoomStop", Input=inp)
+        elif command in PTZ_VMIX_HELD:
+            speed = max(1, min(100, int(float(a.get("speed") or 50)))) / 100
+            vm.function(PTZ_VMIX[command], Input=inp, Value=f"{speed:g}")
+        else:
+            vm.function(PTZ_VMIX.get(command, "PTZHome"), Input=inp)
+    elif t == "onvif.ptz":
+        engine.onvif.run(a, "down")
     elif t == "vmix.production":
         what, mode = a.get("what"), a.get("mode", "toggle")
         if what == "fadetoblack" and mode in ("start", "stop"):
@@ -552,6 +616,17 @@ def summary(a: dict, page_names: dict | None = None) -> str:
     if t == "vmix.audio":
         mode = dict(AUDIO_MODES).get(a.get("mode"), "").lower()
         return f"Audio · {a.get('input') or '?'} ({mode})"
+    if t == "vmix.ptz":
+        cmd = a.get("command", "left")
+        what = PTZ_ARROWS.get(cmd) or dict(PTZ_VMIX_COMMANDS).get(cmd, cmd).split(" (")[0].lower()
+        return f"PTZ · {a.get('input') or '?'} · {what}" + (f" ({a.get('speed')} %)" if cmd in PTZ_VMIX_HELD else "")
+    if t == "onvif.ptz":
+        cmd, cam = a.get("command", "left"), a.get("camera") or "caméra"
+        if cmd in ("preset", "save"):
+            return (f"ONVIF · {cam} · " + ("preset" if cmd == "preset" else "enregistrer")
+                    + f" « {a.get('preset') or '?'} »")
+        what = PTZ_ARROWS.get(cmd) or dict(ONVIF_COMMANDS).get(cmd, cmd).lower()
+        return f"ONVIF · {cam} · {what}" + (f" ({a.get('speed')} %)" if cmd in MOVES else "")
     if t == "vmix.production":
         mode = dict(TOGGLE_MODES).get(a.get("mode"), "").lower()
         return f"{dict(PRODUCTION).get(a.get('what'), '?')} ({mode})"

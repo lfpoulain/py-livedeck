@@ -15,6 +15,7 @@ flowchart LR
     A --> HK[hotkeys.py<br/>pynput]
     A --> WR[webreq.py<br/>HTTP]
     A --> NS[netsend.py<br/>TCP · UDP · OSC]
+    A --> OV[onvif.py<br/>SOAP · PTZ]
     A --> IN[integrations.py<br/>py-intercom · Tally32<br/>apps /api/deck : orchestream, py-multiview, MixPanel]
     VX -- TALLY / ACTS / XML --> E
     IN -- état en direct --> E
@@ -51,6 +52,7 @@ flowchart LR
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
 | `integrations.py` | py-intercom (`Intercom` : parole et bus par `GET /api/deck/state` et `POST /api/deck/commands/ptt.*`, messages d'erreur, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview, MixPanel, DMAIX, py-intercom ; MixPanel reconnu au test par `app.name`) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, tests de connexion, conversion des bricolages Companion |
+| `onvif.py` | Caméras ONVIF : client SOAP sans dépendance (WS-Security daté à l'heure de la caméra + Digest HTTP), découverte du service PTZ et du profil, mouvement continu / arrêt par axe, presets, origine ; `Onvif` surveille les caméras réglées et exécute l'action `onvif.ptz` |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |
@@ -94,6 +96,9 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
   renvoyé (2 fois au plus, une seule alerte) ; bus fermé, ou en mode bascule dans le client (l'opérateur a pu le
   rouvrir), surveillance terminée. Un nouvel appui annule ce renvoi. Un bus « Toujours actif » n'est jamais coupé.
   Raccourci de secours utilisé après un « on » resté sans réponse : le relâché envoie quand même « off ».
+- **PTZ maintenu** : un mouvement de caméra (`vmix.ptz`, `onvif.ptz`) est une action maintenue comme le
+  talkback : son arrêt part au relâché, sur la copie de la touche, et `release_all()` l'envoie aussi. Seul l'axe
+  lancé est arrêté (panoramique ou zoom) ; un arrêt ONVIF qui échoue est retenté une fois.
 - **Configuration** : toute modification passe par `Engine.mutate()` (verrou, annuler / rétablir). La sauvegarde
   prend un instantané sous verrou et l'écrit de façon atomique (`config.json.tmp`, `fsync`, `os.replace`) ; une
   copie par jour et avant chaque import dans `backups/`. Les clés commençant par `_` ne sont jamais enregistrées.
@@ -106,7 +111,7 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
 
 `tests/test_core.py` lance de vrais scénarios de bout en bout : faux vMix (`tools/fake_vmix.py`, Mix 1 à 4, titres,
 vidéos, vMix lent ou figé), faux Stream Deck, faux Loupedeck (port série simulé : poignée de main, trames, molettes,
-tactile), faux py-intercom, orchestream-v2 (touches et flux en direct), Tally32, py-multiview, MixPanel (et le vrai serveur de MixPanel si le dépôt `py-mix-panel` est à côté), API JSON et faux clavier
+tactile), faux py-intercom, orchestream-v2 (touches et flux en direct), Tally32, fausse caméra ONVIF (jeton vérifié, horloge décalée), py-multiview, MixPanel (et le vrai serveur de MixPanel si le dépôt `py-mix-panel` est à côté), API JSON et faux clavier
 (`tests/fakes.py`), interface Qt hors écran. Rien ne sort de `127.0.0.1`, aucune vraie touche n'est simulée et le
 registre Windows n'est jamais touché.
 

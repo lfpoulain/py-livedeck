@@ -5,7 +5,7 @@ import re
 import urllib.parse
 
 from . import adjust
-from .actions import F
+from .actions import F, is_momentary
 from .adjust import WIN_TARGETS
 from .health import JSON_OPS, json_compare, json_path, json_text, parse_targets
 from .integrations import DECK_APPS, DECK_DEFAULT_APP, bus_label, de, deck_name
@@ -52,6 +52,10 @@ CONDITIONS: dict[str, dict] = {
               "fields": [F("target", "Tally", "tally", "all"),
                          F("state", "Quand", "choice", "ko", [("ok", "Tous connectés à vMix"),
                                                              ("ko", "Au moins un hors ligne")])]},
+    "onvif": {"label": "Caméra ONVIF",
+              "fields": [F("camera", "Caméra", "onvif_cam", ""),
+                         F("state", "Quand", "choice", "offline", [("offline", "Injoignable ou à régler"),
+                                                                    ("ok", "Joignable")])]},
     "deckkey": {"label": "Touche d'une app (orchestream, py-multiview…)",
                 "fields": [F("app", "App", "choice", DECK_DEFAULT_APP, [(k, v["label"]) for k, v in DECK_APPS.items()]),
                            F("key", "Touche", "deck_key", ""),
@@ -202,6 +206,12 @@ def _auto_press(b: dict) -> list[dict]:
             # Texte, couleur et état viennent de l'app (« show » : toujours vrai, l'apparence suit la touche)
             return [fb("deckkey", app=a.get("app") or DECK_DEFAULT_APP, key=a["key"], title=a.get("title") or "",
                        state="show")]
+        if t in ("vmix.ptz", "onvif.ptz"):
+            # bleu tant que la caméra bouge (touche enfoncée) ; ONVIF : grisée si la caméra ne répond pas
+            held = [fb("pressed", BLUE, WHITE)] if is_momentary(a) else []
+            if t == "onvif.ptz":
+                held.append(fb("onvif", OFF_BG, OFF_FG, camera=a.get("camera", ""), state="offline"))
+            return held
         if t == "tally.reconnect":
             target = a.get("target", "all")
             return [fb("tally", "#237423", WHITE, target=target, state="ok"),
@@ -293,6 +303,13 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         return ok, {"label": fmt.replace("\\n", "\n").replace("{value}", json_text(val))} if ok and fmt else {}
     if t == "deckkey":
         return _eval_deckkey(engine, b, cond)
+    if t == "onvif":
+        if cond.get("state", "offline") == "ok":
+            cam = engine.onvif.camera(cond.get("camera", ""))
+            return bool(cam and cam.reachable), {}
+        why = engine.onvif.unavailable(cond.get("camera", ""))
+        base = (b.get("label") or "Caméra").strip()
+        return bool(why), {"label": f"{base}\n{why}"} if why else {}
     if t == "tally":
         ok, down = engine.tallies.summary(cond.get("target", "all"))
         if ok is None:
@@ -356,6 +373,8 @@ def describe(f: dict) -> str:
                           "est lue" if c.get("op") == "always" else
                           f"{dict(JSON_OPS).get(c.get('op'), c.get('op'))}"
                           + (f" « {c.get('value')} »" if c.get("op") not in ("truthy",) else ""))),
+        "onvif": (f"la caméra {c.get('camera') or 'ONVIF'} répond" if c.get("state") == "ok" else
+                  f"la caméra {c.get('camera') or 'ONVIF'} est injoignable (texte : HORS LIGNE, À RÉGLER)"),
         "tally": "tous les tallys sont connectés" if c.get("state") == "ok" else "un tally est hors ligne",
         "deckkey": {"show": f"toujours : texte, couleur et état de la touche {de(app)}",
                     "offline": f"{app} est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",

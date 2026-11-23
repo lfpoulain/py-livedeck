@@ -15,6 +15,7 @@ from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
 from ..integrations import DECK_APPS, integration_status, probe_deck, probe_intercom, probe_tally
+from .. import onvif
 from . import theme as T
 from .widgets import Seg, label
 
@@ -81,7 +82,7 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, *engine.deck_apps.values(), engine.tallies):
+        for svc in (engine.intercom, *engine.deck_apps.values(), engine.tallies, engine.onvif):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
@@ -92,7 +93,7 @@ class SettingsDialog(QDialog):
         # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
         # à chaque ouverture des Réglages.
         self._timer.stop()
-        for svc in (self.engine.intercom, *self.engine.deck_apps.values(), self.engine.tallies):
+        for svc in (self.engine.intercom, *self.engine.deck_apps.values(), self.engine.tallies, self.engine.onvif):
             svc.set_forced(False)
         super().done(r)
 
@@ -294,6 +295,33 @@ class SettingsDialog(QDialog):
         self.tally_status = self._test_row(v, "tallies")
 
         v.addSpacing(6)
+        v.addWidget(label("ONVIF  ·  CAMÉRAS PTZ", "H2"))
+        ov = integ.get("onvif") if isinstance(integ.get("onvif"), dict) else {}
+        self.onvif_cams = QPlainTextEdit(onvif.cameras_text(ov))
+        self.onvif_cams.setObjectName("Field")
+        self.onvif_cams.setPlaceholderText("Caméra 1 = 192.168.1.60\nCaméra 2 = 192.168.1.61:8080")
+        self.onvif_cams.setToolTip("Une caméra par ligne : Nom = adresse (port 80 par défaut ; beaucoup de caméras "
+                                   "servent ONVIF sur 8080, 8000 ou 2020).\nIdentifiants propres à une caméra : "
+                                   "Nom = utilisateur:motdepasse@adresse")
+        self.onvif_cams.setFixedHeight(72)
+        v.addWidget(self.onvif_cams)
+        row = QHBoxLayout()
+        self.onvif_user = QLineEdit(str(ov.get("user") or ""))
+        self.onvif_user.setPlaceholderText("admin")
+        self.onvif_pass = QLineEdit(str(ov.get("password") or ""))
+        self.onvif_pass.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
+        row.addWidget(label("Utilisateur", "Muted"))
+        row.addWidget(self.onvif_user, 1)
+        row.addWidget(label("Mot de passe", "Muted"))
+        row.addWidget(self.onvif_pass, 1)
+        v.addLayout(row)
+        self.onvif_status = self._test_row(v, "onvif")
+        v.addWidget(label("Utilisateur et mot de passe ONVIF, communs à toutes les caméras (souvent un compte à "
+                          "créer dans la caméra, distinct de celui de sa page web). Action « Caméra ONVIF (PTZ) » : "
+                          "mouvement et zoom tant que la touche est enfoncée, presets, position d'origine.",
+                          "Hint", True))
+
+        v.addSpacing(6)
         v.addWidget(label("PY-MULTIVIEW  ·  MULTIVIEWER SRT/OMT", "H2"))
         self.mv_url, self.mv_token = self._deck_fields(
             v, "multiview", "Facultatif : seulement si un jeton est réglé dans py-multiview (Préférences → "
@@ -368,6 +396,16 @@ class SettingsDialog(QDialog):
 
             def run():
                 return probe_deck(key, url, token)
+        elif key == "onvif":
+            cams = onvif.parse_cameras(self.onvif_cams.toPlainText())
+            user, password = self.onvif_user.text().strip(), self.onvif_pass.text()
+
+            def run():
+                if not cams:
+                    return None, _dot(None) + "Aucune caméra renseignée (une ligne « Nom = adresse » par caméra)."
+                res = [(c["name"], *onvif.probe(c["host"], user, password)) for c in cams]
+                ok = False if any(o is False for _, o, _ in res) else True
+                return ok, "<br>".join(_dot(o) + html.escape(f"{n} : {m}") for n, o, m in res)
         else:
             devices = parse_targets(self.tallies.toPlainText())
 
@@ -390,7 +428,8 @@ class SettingsDialog(QDialog):
     def _probe_done(self, key: str, ok, msg: str) -> None:
         btn, result = self._tests[key]
         btn.setEnabled(True)
-        result.setText(msg if key == "tallies" else _dot(ok) + html.escape(msg))  # tallys : déjà mis en forme
+        # tallys et caméras : une ligne par appareil, déjà mise en forme
+        result.setText(msg if key in ("tallies", "onvif") else _dot(ok) + html.escape(msg))
 
     def _refresh_status(self):
         e = self.engine
@@ -400,7 +439,7 @@ class SettingsDialog(QDialog):
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
         labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
-                  "multiview": self.mv_status, **self.deck_status}
+                  "multiview": self.mv_status, "onvif": self.onvif_status, **self.deck_status}
         for key, _, ok, text in integration_status(e):
             if key in labels:
                 labels[key].setText(_dot(ok) + html.escape(text))
@@ -420,6 +459,8 @@ class SettingsDialog(QDialog):
         moved = [s for s, (pg, _, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
         tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
         deck = {app: (u.text().strip(), t.text().strip()) for app, (u, t) in self._deck_edits.items()}
+        cams = {"user": self.onvif_user.text().strip(), "password": self.onvif_pass.text(),
+                "cameras": onvif.parse_cameras(self.onvif_cams.toPlainText())}
         ic_token = self.ic_token.text().strip()
 
         def apply(cfg):
@@ -442,6 +483,8 @@ class SettingsDialog(QDialog):
             if ic_token or "token" in integ["intercom"]:
                 integ["intercom"]["token"] = ic_token  # pas de clé vide ajoutée : rien de modifié
             integ["tallies"] = tallies
+            if any(cams.values()) or "onvif" in integ:  # jamais réglé et laissé vide : pas de bloc ajouté
+                integ["onvif"] = copy.deepcopy(cams)
             for app, (url, token) in deck.items():
                 if not (url or token or DECK_APPS[app]["cfg"] in integ):
                     continue  # app jamais réglée et laissée vide : pas de bloc ajouté

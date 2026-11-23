@@ -20,6 +20,7 @@ from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
 from ..integrations import DECK_APPS, deck_config, integration_status, probe_deck, probe_intercom, probe_tally
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
+from .. import onvif
 from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..webreq import parse_curl
 from . import theme as T
@@ -28,7 +29,7 @@ from .deck_view import key_pixmap, preset_thumb
 from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
                       section, short_label, tame_combo)
 
-INTEG_NAMES = {"intercom": "py-intercom", "tallies": "Tally32", **{k: v["name"] for k, v in DECK_APPS.items()}}
+INTEG_NAMES = {"intercom": "py-intercom", "tallies": "Tally32", "onvif": "ONVIF", **{k: v["name"] for k, v in DECK_APPS.items()}}
 
 
 def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:
@@ -164,6 +165,12 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
         return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080), token=ic.get("token", ""))
     if key in DECK_APPS:
         return probe_deck(key, *deck_config(engine.cfg, key))
+    if key == "onvif":
+        cams = engine.onvif.cameras
+        if not cams:
+            return None, "Aucune caméra renseignée : Réglages → Intégrations."
+        res = [(c.name, *onvif.probe(c.host, c.user, c.password)) for c in cams]
+        return (False if any(ok is False for _, ok, _ in res) else True), "  ·  ".join(f"{n} : {m}" for n, _, m in res)
     devices = integ.get("tallies") or []
     if not devices:
         return None, "Aucun tally renseigné : Réglages → Intégrations."
@@ -576,7 +583,7 @@ class Inspector(QFrame):
         self.b, side = got
         self.side, self.step = side, 0
         self.commit(rebuild=True)
-        if pid in presets.NEEDS_INPUT or pid == "knob_input":  # on demande tout de suite l'input
+        if pid in presets.NEEDS_INPUT or pid == "knob_input" or pid.startswith("ptz_"):  # on demande tout de suite l'input
             QTimer.singleShot(0, self.focus_input)
 
     def focus_input(self, popup: bool = True):

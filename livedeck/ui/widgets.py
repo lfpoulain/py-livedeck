@@ -475,7 +475,19 @@ def make_field(engine, spec: dict, value, on_change, page_names=None, item: dict
         w = DeckKeyPicker(engine, value or "", (item or {}).get("app") or "orchestream")
         w.changed.connect(on_change)
         return w
-    if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus"):
+    if kind == "onvif_preset":
+        # Presets lus sur la caméra choisie (dès qu'elle a répondu) ; un nom ou un numéro peut aussi être tapé.
+        w = tame_combo(QComboBox(), 10)
+        w.setEditable(True)
+        cam = engine.onvif.camera((item or {}).get("camera"))
+        for tok, name in (cam.preset_list if cam else []):
+            w.addItem(name or tok)
+        w.setEditText(str(value or ""))
+        w.lineEdit().setPlaceholderText("Plateau large, 1…")
+        w.setToolTip("Nom ou numéro du preset. La liste vient de la caméra, une fois qu'elle a répondu.")
+        w.currentTextChanged.connect(on_change)
+        return w
+    if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus", "onvif_cam"):
         w = tame_combo(QComboBox())  # option longue raccourcie ; texte complet en info-bulle et dans la liste
         if kind == "mix":
             items = [(1, "Master (Program)")] + [(i, f"Mix {i}") for i in range(2, 17)]
@@ -484,6 +496,10 @@ def make_field(engine, spec: dict, value, on_change, page_names=None, item: dict
         elif kind == "tally":
             items = [("all", "Tous les tallys")] + [(d.get("name"), f"{d.get('name')}  ·  {d.get('host')}")
                                                      for d in engine.cfg.get("integrations", {}).get("tallies", [])]
+        elif kind == "onvif_cam":
+            items = engine.onvif.choices() or [("", "Aucune caméra : Réglages → Intégrations")]
+            if value and value not in dict(items):
+                items = items + [(value, f"{value} (absente)")]
         elif kind == "page":
             items = [("next", "Page suivante"), ("prev", "Page précédente")] + list((page_names or {}).items())
         elif kind == "intercom_bus":  # bus proposés par le client py-intercom (lus sur /api/deck/state)

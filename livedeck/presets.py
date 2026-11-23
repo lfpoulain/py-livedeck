@@ -49,6 +49,23 @@ def _deck(app: str, key_id: str = "", title: str = "") -> dict:
 
 
 
+def _ptz_label(command: str) -> str:
+    from .onvif import ARROWS
+    return ARROWS.get(command) or {"home": "Origine", "stop": "Stop", "preset": "Preset"}.get(command, command)
+
+
+def _vmix_ptz(command: str) -> dict:
+    return new_button(label=f"PTZ\n{_ptz_label(command)}", bg=ACTIONS["vmix.ptz"]["color"],
+                      actions=[new_action("vmix.ptz", command=command)])
+
+
+def _onvif(camera: str, command: str, preset: str = "") -> dict:
+    """Touche d'une caméra ONVIF : mouvement maintenu, origine, ou rappel d'un preset."""
+    text = preset if command == "preset" and preset else _ptz_label(command)
+    return new_button(label=f"{camera}\n{text}" if camera else text, bg=ACTIONS["onvif.ptz"]["color"],
+                      actions=[new_action("onvif.ptz", camera=camera, command=command, preset=preset)])
+
+
 def _json_value() -> dict:
     return new_button(label="API", bg="#172554", feedbacks=[
         feedback.fb("http_json", url="", path="", op="always", value="", interval=5, label_fmt="Valeur\\n{value}"),
@@ -99,6 +116,14 @@ PRESETS: dict[str, tuple] = {
     "multicorder": ("Production", "MULTICORDER", "Enregistrement multi", lambda: _prod("MULTI\nCORDER", "multicorder")),
     "snapshot": ("Production", "Snapshot", "Capture de l'antenne", lambda: new_button(
         label="SNAP", bg="#1f2937", actions=[new_action("vmix.production", what="snapshot")])),
+    "ptz_left": ("Vidéo", "PTZ ◄ gauche", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("left")),
+    "ptz_right": ("Vidéo", "PTZ ► droite", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("right")),
+    "ptz_up": ("Vidéo", "PTZ ▲ haut", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("up")),
+    "ptz_down": ("Vidéo", "PTZ ▼ bas", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("down")),
+    "ptz_zoomin": ("Vidéo", "PTZ zoom +", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("zoomin")),
+    "ptz_zoomout": ("Vidéo", "PTZ zoom −", "Caméra d'un input, tant qu'on appuie", lambda: _vmix_ptz("zoomout")),
+    "ptz_virtual": ("Vidéo", "PTZ position", "Va à la position d'un input PTZ virtuel", lambda: new_button(
+        label="PTZ", bg=ACTIONS["vmix.ptz"]["color"], actions=[new_action("vmix.ptz", command="virtual")])),
     "audio": ("Audio", "Couper un son", "Micro, musique…", lambda: input_button("", "audio")),
     "talkback": ("Clavier", "Raccourci maintenu", "PTT clavier d'un autre logiciel", lambda: new_button(
         label="PTT", bg="#000033", actions=[new_action("hotkey", hold=True)])),
@@ -277,6 +302,11 @@ def make(preset_id: str, engine=None) -> dict | None:
         return None
     if preset_id.startswith("talk:"):
         return _talk(preset_id[5:])
+    if preset_id.startswith("onvif:"):
+        # « onvif:<commande>:<caméra> », « onvif:preset:<caméra>|<preset> » (le nom d'une caméra peut contenir « : »)
+        command, _, rest = preset_id[6:].partition(":")
+        camera, _, preset = rest.partition("|") if command == "preset" else (rest, "", "")
+        return _onvif(camera, command, preset)
     if preset_id.startswith("deck:"):
         # « deck:<app>:<id de touche> » (l'id peut contenir « : »), « deck:<app> » à choisir
         app, _, kid = preset_id[5:].partition(":")
@@ -297,6 +327,24 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
         out += _deck_keys(engine, app)
     out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
                 else "Tally32 à régler : Réglages → Intégrations"))
+    out += _onvif_keys(engine)
+    return out
+
+
+ONVIF_QUICK = ("left", "right", "up", "down", "zoomin", "zoomout", "home")
+
+
+def _onvif_keys(engine) -> list[tuple[str, str, str]]:
+    """Par caméra ONVIF réglée : les mouvements, l'origine et un rappel par preset lu sur la caméra."""
+    cams = engine.onvif.cameras
+    if not cams:
+        return [("onvif:left:", "Caméra ONVIF", "caméras à régler : Réglages → Intégrations")]
+    out = []
+    for c in cams:
+        out += [(f"onvif:{cmd}:{c.name}", f"{c.name} {_ptz_label(cmd)}",
+                 "ONVIF, position d'origine" if cmd == "home" else "ONVIF, tant qu'on appuie") for cmd in ONVIF_QUICK]
+        out += [(f"onvif:preset:{c.name}|{name or tok}", f"{c.name} → {name or tok}", "ONVIF, rappel du preset")
+                for tok, name in c.preset_list]
     return out
 
 
@@ -331,6 +379,8 @@ def needs_setup(preset_id: str, engine) -> str:
         return "" if deck_configured(engine.cfg, app) else app
     if preset_id == "tallies":
         return "" if integ.get("tallies") else "tallies"
+    if preset_id.startswith("onvif:"):
+        return "" if engine.onvif.cameras else "onvif"
     return ""
 
 

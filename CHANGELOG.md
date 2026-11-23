@@ -1,5 +1,35 @@
 # Journal des versions
 
+## 1.12.0 — 2026-11-23
+
+### Caméras ONVIF
+- **Nouvelle intégration ONVIF** : LiveDeck pilote directement tes caméras PTZ, sans passer par vMix. Réglages →
+  Intégrations, section **ONVIF** : une caméra par ligne (`Nom = adresse`, port `80` par défaut), **Utilisateur**
+  et **Mot de passe** communs, **Tester** (dit si le PTZ répond et compte les presets). Des identifiants propres
+  à une caméra s'écrivent dans son adresse : `Nom = utilisateur:motdepasse@adresse`.
+- **Action « Caméra ONVIF (PTZ) »** : gauche, droite, haut, bas, les quatre diagonales, zoom + et −, avec leur
+  vitesse. Le mouvement dure **tant que la touche est enfoncée** et s'arrête au relâché ; zoom et panoramique
+  se pilotent en même temps avec deux touches. Aussi : *Arrêter le mouvement*, *Position d'origine*, *Aller à
+  un preset* et *Enregistrer la position dans un preset* (par son nom ou son numéro, la liste est lue sur la
+  caméra).
+- La bibliothèque (*Intégrations*) propose, pour chaque caméra, ses mouvements, l'origine et **une touche par
+  preset** trouvé sur la caméra.
+- La touche est bleue tant que la caméra bouge, grisée avec **HORS LIGNE** si la caméra ne répond pas. Barre
+  d'état : un voyant ONVIF quand une touche l'utilise. Nouveau retour d'état *Caméra ONVIF*.
+- Comme pour un talkback, un mouvement maintenu est toujours arrêté : changement de page, touche modifiée,
+  deck débranché ou fermeture de LiveDeck.
+- Aucune dépendance ajoutée. L'identification part des deux façons qu'une caméra peut demander (jeton
+  WS-Security daté à l'heure de la caméra, et Digest HTTP) ; une caméra qui annonce ses services sur une
+  ancienne adresse IP est quand même jointe sur l'adresse réglée.
+
+### PTZ dans vMix
+- **Action « Caméra PTZ (vMix) »** pour la caméra réglée dans un input vMix : mouvements, zoom et mise au point
+  **tant que la touche est enfoncée** (avec la vitesse), arrêt, position d'origine, mise au point automatique
+  ou manuelle, et les **PTZ virtuels** : aller à la position d'un input, l'enregistrer, en créer un.
+- Bibliothèque (*Vidéo*) : PTZ ◀ ▶ ▲ ▼, zoom + / − et *PTZ position*.
+- Toutes les fonctions PTZ de l'API sont proposées dans *Fonction vMix* (`PTZMoveUp`, `PTZZoomIn`,
+  `PTZFocusAuto`, `PTZUpdateVirtualInput`…).
+
 ## 1.11.0 — 2026-11-23
 
 ### Touches décrites par chaque app (API Stream Deck commune)

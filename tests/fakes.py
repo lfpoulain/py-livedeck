@@ -1,4 +1,5 @@
-"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32, py-multiview, MixPanel et DMAIX pour les tests."""
+"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32, caméra ONVIF, py-multiview, MixPanel et DMAIX
+pour les tests."""
 import json
 import socket
 import sys
@@ -351,6 +352,110 @@ class FakeTally:
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+
+class FakeOnvif:
+    """Caméra ONVIF PTZ : device_service, media et ptz en SOAP 1.2. Le jeton WS-Security est vérifié (mot de
+    passe haché, daté à l'heure de la caméra, qui avance de `skew` secondes sur ce PC). La caméra annonce ses
+    services sur une IP qu'on ne peut pas joindre, comme une caméra restée sur une ancienne adresse."""
+    USER, PASSWORD = "admin", "secret"
+
+    def __init__(self, port=0, skew=3600, ptz=True):
+        self.skew, self.has_ptz = skew, ptz
+        self.calls = []                      # (opération, {paramètres})
+        self.presets = {"1": "Plateau", "2": "Large"}
+        self.numbered = False                # caméra à emplacements numérotés : refuse SetPreset par nom
+        fake = self
+
+        class H(BaseHTTPRequestHandler):
+            def _send(self, code, body):
+                raw = ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope '
+                       'xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+                       'xmlns:tt="http://www.onvif.org/ver10/schema" xmlns:tds="http://www.onvif.org/ver10/device/wsdl" '
+                       'xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" '
+                       'xmlns:ter="http://www.onvif.org/ver10/error">'
+                       f"<s:Body>{body}</s:Body></s:Envelope>").encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/soap+xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def _fault(self, sub, text):
+                self._send(400, "<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode>"
+                                f"<s:Value>{sub}</s:Value></s:Subcode></s:Code><s:Reason>"
+                                f'<s:Text xml:lang="en">{text}</s:Text></s:Reason></s:Fault>')
+
+            def do_POST(self):
+                import base64
+                import hashlib
+                import re
+                xml = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8", "replace")
+                body = xml.split("Body>", 1)[1]
+                op = re.search(r"<\w+:(\w+)", body).group(1)
+                if op == "GetSystemDateAndTime":
+                    t = time.gmtime(time.time() + fake.skew)
+                    return self._send(200, "<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime><tt:UTCDateTime>"
+                                      f"<tt:Time><tt:Hour>{t.tm_hour}</tt:Hour><tt:Minute>{t.tm_min}</tt:Minute>"
+                                      f"<tt:Second>{t.tm_sec}</tt:Second></tt:Time><tt:Date><tt:Year>{t.tm_year}</tt:Year>"
+                                      f"<tt:Month>{t.tm_mon}</tt:Month><tt:Day>{t.tm_mday}</tt:Day></tt:Date>"
+                                      "</tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>")
+                m = re.search(r"Username>([^<]*)<.*?Password[^>]*>([^<]*)<.*?Nonce[^>]*>([^<]*)<.*?Created>([^<]*)<",
+                              xml, re.S)
+                ok = False
+                if m:
+                    user, digest, nonce, created = m.groups()
+                    want = base64.b64encode(hashlib.sha1(base64.b64decode(nonce) + created.encode()
+                                                         + fake.PASSWORD.encode()).digest()).decode()
+                    import calendar
+                    age = abs(calendar.timegm(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S"))
+                              - (time.time() + fake.skew))
+                    ok = user == fake.USER and digest == want and age < 30
+                if not ok:
+                    return self._fault("ter:NotAuthorized", "Sender not Authorized")
+                args = dict(re.findall(r"<\w+:(ProfileToken|PresetToken|PresetName|PanTilt|Zoom)>([^<]*)<", body))
+                for tag, attrs in re.findall(r"<tt:(PanTilt|Zoom) ([^/]*)/>", body):
+                    args[tag] = tuple(float(v) for v in re.findall(r'="([-\d.]+)"', attrs))
+                fake.calls.append((op, args))
+                port = self.server.server_address[1]
+                if op == "GetCapabilities":
+                    ptz = (f"<tt:PTZ><tt:XAddr>http://10.9.9.9:{port}/onvif/ptz</tt:XAddr></tt:PTZ>"
+                           if fake.has_ptz else "")
+                    return self._send(200, "<tds:GetCapabilitiesResponse><tds:Capabilities><tt:Media><tt:XAddr>"
+                                      f"http://10.9.9.9:{port}/onvif/media</tt:XAddr></tt:Media>{ptz}"
+                                      "</tds:Capabilities></tds:GetCapabilitiesResponse>")
+                if op == "GetProfiles" and self.path == "/onvif/media":
+                    return self._send(200, '<trt:GetProfilesResponse><trt:Profiles token="sub"><tt:Name>sub</tt:Name>'
+                                      '</trt:Profiles><trt:Profiles token="main"><tt:Name>main</tt:Name>'
+                                      '<tt:PTZConfiguration token="ptz0"/></trt:Profiles></trt:GetProfilesResponse>')
+                if self.path != "/onvif/ptz" or args.get("ProfileToken") != "main":
+                    return self._fault("ter:InvalidArgVal", "No such profile")
+                if op == "GetPresets":
+                    return self._send(200, "<tptz:GetPresetsResponse>" + "".join(
+                        f'<tptz:Preset token="{t}"><tt:Name>{n}</tt:Name></tptz:Preset>'
+                        for t, n in fake.presets.items()) + "</tptz:GetPresetsResponse>")
+                if op == "GotoPreset" and args.get("PresetToken") not in fake.presets:
+                    return self._fault("ter:NoToken", "The requested preset token does not exist")
+                if op == "SetPreset":
+                    tok = args.get("PresetToken")
+                    if not tok:
+                        if fake.numbered:
+                            return self._fault("ter:InvalidArgVal", "Preset name not supported")
+                        tok = str(len(fake.presets) + 1)
+                    fake.presets[tok] = args.get("PresetName") or fake.presets.get(tok, f"Preset {tok}")
+                    return self._send(200, f"<tptz:SetPresetResponse><tptz:PresetToken>{tok}</tptz:PresetToken>"
+                                           "</tptz:SetPresetResponse>")
+                self._send(200, f"<tptz:{op}Response/>")
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def ops(self, since=0):
+        return [op for op, _ in self.calls[since:] if op not in ("GetCapabilities", "GetProfiles", "GetPresets")]
 
 
 class FakeMultiview:

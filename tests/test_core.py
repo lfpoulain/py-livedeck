@@ -53,7 +53,7 @@ from livedeck.ui import widgets as ui_widgets  # noqa: E402
 from livedeck.vars import expand  # noqa: E402
 from livedeck.vmix import VmixClient, _encode_query  # noqa: E402
 from livedeck.webreq import parse_curl  # noqa: E402
-from livedeck import integrations as integ, netsend, webreq, winsys  # noqa: E402
+from livedeck import integrations as integ, netsend, onvif, webreq, winsys  # noqa: E402
 from livedeck import presets  # noqa: E402
 from livedeck.actions import ACTIONS, execute, is_relative, shown, summary  # noqa: E402
 from livedeck.feedback import OFF_BG, fb  # noqa: E402
@@ -4325,6 +4325,205 @@ def test_intercom_deck_config_and_catalog(tmp_path):
     rows = {k: ok for k, _, ok, _ in integ.integration_status(e)}
     assert rows["intercom"] is True and "py-intercom" not in [k for k in rows if k != "intercom"]
     e.stop()
+
+
+# -- PTZ : vMix et caméras ONVIF -------------------------------------------------
+def test_vmix_ptz_held_and_virtual(tmp_path):
+    """PTZ de vMix : le mouvement part à l'appui avec sa vitesse et s'arrête au relâché (arrêt du même axe) ;
+    une position de PTZ virtuel est un simple appui."""
+    cam = "PTZ Plateau"
+    e, pg, logs = one_page(tmp_path, {
+        "0,0": new_button(label="G", actions=[new_action("vmix.ptz", input=cam, command="left", speed=30)]),
+        "0,1": new_button(label="Z", actions=[new_action("vmix.ptz", input=cam, command="zoomin")]),
+        "0,2": new_button(label="F", actions=[new_action("vmix.ptz", input=cam, command="focusfar")]),
+        "0,3": new_button(label="V", actions=[new_action("vmix.ptz", input="PTZ - Couloir", command="virtual")]),
+        "0,4": new_button(label="S", actions=[new_action("vmix.ptz", input=cam, command="stop")]),
+        "1,0": new_button(label="?", actions=[new_action("vmix.ptz", input="Inconnu", command="left")])})
+    fv = vmix_server()
+    key_ = e.vmix.input_param(cam)
+    mark = len(fv.functions)
+    e.press(pg, "0,0", True)
+    assert wait(lambda: sent(fv, mark, "PTZMoveLeft"))
+    assert sent(fv, mark, "PTZMoveLeft")[0][1] == {"Input": key_, "Value": "0.3"}
+    assert not sent(fv, mark, "PTZMoveStop") and e.visual(e.button(pg, "0,0"))["bg"].lower() == "#4040ff"
+    e.press(pg, "0,0", False)
+    assert wait(lambda: sent(fv, mark, "PTZMoveStop")) and sent(fv, mark, "PTZMoveStop")[0][1] == {"Input": key_}
+    for k, start, stop in (("0,1", "PTZZoomIn", "PTZZoomStop"), ("0,2", "PTZFocusFar", "PTZFocusStop")):
+        tap(e, pg, k)
+        assert wait(lambda: sent(fv, mark, stop)), stop
+        names = [f[0] for f in sent(fv, mark)]
+        assert names.index(start) < names.index(stop) and sent(fv, mark, start)[0][1]["Value"] == "0.5"
+    mark = len(fv.functions)
+    tap(e, pg, "0,3")
+    assert wait(lambda: sent(fv, mark, "PTZMoveToVirtualInputPosition"))
+    assert sent(fv, mark)[0][1] == {"Input": e.vmix.input_param("PTZ - Couloir")} and len(sent(fv, mark)) == 1
+    tap(e, pg, "0,4")
+    assert wait(lambda: sent(fv, mark, "PTZZoomStop") and sent(fv, mark, "PTZMoveStop"))
+    # input inconnu : rien ne part, ni à l'appui ni au relâché d'un mouvement jamais commencé… sauf l'arrêt, sans danger
+    mark = len(fv.functions)
+    tap(e, pg, "1,0")
+    assert wait(lambda: any("introuvable" in m for _, m in logs))
+    assert not sent(fv, mark, "PTZMoveLeft")
+    # un mouvement maintenu est arrêté quand tout est relâché d'office (deck débranché, arrêt)
+    mark = len(fv.functions)
+    e.press(pg, "0,0", True)
+    assert wait(lambda: sent(fv, mark, "PTZMoveLeft"))
+    e.release_all(wait=True)
+    assert wait(lambda: sent(fv, mark, "PTZMoveStop"))
+    assert summary(new_action("vmix.ptz", input=cam, command="zoomout", speed=80)) == f"PTZ · {cam} · Zoom − (80 %)"
+    assert not shown(next(f for f in ACTIONS["vmix.ptz"]["fields"] if f["key"] == "speed"),
+                     new_action("vmix.ptz", command="home"))
+    e.stop()
+
+
+def onvif_engine(tmp_path, cam, buttons, password=fakes.FakeOnvif.PASSWORD, host=None):
+    return one_page(tmp_path, buttons, {"onvif": {"user": fakes.FakeOnvif.USER, "password": password, "cameras": [
+        {"name": "Plateau", "host": host or f"127.0.0.1:{cam.port}"}]}})
+
+
+def onvif_btn(command, **kw):
+    return new_button(label=command, actions=[new_action("onvif.ptz", camera="Plateau", command=command, **kw)])
+
+
+def test_onvif_ptz(tmp_path):
+    """Caméra ONVIF : identification datée à l'heure de la caméra, services joints sur l'adresse réglée,
+    mouvement maintenu (arrêt du seul axe au relâché), presets par nom ou numéro, origine."""
+    cam = fakes.FakeOnvif()
+    e, pg, logs = onvif_engine(tmp_path, cam, {
+        "0,0": onvif_btn("left", speed=40), "0,1": onvif_btn("zoomout"), "0,2": onvif_btn("preset", preset="large"),
+        "0,3": onvif_btn("preset", preset="1"), "0,4": onvif_btn("home"), "1,0": onvif_btn("save", preset="Nouveau"),
+        "1,1": onvif_btn("save", preset="Plateau"), "1,2": onvif_btn("stop"), "1,3": onvif_btn("preset", preset="Absent"),
+        "1,4": onvif_btn("upright", speed=100)})
+    assert e.onvif.wanted
+    c = e.onvif.camera("Plateau")
+    assert wait(lambda: c.reachable is True, 6), c.error
+    assert c.profile == "main" and c.ptz_url == f"http://127.0.0.1:{cam.port}/onvif/ptz" and abs(c.offset - 3600) < 5
+    assert c.preset_list == [("1", "Plateau"), ("2", "Large")]
+    rows = {k: (ok, text) for k, _, ok, text in integ.integration_status(e)}
+    assert rows["onvif"][0] is True and "2 preset(s)" in rows["onvif"][1]
+
+    def last(op):
+        return [a for o, a in cam.calls if o == op][-1]
+
+    mark = len(cam.calls)
+    e.press(pg, "0,0", True)
+    assert wait(lambda: "ContinuousMove" in cam.ops(mark))
+    assert last("ContinuousMove") == {"ProfileToken": "main", "PanTilt": (-0.4, 0.0)}   # pas de zoom envoyé
+    assert "Stop" not in cam.ops(mark) and e.visual(e.button(pg, "0,0"))["bg"].lower() == "#4040ff"
+    e.press(pg, "0,0", False)
+    assert wait(lambda: "Stop" in cam.ops(mark))
+    assert last("Stop") == {"ProfileToken": "main", "PanTilt": "true", "Zoom": "false"}
+    tap(e, pg, "0,1")
+    assert wait(lambda: cam.ops(mark)[-2:] == ["ContinuousMove", "Stop"] and len(cam.ops(mark)) == 4)
+    assert [a for o, a in cam.calls if o == "ContinuousMove"][-1]["Zoom"] == (-0.5,)
+    assert last("Stop") == {"ProfileToken": "main", "PanTilt": "false", "Zoom": "true"}
+    tap(e, pg, "1,4")
+    assert wait(lambda: len(cam.ops(mark)) == 6) and last("ContinuousMove")["PanTilt"] == (1.0, 1.0)
+    tap(e, pg, "0,2")                                     # preset par son nom, sans tenir compte de la casse
+    assert wait(lambda: "GotoPreset" in cam.ops(mark)) and last("GotoPreset")["PresetToken"] == "2"
+    tap(e, pg, "0,3")                                     # … ou par son numéro
+    assert wait(lambda: cam.ops(mark).count("GotoPreset") == 2) and last("GotoPreset")["PresetToken"] == "1"
+    tap(e, pg, "0,4")
+    assert wait(lambda: "GotoHomePosition" in cam.ops(mark))
+    tap(e, pg, "1,0")                                     # preset inconnu : créé à ce nom
+    assert wait(lambda: cam.presets.get("3") == "Nouveau")
+    assert wait(lambda: ("3", "Nouveau") in c.preset_list) and any("enregistrée" in m for _, m in logs)
+    tap(e, pg, "1,1")                                     # preset existant : remplacé, jamais dupliqué
+    assert wait(lambda: cam.ops(mark).count("SetPreset") == 2)
+    assert last("SetPreset") == {"ProfileToken": "main", "PresetToken": "1"} and len(cam.presets) == 3
+    tap(e, pg, "1,2")
+    assert wait(lambda: last("Stop") == {"ProfileToken": "main", "PanTilt": "true", "Zoom": "true"})
+    tap(e, pg, "1,3")                                     # refus de la caméra : dit dans le Moniteur
+    assert wait(lambda: any("ONVIF Plateau" in m and "preset token" in m for _, m in logs)), logs
+    # relâché d'office : la caméra ne reste jamais en mouvement
+    mark = len(cam.calls)
+    e.press(pg, "0,0", True)
+    assert wait(lambda: "ContinuousMove" in cam.ops(mark))
+    e.release_all(wait=True)
+    assert wait(lambda: "Stop" in cam.ops(mark))
+    # bibliothèque : mouvements et presets de la caméra ; la touche créée rappelle le bon preset
+    ids = [pid for _, items in presets.library(e) for pid, _, _ in items]
+    assert "onvif:left:Plateau" in ids and "onvif:preset:Plateau|Large" in ids, ids
+    b = presets.make("onvif:preset:Plateau|Large", e)
+    assert b["actions"][0] == new_action("onvif.ptz", camera="Plateau", command="preset", preset="Large")
+    assert presets.make("onvif:zoomin:Plateau", e)["actions"][0]["command"] == "zoomin"
+    assert summary(b["actions"][0]) == "ONVIF · Plateau · preset « Large »"
+    e.stop()
+
+
+def test_onvif_errors_and_numbered_presets(tmp_path):
+    """Mauvais mot de passe, caméra absente de la liste, caméra éteinte : la touche se grise et le Moniteur
+    dit quoi vérifier. Caméra à emplacements numérotés : l'enregistrement retombe sur le numéro."""
+    cam = fakes.FakeOnvif()
+    e, pg, logs = onvif_engine(tmp_path, cam, {"0,0": onvif_btn("home")}, password="faux")
+    c = e.onvif.camera("Plateau")
+    assert wait(lambda: c.reachable is False, 6)
+    assert "identifiants refusés" in c.error and "mot de passe" in c.error
+    vis = e.visual(e.button(pg, "0,0"))
+    assert vis["bg"].lower() == OFF_BG and "HORS LIGNE" in vis["label"]
+    tap(e, pg, "0,0")
+    assert wait(lambda: any("identifiants refusés" in m for _, m in logs)) and not cam.ops()
+    # bon mot de passe : la caméra revient sans redémarrer LiveDeck
+    e.mutate(lambda cfg: cfg["integrations"]["onvif"].update(password=fakes.FakeOnvif.PASSWORD))
+    c = e.onvif.camera("Plateau")
+    assert wait(lambda: c.reachable is True, 6)
+    assert wait(lambda: e.visual(e.button(pg, "0,0"))["bg"].lower() != OFF_BG)
+    cam.numbered = True
+    e.set_button(pg, "0,1", onvif_btn("save", preset="7"))
+    tap(e, pg, "0,1")
+    assert wait(lambda: "7" in cam.presets), logs
+    # caméra retirée de la liste, puis plus aucune caméra
+    e.set_button(pg, "0,2", new_button(label="X", actions=[new_action("onvif.ptz", camera="Autre", command="home")]))
+    assert wait(lambda: "CAMÉRA ?" in e.visual(e.button(pg, "0,2"))["label"])
+    tap(e, pg, "0,2")
+    assert wait(lambda: any("« Autre »" in m for _, m in logs))
+    e.stop()
+    # identifiants propres à une caméra dans son adresse ; caméra sans PTZ ; rien n'écoute
+    assert onvif.probe(f"admin:secret@127.0.0.1:{cam.port}")[0] is True
+    assert onvif.probe(f"127.0.0.1:{cam.port}")[0] is False
+    ok, msg = onvif.probe(f"127.0.0.1:{fakes.FakeOnvif(ptz=False).port}", "admin", "secret")
+    assert ok is False and "PTZ" in msg
+    ok, msg = onvif.probe("127.0.0.1:1", "admin", "secret", timeout=1)
+    assert ok is False and "caméra" in msg
+    assert onvif.parse_cameras("A = 10.0.0.1\n\n10.0.0.2:8080\nA = 10.0.0.3\nB = u:p@cam.local") == [
+        {"name": "A", "host": "10.0.0.1"}, {"name": "10.0.0.2:8080", "host": "10.0.0.2:8080"},
+        {"name": "B", "host": "u:p@cam.local"}]
+    assert onvif.split_host("u:p%40x@[fe80::1]:8000/onvif/dev") == ("http://[fe80::1]:8000/onvif/dev", "u", "p@x")
+
+
+def test_onvif_settings_and_inspector(tmp_path):
+    """Réglages → Intégrations : caméras et identifiants enregistrés en un bloc ; l'inspecteur propose les
+    caméras réglées et les presets lus."""
+    cam = fakes.FakeOnvif()
+    e, w, pg = ui_window(tmp_path, {"0,0": onvif_btn("preset", preset="Large")})
+    assert "onvif" not in e.cfg["integrations"]
+    dlg = SettingsDialog(e, w, tab="integ")
+    dlg.show()
+    dlg.onvif_cams.setPlainText(f"Plateau = 127.0.0.1:{cam.port}")
+    dlg.onvif_user.setText("admin")
+    dlg.onvif_pass.setText("secret")
+    dlg._test("onvif")
+    assert wait(lambda: "PTZ prêt" in dlg._tests["onvif"][1].text(), 8), dlg._tests["onvif"][1].text()
+    dlg._save()
+    assert e.cfg["integrations"]["onvif"] == {"user": "admin", "password": "secret", "cameras": [
+        {"name": "Plateau", "host": f"127.0.0.1:{cam.port}"}]}
+    c = e.onvif.camera("Plateau")
+    assert wait(lambda: c.reachable is True, 6)
+    dlg = SettingsDialog(e, w, tab="integ")                # rouverts sans rien changer : pas d'étape « annuler »
+    assert dlg.onvif_cams.toPlainText() == f"Plateau = 127.0.0.1:{cam.port}"
+    n = len(e._undo)
+    dlg._save()
+    assert len(e._undo) == n
+    a = e.button(pg, "0,0")["actions"][0]
+    fields = {f["key"]: f for f in ACTIONS["onvif.ptz"]["fields"]}
+    box = ui_widgets.make_field(e, fields["camera"], "Plateau", lambda v: None, item=a)
+    assert box.count() == 1 and box.currentData() == "Plateau"
+    box = ui_widgets.make_field(e, fields["preset"], "Large", lambda v: None, item=a)
+    assert [box.itemText(i) for i in range(box.count())] == ["Plateau", "Large"] and box.currentText() == "Large"
+    assert not shown(fields["preset"], new_action("onvif.ptz")) and shown(fields["speed"], new_action("onvif.ptz"))
+    w.select("0,0")                                        # l'inspecteur affiche l'action et l'état de la caméra
+    assert wait(lambda: any("ONVIF" in lb.text() for lb in w.inspector.findChildren(QLabel)))
+    w.quit_app()
 
 
 if __name__ == "__main__":

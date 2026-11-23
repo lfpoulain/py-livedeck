@@ -1158,6 +1158,8 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
                 oks.append(bool(s.get("connected")))
         ok = False if False in oks else None if None in oks else True
         out.append(("tallies", "Tally32", ok, "  ·  ".join(parts)))
+    from . import onvif  # import tardif : onvif.py s'appuie sur ce module
+    out.append(("onvif", "ONVIF", *onvif.status(engine.onvif)))
     return out
 
 

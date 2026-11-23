@@ -38,7 +38,7 @@ HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic
 TOAST_MS = {"error": 9000, "warn": 6000}
 MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action", "Actions envoyées")]
 INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Orchestream"), ("tallies", "Tallys"),
-               ("multiview", "Multiview"), ("mixpanel", "MixPanel"), ("dmaix", "DMAIX")]
+               ("multiview", "Multiview"), ("mixpanel", "MixPanel"), ("dmaix", "DMAIX"), ("onvif", "ONVIF")]
 HINT_LOCK = "Verrouillé : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)  ·  Ctrl+L pour déverrouiller"
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
 
@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
         self.deck_pill.setToolTip(f"Stream Deck : {detail}\n{tip}\nClic : diagnostic des Stream Decks")
         # intégrations utilisées par une touche : une pastille chacune, ou une seule si la fenêtre est étroite
         e = self.engine
-        wanted = {"intercom": e.intercom.wanted, "tallies": e.tallies.wanted,
+        wanted = {"intercom": e.intercom.wanted, "tallies": e.tallies.wanted, "onvif": e.onvif.wanted,
                   **{app: d.wanted for app, d in e.deck_apps.items()}}
         wanted["intercom"] = e.intercom.wanted  # parole ou touches décrites : un seul client le surveille
         used = [(k, name, ok, text) for k, name, ok, text in integration_status(e) if wanted.get(k)]
