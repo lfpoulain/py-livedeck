@@ -1189,7 +1189,7 @@ def ptt(bus, mode="hold", **kw):
 
 def test_intercom_probe_and_errors(tmp_path):
     ok, msg = integ.probe_intercom("127.0.0.1", 18229, timeout=0.5)   # rien n'écoute
-    assert ok is False and "Contrôle HTTP" in msg and "Depuis le réseau" in msg and "2.0" in msg, msg
+    assert ok is False and "contrôle HTTP" in msg and "réseau local" in msg and "/api/deck" in msg, msg
     ic = fakes.FakeIntercom(18221)
     ok, msg = integ.probe_intercom("127.0.0.1", 18221)
     assert ok is True and "Régie" in msg, msg
@@ -1198,15 +1198,23 @@ def test_intercom_probe_and_errors(tmp_path):
     assert ok is None and "connecte-le au serveur" in msg, msg
     ic.online = True
     fakes.FakeTally(18222, True)                                       # autre programme sur ce port
-    assert "pas l'API de py-intercom" in integ.probe_intercom("127.0.0.1", 18222)[1]
+    assert "sans l'API Stream Deck de py-intercom" in integ.probe_intercom("127.0.0.1", 18222)[1]
     j = fakes.FakeJson(18223, {})
     j.status = 404
     assert "trop ancien" in integ.probe_intercom("127.0.0.1", 18223)[1]
-    # API fidèle à py-intercom : numéros de bus, paramètres d'URL, /ptt/all/on refusé
-    assert integ._http("POST", "http://127.0.0.1:18221/ptt/0/on?x=1", direct=True)[0] == 200
+    # API fidèle à py-intercom : numéros de bus acceptés, bus manquant ou inconnu refusé en 422
+    base = "http://127.0.0.1:18221/api/deck/commands/"
+    assert integ._deck_request("POST", base + "ptt.on", "", {"args": {"bus": "0"}}, direct=True)[0] == 200
     assert ic.buses["regie"]["active"]
-    assert integ._http("POST", "http://127.0.0.1:18221/ptt/all/on", direct=True)[0] == 400
-    integ._http("POST", "http://127.0.0.1:18221/ptt/all/off", direct=True)
+    assert integ._deck_request("POST", base + "ptt.on", "", {}, direct=True)[0] == 422
+    assert integ._deck_request("POST", base + "ptt.on", "", {"args": {"bus": "x"}}, direct=True)[0] == 422
+    assert integ._deck_request("POST", base + "ptt.nope", "", None, direct=True)[0] == 404
+    assert integ._deck_request("POST", base + "ptt.allOff", "", None, direct=True)[0] == 200
+    assert not ic.buses["regie"]["active"]
+    # les anciennes routes n'existent plus : 404 ROUTE_NOT_FOUND (jamais NOT_FOUND)
+    for old in ("/status", "/ptt/regie/on"):
+        st, data, _ = integ._deck_request("GET", "http://127.0.0.1:18221" + old, "", direct=True)
+        assert st == 404 and data["error"]["code"] == "ROUTE_NOT_FOUND", (old, st, data)
 
     del ic.buses["plateau"]                                            # ce serveur ne propose pas Plateau
     e, pid, logs = one_page(tmp_path, {
@@ -1246,11 +1254,11 @@ def test_intercom_probe_and_errors(tmp_path):
     ic.online = True
     # client fermé : « HORS LIGNE », et le message dit quoi faire
     ic.stop()
-    assert wait(lambda: e.intercom.reachable is False and "Contrôle HTTP" in e.intercom.error, 5), e.intercom.error
+    assert wait(lambda: e.intercom.reachable is False and "contrôle HTTP" in e.intercom.error, 5), e.intercom.error
     assert "HORS LIGNE" in vis("0,0")["label"]
     logs.clear()
     tap(e, pid, "0,0")
-    assert wait(lambda: any(lv == "error" and "Contrôle HTTP" in m for lv, m in logs), 5), logs
+    assert wait(lambda: any(lv == "error" and "contrôle HTTP" in m for lv, m in logs), 5), logs
     e.stop()
 
 
@@ -1294,7 +1302,8 @@ def test_proxy_bypass(tmp_path):
         os.environ.pop(k, None)
     os.environ["HTTP_PROXY"] = os.environ["http_proxy"] = "http://127.0.0.1:9"  # proxy mort
     try:
-        status, data = integ._http("GET", "http://127.0.0.1:18225/status", timeout=2, direct=True)
+        status, data, _ = integ._deck_request("GET", "http://127.0.0.1:18225/api/deck/state", "", timeout=2,
+                                              direct=True)
         assert status == 200 and "buses" in data
         assert webreq.request("GET", "http://127.0.0.1:18226/")[0] == 200
         assert integ.probe_intercom("127.0.0.1", 18225)[0] is True
@@ -1404,7 +1413,7 @@ def test_integration_settings_and_details(tmp_path):
     result = dlg._tests["intercom"][1]
     dlg.ic_port.setValue(18234)
     dlg._test("intercom")
-    assert wait(lambda: "Contrôle HTTP" in result.text(), 6), result.text()
+    assert wait(lambda: "contrôle HTTP" in result.text(), 6), result.text()
     dlg.ic_port.setValue(18231)
     dlg._test("intercom")
     assert wait(lambda: "en ligne" in result.text(), 6), result.text()
@@ -4003,6 +4012,136 @@ def test_mixpanel_real_server(tmp_path):
         server.stop()
 
 
+# -- DMAIX (contrôleur DMX) : touches décrites par le serveur (API Stream Deck commune) -------------------
+def dmaix_engine(tmp_path, port, token="", server_token=""):
+    dm = fakes.FakeDmaix(port, token=server_token)
+    keys = {"0,0": "output.status", "0,1": "scene.current", "0,2": "scene.play:sc-2", "0,3": "scene.play:sc-3",
+            "0,4": "effect.toggle:fx-1", "1,0": "effects.stopAll", "1,1": "dmx.blackout"}
+    e, pg, logs = one_page(tmp_path, {k: new_button(actions=[new_action("deck.key", app="dmaix", key=v)])
+                                      for k, v in keys.items()},
+                           {"dmaix": {"url": f"127.0.0.1:{port}", "token": token}})
+    return e, dm, pg, logs
+
+
+def test_dmaix_keys_follow_the_stream(tmp_path):
+    """Scènes, effets, Stop effets, Blackout et touches d'état : tels que DMAIX les décrit, suivis en direct
+    par le flux, l'appui part avec l'argument de la touche. API ouverte : aucun en-tête de jeton."""
+    from livedeck.feedback import ORCH_TONES
+    e, dm, pg, logs = dmaix_engine(tmp_path, 18281)
+    d = e.deck("dmaix")
+    assert d.wanted and wait(lambda: d.connected and d.mode == "stream", 5), d.error
+    assert vis_of(e, pg, "0,0")["label"] == "Sortie DMX\nConnectée"
+    assert vis_of(e, pg, "0,0")["bg"] == ORCH_TONES["success"][0]
+    assert vis_of(e, pg, "0,1")["label"] == "Scène\nAucune"
+    assert vis_of(e, pg, "0,2")["label"] == "Ambiance bleue" and vis_of(e, pg, "0,2")["bg"] == ORCH_TONES["neutral"][1]
+    assert vis_of(e, pg, "0,4")["label"] == "Strobe\n4 s"
+    v = vis_of(e, pg, "1,0")
+    assert v["label"].startswith("Stop effets\nAucun effet") and v["bg"] == OFF_BG, v   # grisée sans effet
+    assert vis_of(e, pg, "1,1")["bg"] == ORCH_TONES["danger"][1]
+    # Scène : jouée avec son identifiant, la touche et la scène en cours s'allument dans la seconde
+    tap(e, pg, "0,2")
+    assert wait(lambda: dm.calls and dm.calls[-1][0] == "scene.play", 3), dm.calls
+    assert dm.calls[-1][1] == {"args": {"scene": "sc-2"}} and dm.calls[-1][2] is None, dm.calls[-1]
+    assert wait(lambda: vis_of(e, pg, "0,2")["label"] == "Ambiance bleue\nEn cours", 1.5)
+    assert vis_of(e, pg, "0,2")["bg"] == ORCH_TONES["success"][0]
+    assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Scène\nAmbiance bleue", 1.5)
+    assert any("Scène « Ambiance bleue » jouée" in m for _, m in logs), logs
+    # Effet : bascule, rouge « live » quand il tourne ; Stop effets se dégrise
+    tap(e, pg, "0,4")
+    assert wait(lambda: vis_of(e, pg, "0,4")["bg"] == ORCH_TONES["live"][0], 1.5)
+    assert wait(lambda: vis_of(e, pg, "1,0")["label"] == "Stop effets\n1 en cours", 1.5)
+    tap(e, pg, "1,0")
+    assert wait(lambda: not dm.running and vis_of(e, pg, "0,4")["label"] == "Strobe\n4 s", 1.5)
+    tap(e, pg, "1,1")
+    assert wait(lambda: dm.blackouts == 1, 3)
+    # Touche d'état : rien n'est envoyé
+    n = len(dm.calls)
+    tap(e, pg, "0,0")
+    time.sleep(0.3)
+    assert len(dm.calls) == n
+    # Élément « à corriger » : grisé avec la raison de DMAIX ; l'appui est refusé (409) et journalisé
+    assert "corriger" in vis_of(e, pg, "0,3")["label"] and vis_of(e, pg, "0,3")["bg"] == OFF_BG
+    tap(e, pg, "0,3")
+    assert wait(lambda: any("DMAIX · Cassée" in m and "à corriger" in m for _, m in logs), 3), logs
+    # Changé dans DMAIX : sortie débranchée, scène supprimée, nouvelle scène
+    dm.output["connected"] = False
+    assert wait(lambda: vis_of(e, pg, "0,0")["label"] == "Sortie DMX\nDéconnectée", 1.5)
+    dm.scenes.pop(1)
+    dm.scene = None
+    assert wait(lambda: "INTROUVABLE" in vis_of(e, pg, "0,2")["label"], 1.5)
+    dm.scenes.append({"id": "sc-9", "name": "Nouvelle", "playable": True})
+    assert wait(lambda: d.key("scene.play:sc-9"), 1.5)
+    row = next(r for r in integrations.integration_status(e) if r[0] == "dmaix")
+    assert row[2] is True and "touche(s)" in row[3], row
+    assert dm.streams == 1, "le flux suffit : aucune lecture de l'état"
+    e.stop()
+
+
+def test_dmaix_token_and_probe(tmp_path):
+    """Jeton facultatif : envoyé dans l'en-tête s'il est réglé ; manquant, JETON ? ; faux, JETON REFUSÉ."""
+    assert integrations.deck_url("dmaix", "192.168.1.30") == "http://192.168.1.30:6174"
+    assert integrations.deck_url("dmaix", "http://dmaix.local:7000/") == "http://dmaix.local:7000"
+    assert integrations.deck_url("dmaix", "") == "", "pas d'adresse par défaut : DMAIX est souvent ailleurs"
+    e, dm, pg, logs = dmaix_engine(tmp_path, 18282, server_token="dmx_secret")
+    d = e.deck("dmaix")
+    assert wait(lambda: d.unavailable() == "JETON ?" and "demande un jeton" in d.error, 5), d.error
+    tap(e, pg, "0,2")
+    assert not dm.calls
+    e.mutate(lambda c: c["integrations"]["dmaix"].update(token="faux"))
+    assert wait(lambda: d.unavailable() == "JETON REFUSÉ", 12), d.error
+    e.mutate(lambda c: c["integrations"]["dmaix"].update(token="dmx_secret"))
+    d._wake.set()
+    assert wait(lambda: d.connected, 12), d.error
+    tap(e, pg, "1,1")
+    assert wait(lambda: dm.calls and dm.calls[-1][2] == "Bearer dmx_secret", 3), dm.calls
+    ok, msg = integrations.probe_deck("dmaix", "127.0.0.1:18282", "dmx_secret")
+    assert ok is True and "touche(s)" in msg, msg
+    ok, msg = integrations.probe_deck("dmaix", "127.0.0.1:18282", "")
+    assert ok is False and "jeton" in msg, msg
+    assert integrations.probe_deck("dmaix", "", "")[0] is None
+    ok, msg = integrations.probe_deck("dmaix", "127.0.0.1:18289", "", timeout=0.5)   # rien n'écoute
+    assert ok is False and "DMAIX ne répond pas" in msg, msg
+    e.stop()
+
+
+def test_dmaix_catalog_picker_and_settings(tmp_path):
+    """Aucune touche en dur : bibliothèque, inspecteur et Réglages s'appuient sur ce que décrit DMAIX."""
+    from livedeck.ui.widgets import DeckKeyPicker
+    assert summary(new_action("deck.key", app="dmaix", key="dmx.blackout", title="Blackout")) == "DMAIX · Blackout"
+    assert presets.needs_setup("deck:dmaix", engine(tmp_path, start=False)) == "dmaix"
+    fakes.FakeDmaix(18283)
+    e, pid, _ = one_page(tmp_path, {}, {"dmaix": {"url": "127.0.0.1:18283"}})
+    assert not e.deck("dmaix").wanted
+    w = MainWindow(e)
+    dlg = SettingsDialog(e, w)                      # fenêtre ouverte : DMAIX surveillé, même sans touche
+    dlg.show()
+    assert wait(lambda: e.deck("dmaix").connected, 6), e.deck("dmaix").error
+    dlg._refresh_status()
+    assert "touche(s)" in dlg.deck_status["dmaix"].text(), dlg.deck_status["dmaix"].text()
+    dlg._test("dmaix")
+    assert wait(lambda: "touche(s)" in dlg._tests["dmaix"][1].text(), 6), dlg._tests["dmaix"][1].text()
+    lib = dict(presets.library(e))["Intégrations"]
+    ids = {pid_ for pid_, _, _ in lib}
+    assert {"deck:dmaix:scene.play:sc-1", "deck:dmaix:effect.toggle:fx-2", "deck:dmaix:effects.stopAll",
+            "deck:dmaix:dmx.blackout", "deck:dmaix:output.status", "deck:dmaix:scene.current"} <= ids, ids
+    b = presets.make("deck:dmaix:effect.toggle:fx-2", e)
+    assert b["actions"][0] == {"type": "deck.key", "app": "dmaix", "key": "effect.toggle:fx-2", "title": "Chase"}
+    picker = DeckKeyPicker(e, "scene.play:sc-1", "dmaix")
+    groups = [picker.tree.topLevelItem(i).text(0) for i in range(picker.tree.topLevelItemCount())]
+    assert groups == ["État", "Scènes", "Effets", "Commandes"], groups
+    assert picker.tree.currentItem().data(0, Qt.UserRole) == "scene.play:sc-1"
+    # Un retour d'état DMAIX réveille le service
+    e.set_button(pid, "0,0", new_button(feedbacks=[fb("deckkey", app="dmaix", key="output.status", state="active")]))
+    assert e.deck("dmaix").wanted
+    url, token = dlg._deck_edits["dmaix"]
+    url.setText("127.0.0.1:18284")
+    token.setText("abc")
+    dlg._save()
+    assert e.cfg["integrations"]["dmaix"] == {"url": "127.0.0.1:18284", "token": "abc"}
+    assert e.deck("dmaix").url == "http://127.0.0.1:18284" and not e.deck("dmaix").forced
+    w.quit_app()
+
+
 def test_winaudio_cache():
     """Le cache évite de rappeler Core Audio à chaque touche, et s'oublie après une écriture."""
     fake = fakes.FakeAudio()
@@ -4075,6 +4214,117 @@ def test_audit_fixes(tmp_path):
     # un nom de fichier venu d'Internet ne sort pas du dossier de mise à jour
     from livedeck import updater
     assert (updater.update_dir() / Path(r"..\..\evil.exe").name).parent == updater.update_dir()
+
+
+
+def ic_deck_engine(tmp_path, fake, token=""):
+    """Touches py-intercom décrites par /api/deck (action « Touche d'une app »), serveur sur un port libre."""
+    keys = {"0,0": "ptt.toggle:regie", "0,1": "ptt.toggle:plateau", "0,2": "ptt.toggle:vmix",
+            "0,3": "ptt.allOff", "0,4": "client.status"}
+    buttons = {k: new_button(actions=[new_action("deck.key", app="intercom", key=v)]) for k, v in keys.items()}
+    block = {"host": "127.0.0.1", "port": fake.port}
+    if token:
+        block["token"] = token
+    return one_page(tmp_path, buttons, {"intercom": block})
+
+
+def test_intercom_deck_keys_follow_the_stream(tmp_path):
+    """py-intercom par l'API Stream Deck commune : état et touches lus sur /api/deck/state, mises à jour par le
+    flux SSE (patch), commandes POST /api/deck/commands/<id>, accès libre (aucun en-tête Authorization) et
+    jamais d'en-tête Origin ni Referer (py-intercom les refuse)."""
+    ic = fakes.FakeIntercom(0)
+    e, pg, logs = ic_deck_engine(tmp_path, ic)
+    d = e.deck("intercom")
+    assert d.name == "py-intercom" and d is not e.orchestream
+    assert wait(lambda: d.connected and d.mode == "stream" and d.has_keys, 5), d.error
+    assert e.intercom.wanted, "les touches décrites réveillent aussi le suivi des bus"
+    assert not e.orchestream.wanted
+    # état et touches : ce que décrit py-intercom
+    assert d.get("token.name") == "accès libre" and d.get("client.online") is True
+    assert [k["id"] for k in d.key_list()] == ["client.status", "ptt.toggle:regie", "ptt.toggle:plateau",
+                                              "ptt.toggle:vmix", "ptt.allOff"]
+    v = vis_of(e, pg, "0,0")
+    assert v["label"].startswith("Régie"), v
+    assert "Régie" in vis_of(e, pg, "0,0")["label"] and "Tout couper" in vis_of(e, pg, "0,3")["label"]
+    # vMix est en mode Permanent : touche grisée avec la raison
+    assert vis_of(e, pg, "0,2").get("disabled") or "Permanent" in str(d.key("ptt.toggle:vmix")["reason"])
+    # appui : POST ptt.toggle avec le bus, sans Origin
+    tap(e, pg, "0,0")
+    assert wait(lambda: ("regie", "toggle") in ic.log and ic.buses["regie"]["active"], 3), ic.log
+    # le flux pousse le patch : la touche passe en « live » sans interroger
+    assert wait(lambda: (d.key("ptt.toggle:regie") or {}).get("tone") == "live", 3), d.key("ptt.toggle:regie")
+    # changement côté client (raccourci, pad) : patch SSE
+    ic.buses["plateau"]["active"] = True
+    assert wait(lambda: (d.key("ptt.toggle:plateau") or {}).get("tone") == "live", 3)
+    ic.buses["plateau"]["active"] = False
+    assert wait(lambda: (d.key("ptt.toggle:plateau") or {}).get("tone") == "amber", 3)
+    # tout couper
+    tap(e, pg, "0,3")
+    assert wait(lambda: ("all", "off") in ic.log and not ic.buses["regie"]["active"], 3), ic.log
+    # poste hors ligne : les touches de parole se grisent avec la raison, « Tout couper » reste disponible
+    ic.online = False
+    assert wait(lambda: (d.key("ptt.toggle:regie") or {}).get("available") is False, 3)
+    assert d.key("ptt.allOff")["available"] and not d.get("client.online")
+    assert not ic.seen_origin, "LiveDeck n'envoie jamais Origin ni Referer"
+    assert all(a is None for a in ic.auth), ic.auth
+    assert ("GET", "/api/deck/events") in ic.requests
+    assert not any(path in ("/status",) or path.startswith("/ptt") for _, path in ic.requests), ic.requests
+    e.stop()
+
+
+def test_intercom_deck_token_optional(tmp_path):
+    """Jeton facultatif : absent = API ouverte ; si py-intercom en réclame un, « JETON ? » ; refusé, « JETON REFUSÉ » ;
+    rempli, envoyé dans l'en-tête Authorization (jamais dans l'URL)."""
+    ic = fakes.FakeIntercom(0, token="s3cret")
+    e, pg, logs = ic_deck_engine(tmp_path, ic)
+    d = e.deck("intercom")
+    assert wait(lambda: d.auth_failed, 5), d.error
+    assert d.unavailable() == "JETON ?" and "jeton" in d.error
+    assert vis_of(e, pg, "0,0")["label"].endswith("JETON ?")
+    e.mutate(lambda c: c["integrations"]["intercom"].update(token="faux"))
+    assert wait(lambda: d.token == "faux" and d.auth_failed and d.unavailable() == "JETON REFUSÉ", 5), d.error
+    e.mutate(lambda c: c["integrations"]["intercom"].update(token="s3cret"))
+    d._wake.set()
+    assert wait(lambda: d.connected and d.has_keys, 12), d.error
+    assert d.get("token.name") == "jeton API" and "Bearer s3cret" in ic.auth  # le suivi des bus peut avoir envoyé l'ancien jeton juste avant
+    assert e.intercom.token == "s3cret"
+    assert wait(lambda: e.intercom.reachable and e.intercom.online, 5), e.intercom.error
+    tap(e, pg, "0,1")
+    assert wait(lambda: ("plateau", "toggle") in ic.log, 3), ic.log
+    assert not any("s3cret" in path for _, path in ic.requests), "le jeton n'est jamais dans l'URL"
+    assert not ic.seen_origin
+    e.stop()
+    # Test ponctuel : sans jeton refusé, avec jeton accepté
+    ok, msg = integ.probe_intercom("127.0.0.1", ic.port)
+    assert ok is False and "jeton" in msg, msg
+    ok, msg = integ.probe_intercom("127.0.0.1", ic.port, token="s3cret")
+    assert ok is True and "jeton API" in msg and "5 touche(s)" in msg, msg
+    ic.token = None
+    ok, msg = integ.probe_intercom("127.0.0.1", ic.port)
+    assert ok is True and "accès libre" in msg, msg
+    # 403 : un proxy qui ajoute Origin est reconnu
+    msg = integ.explain_deck("intercom", f"http://127.0.0.1:{ic.port}", 403, {"error": {"code": "FORBIDDEN"}})
+    assert "en-tête de navigateur" in msg
+
+
+def test_intercom_deck_config_and_catalog(tmp_path):
+    """py-intercom est un modèle d'app : adresse par défaut 127.0.0.1:5080, hôte + port réglés, jeton facultatif ;
+    ses touches décrites apparaissent dans la bibliothèque."""
+    assert integ.DECK_APPS["intercom"]["name"] == "py-intercom" and integ.DECK_APPS["intercom"]["port"] == 5080
+    cfg = default_config()
+    assert integ.deck_config(cfg, "intercom") == ("http://127.0.0.1:5080", "")
+    cfg["integrations"]["intercom"] = {"host": "10.0.0.7", "port": 5099, "token": " abc "}
+    assert integ.deck_config(cfg, "intercom") == ("http://10.0.0.7:5099", "abc")
+    assert integ.deck_configured(cfg, "intercom")
+    ic = fakes.FakeIntercom(0)
+    e, pg, logs = ic_deck_engine(tmp_path, ic)
+    assert wait(lambda: e.deck("intercom").has_keys, 5)
+    from livedeck import presets
+    ids = [pid for _, items in presets.library(e) for pid, _, _ in items]
+    assert "deck:intercom:ptt.toggle:regie" in ids and "deck:intercom:ptt.allOff" in ids, ids
+    rows = {k: ok for k, _, ok, _ in integ.integration_status(e)}
+    assert rows["intercom"] is True and "py-intercom" not in [k for k in rows if k != "intercom"]
+    e.stop()
 
 
 if __name__ == "__main__":

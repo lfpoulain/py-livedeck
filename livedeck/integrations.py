@@ -21,14 +21,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .webreq import DIRECT, NET_ERRORS, error_kind, open_url
 
-# Valeurs de repli tant que le service n'a pas répondu : la liste réelle vient de /status (py-intercom),
+# Valeurs de repli tant que le service n'a pas répondu : la liste réelle vient de /api/deck/state (py-intercom),
 # (les touches d'orchestream viennent de son flux en direct).
 INTERCOM_BUSES = [("regie", "Régie"), ("plateau", "Plateau"), ("vmix", "vMix")]
 _BUS_IDS = {"0": "regie", "1": "plateau", "2": "vmix"}  # l'API accepte aussi les numéros de bus
 BUS_MODES = {"ptt": "maintenu", "toggle": "bascule", "always_on": "toujours actif"}
-INTERCOM_MIN = "version 2.0.x du 29/10/2026 ou plus récente"
+INTERCOM_MIN = "version qui sert l'API Stream Deck commune (/api/deck)"
+INTERCOM_PORT = 5080
+# où l'activer dans le client py-intercom
+INTERCOM_ENABLE = "« Activer le contrôle HTTP » (Réglages → Contrôle à distance)"
+INTERCOM_LAN = "« Accepter les commandes du réseau local »"
 # py-intercom n'a pas été atteint (ou ce n'est pas lui qui répond) : le raccourci de secours a un sens
-UNREACHABLE = {"refused", "timeout", "dns", "reset", "network", "notapi", "proxy", "forbidden"}
+UNREACHABLE = {"refused", "timeout", "dns", "reset", "network", "notapi", "proxy", "forbidden", "token"}
 
 
 def bus_label(key) -> str:
@@ -74,8 +78,8 @@ def _net_text(kind: str, who: str, where: str) -> str:
 
 def explain_intercom(host: str, port, status: int | None = None, data=None, exc: BaseException | None = None,
                      bus: str | None = None, buses: dict | None = None) -> tuple[str, str]:
-    """(nature, message en français) d'une réponse ou d'une erreur de py-intercom.
-    Natures : ok, refused, timeout, dns, reset, network, proxy, forbidden, notapi, offline, absent,
+    """(nature, message en français) d'une réponse ou d'une erreur de py-intercom (API /api/deck).
+    Natures : ok, refused, timeout, dns, reset, network, proxy, forbidden, token, notapi, offline, absent,
     always_on, busy, http."""
     where = f"{host}:{port}"
     if exc is not None:
@@ -84,63 +88,80 @@ def explain_intercom(host: str, port, status: int | None = None, data=None, exc:
             r = getattr(exc, "reason", exc)
             if isinstance(r, (TimeoutError, socket.timeout)) or "timed out" in str(r):  # en local : fermé ou bloqué
                 return kind, (f"py-intercom ne répond pas à temps sur {where} : client fermé, ou occupé ? Vérifie "
-                              f"qu'il est lancé ({INTERCOM_MIN}) avec « Contrôle HTTP » coché dans la zone Parler (et "
-                              "« Depuis le réseau » si LiveDeck tourne sur un autre PC)")
-            return kind, (f"py-intercom ne répond pas sur {where} : lance le client ({INTERCOM_MIN}) et coche "
-                          "« Contrôle HTTP » dans la zone Parler ; si LiveDeck tourne sur un autre PC, coche "
-                          "aussi « Depuis le réseau »")
+                              f"qu'il est lancé ({INTERCOM_MIN}) avec {INTERCOM_ENABLE} (et {INTERCOM_LAN} si "
+                              "LiveDeck tourne sur un autre PC)")
+            return kind, (f"py-intercom ne répond pas sur {where} : lance le client ({INTERCOM_MIN}) et active "
+                          f"{INTERCOM_ENABLE} ; si LiveDeck tourne sur un autre PC, coche aussi {INTERCOM_LAN}")
         if kind == "timeout":
             return kind, (f"py-intercom ne répond pas à temps sur {where} : vérifie l'adresse IP, le pare-feu "
-                          "du PC intercom et que « Depuis le réseau » est coché dans le client")
+                          f"du PC intercom et que {INTERCOM_LAN} est coché dans le client")
         return kind, _net_text(kind, "py-intercom", where)
     if _is_proxy_reply(status or 0, data):
         return "proxy", _net_text("proxy", "py-intercom", where) + f" (HTTP {status})"
+    code, msg = _orch_code(data), _orch_message(data)
     data = data if isinstance(data, dict) else {}
-    err = str(data.get("error") or "")
+    if status == 401:
+        return "token", ("py-intercom demande un jeton API (ou refuse celui-ci) : colle celui du client "
+                         "(Réglages → Contrôle à distance) dans Réglages → Intégrations de LiveDeck")
     if status == 403:
         return "forbidden", (f"py-intercom a refusé la requête (403, en-tête de navigateur) : un proxy ou un "
                              f"antivirus modifie-t-il les requêtes vers {where} ?")
-    if status == 409:
-        if "online" in data and not data.get("online"):
-            state = f" (état : {data['state']})" if data.get("state") else ""
-            return "offline", (f"py-intercom désarmé : le client n'est pas en ligne{state}. Connecte-le au "
-                               "serveur intercom")
-        return "always_on", f"py-intercom : bus {bus_label(bus)} en mode « Toujours actif » dans le client"
+    if status == 409:  # COMMAND_REFUSED : poste hors ligne, ou bus en mode Permanent
+        if "permanent" in msg.lower() or (buses or {}).get(str(bus), {}).get("mode") == "always_on":
+            return "always_on", f"py-intercom : bus {bus_label(bus)} en mode « Permanent » dans le client"
+        return "offline", ("py-intercom désarmé : le client n'est pas en ligne. Connecte-le au serveur intercom")
+    if status == 422 and bus is not None:  # VALIDATION_FAILED : bus inconnu du serveur
+        avail = ", ".join(bus_label(k) for k in buses or {}) or "aucun"
+        return "absent", (f"py-intercom : le bus {bus_label(bus)} n'est pas proposé par le serveur intercom "
+                          f"(disponibles : {avail})")
     if status == 404:
-        if "proposé" in err:
-            avail = ", ".join(bus_label(k) for k in buses or {}) or "aucun"
-            return "absent", (f"py-intercom : le bus {bus_label(bus)} n'est pas proposé par le serveur intercom "
-                              f"(disponibles : {avail})")
-        if bus is not None and "bus inconnu" in err:
-            return "absent", f"py-intercom : bus « {bus} » inconnu ({err})"
-        return "notapi", (f"{where} répond, mais ce n'est pas l'API de py-intercom (autre programme sur ce port, "
-                          f"ou client trop ancien : il faut la {INTERCOM_MIN})")
+        if code == "COMMAND_NOT_FOUND":
+            return "http", f"py-intercom : {msg or 'commande inconnue'} (client plus ancien ou plus récent ?)"
+        return "notapi", (f"{where} répond, mais sans l'API Stream Deck de py-intercom (/api/deck) : autre "
+                          f"programme sur ce port, ou client trop ancien (il faut la {INTERCOM_MIN})")
     if status == 503:
         return "busy", "py-intercom occupé (503) : réessaie"
     if status and 200 <= status < 300:
-        if "buses" in data:  # py-intercom renvoie toujours son état
+        if "buses" in data and "client" in data or data.get("ok") is True:  # état, ou réponse d'une commande
             return "ok", ""
         return "notapi", (f"{where} répond, mais ce n'est pas l'API de py-intercom (autre programme sur ce "
                           "port ?)")
-    return "http", f"py-intercom {status} : {err or 'réponse inattendue'}"
+    return "http", f"py-intercom {status} : {msg or 'réponse inattendue'}"
 
 
-def probe_intercom(host: str, port, timeout: float = 3.0) -> tuple[bool | None, str]:
+def probe_intercom(host: str, port, timeout: float = 3.0, token: str = "") -> tuple[bool | None, str]:
     """Test ponctuel (bouton « Tester ») : (True en ligne / None joignable mais désarmé / False, message)."""
     host = (host or "127.0.0.1").strip()
     try:
-        status, data = _http("GET", f"http://{host}:{int(port)}/status", timeout=timeout, direct=True)
+        status, data, _ = _deck_request("GET", f"http://{host}:{int(port or INTERCOM_PORT)}/api/deck/state",
+                                        (token or "").strip(), timeout=timeout, direct=True)
     except NET_ERRORS as e:
         return False, explain_intercom(host, port, exc=e)[1]
-    if status == 200 and isinstance(data, dict) and "buses" in data:
-        buses = "  ·  ".join(f"{bus_label(k)} ({BUS_MODES.get(v.get('mode'), v.get('mode'))}"
-                             f"{', ouvert' if v.get('active') else ''})"
-                             for k, v in (data.get("buses") or {}).items() if isinstance(v, dict))
-        if data.get("online"):
-            return True, f"py-intercom en ligne ({data.get('state') or 'OK'})  ·  bus : {buses or 'aucun'}"
-        return None, (f"py-intercom répond, mais le client n'est pas en ligne (état : {data.get('state') or '?'}) : "
+    if status == 200 and isinstance(data, dict) and "buses" in data and "client" in data:
+        client = data.get("client") or {}
+        buses = _norm_buses(data.get("buses"))
+        txt = "  ·  ".join(f"{bus_label(k)} ({BUS_MODES.get(v.get('mode'), v.get('mode'))}"
+                           f"{', ouvert' if v.get('active') else ''})" for k, v in buses.items())
+        keys = data.get("keys")
+        if not isinstance(keys, list):
+            return False, "py-intercom répond, mais ne décrit pas ses touches (client trop ancien) : mets-le à jour"
+        who = (data.get("token") or {}).get("name") or "accès libre"
+        if client.get("online"):
+            return True, (f"py-intercom en ligne ({client.get('label') or 'OK'})  ·  {who}  ·  "
+                          f"{len(keys)} touche(s)  ·  bus : {txt or 'aucun'}")
+        return None, (f"py-intercom répond, mais le client n'est pas en ligne (état : {client.get('label') or '?'}) : "
                       "connecte-le au serveur intercom")
     return False, explain_intercom(host, port, status, data)[1]
+
+
+def _norm_buses(raw) -> dict[str, dict]:
+    """Bus de py-intercom en {id: {"mode", "active"}} : liste de /api/deck/state, ou dictionnaire d'une commande."""
+    if isinstance(raw, list):
+        raw = {b.get("id"): b for b in raw if isinstance(b, dict) and b.get("id")}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k).lower(): {"mode": v.get("mode"), "active": bool(v.get("active"))}
+            for k, v in raw.items() if isinstance(v, dict)}
 
 
 class _Service:
@@ -193,11 +214,13 @@ class _Service:
 
 
 class Intercom(_Service):
-    """Pilotage du client py-intercom par son API HTTP locale (POST /ptt/<bus>/on|off|toggle)."""
+    """Pilotage du client py-intercom par son API Stream Deck commune : l'état se lit sur GET /api/deck/state
+    (client, bus), la parole se commande par POST /api/deck/commands/ptt.on | ptt.off | ptt.toggle (argument
+    « bus ») et ptt.allOff. Jeton facultatif dans l'en-tête Authorization, jamais d'en-tête Origin."""
 
     def __init__(self, on_change, log):
         super().__init__(on_change, log)
-        self.host, self.port = "127.0.0.1", 5080
+        self.host, self.port, self.token = "127.0.0.1", INTERCOM_PORT, ""
         self.reachable: bool | None = None
         self.online = False
         self.state_text = ""
@@ -213,22 +236,28 @@ class Intercom(_Service):
     def base(self) -> str:
         return f"http://{self.host}:{self.port}"
 
-    def configure(self, host: str, port: int) -> None:
-        host, port = (host or "127.0.0.1").strip(), int(port or 5080)
-        if (host, port) != (self.host, self.port):
-            self.host, self.port = host, port
+    def configure(self, host: str, port: int, token: str = "") -> None:
+        host, port, token = (host or "127.0.0.1").strip(), int(port or INTERCOM_PORT), (token or "").strip()
+        if (host, port, token) != (self.host, self.port, self.token):
+            self.host, self.port, self.token = host, port, token
             self.reachable, self.error, self.buses = None, "", {}
         self._wake.set()
 
     def _apply(self, data: dict | None) -> None:
+        """État reçu : GET /api/deck/state (sections « client » et « buses »), ou « data » d'une commande."""
         if not isinstance(data, dict) or "buses" not in data:
             return
+        client = data.get("client") if isinstance(data.get("client"), dict) else data
         sig = (self.reachable, self.online, self.state_text, json.dumps(self.buses, sort_keys=True))
-        self.online = bool(data.get("online"))
-        self.state_text = data.get("state", "")
-        self.buses = {k.lower(): v for k, v in (data.get("buses") or {}).items() if isinstance(v, dict)}
+        self.online = bool(client.get("online"))
+        self.state_text = str(client.get("label") or client.get("state") or "")
+        self.buses = _norm_buses(data.get("buses"))
         if sig != (True, self.online, self.state_text, json.dumps(self.buses, sort_keys=True)):
             self._on_change()
+
+    def _req(self, method: str, path: str, body: dict | None, timeout: float) -> tuple[int, object]:
+        status, data, _ = _deck_request(method, f"{self.base}/api/deck/{path}", self.token, body, timeout, direct=True)
+        return status, data
 
     def _set_reachable(self, ok: bool, why: str = "") -> None:
         self.error = "" if ok else why
@@ -246,11 +275,11 @@ class Intercom(_Service):
                 continue
             t0 = time.monotonic()
             try:
-                status, data = _http("GET", f"{self.base}/status", timeout=1, direct=True)
+                status, data = self._req("GET", "state", None, 1)
             except NET_ERRORS as e:
                 self._set_reachable(False, explain_intercom(self.host, self.port, exc=e)[1])
             else:
-                if status == 200 and isinstance(data, dict) and "buses" in data:
+                if status == 200 and isinstance(data, dict) and "buses" in data and "client" in data:
                     self._set_reachable(True)
                     self._apply(data)
                     self._reconcile(t0)
@@ -260,7 +289,7 @@ class Intercom(_Service):
 
     def _reconcile(self, t0: float) -> None:
         """État voulu : un bus que LiveDeck a refermé ne doit pas rester ouvert (« off » perdu, client
-        redémarré, « on » appliqué en retard…). On regarde la 1re lecture de /status après notre « off » :
+        redémarré, « on » appliqué en retard…). On regarde la 1re lecture de /api/deck/state après notre « off » :
         bus encore actif -> « off » renvoyé (2 fois au plus, une seule alerte). Bus en mode bascule dans le
         client, ou vu fermé : on arrête de surveiller (l'opérateur a pu le rouvrir lui-même depuis le client)."""
         now = time.monotonic()
@@ -278,18 +307,25 @@ class Intercom(_Service):
                 self._log("warn", f"py-intercom : bus {bus_label(bus)} encore ouvert, LiveDeck renvoie « off »")
             with self._lock:
                 try:
-                    _http("POST", f"{self.base}/ptt/{bus}/off", timeout=1, direct=True)
+                    self._req("POST", *self._cmd_args(bus, "off"), 1)
                 except NET_ERRORS:
                     pass
                 if bus in self._off_due:
                     self._off_due[bus] = (time.monotonic(), deadline, tries + 1)
+
+    @staticmethod
+    def _cmd_args(bus: str, cmd: str) -> tuple[str, dict | None]:
+        """(chemin, corps) de la commande : ptt.<on|off|toggle> avec le bus, ou ptt.allOff pour tous."""
+        if bus == "all":
+            return "commands/ptt.allOff", None
+        return f"commands/ptt.{cmd}", {"args": {"bus": bus}}
 
     def command(self, bus: str, cmd: str, quick: bool = False, report: bool = True) -> bool:
         """Envoie une commande PTT. Un « off » est réessayé (le micro ne doit pas rester ouvert), puis
         surveillé par _reconcile. quick : une seule tentative courte (arrêt, raccourci de secours prêt).
         report : journalise l'échec (sinon il reste lisible dans self.last). Renvoie True si c'est fait."""
         bus = "all" if str(bus).lower() == "all" else _BUS_IDS.get(str(bus), str(bus or "regie").lower())
-        url = f"{self.base}/ptt/{bus}/{cmd}"
+        path, body = self._cmd_args(bus, cmd)
         off = cmd == "off"
         was = self.reachable
         status, data = 0, None
@@ -299,7 +335,7 @@ class Intercom(_Service):
                 self._off_due.pop("all", None)
             for attempt in range(4):
                 try:
-                    status, data = _http("POST", url, timeout=0.5 if quick else (1 if off else 1.5), direct=True)
+                    status, data = self._req("POST", path, body, 0.5 if quick else (1 if off else 1.5))
                 except NET_ERRORS as e:
                     if off and not quick and attempt < 3:
                         time.sleep((0.1, 0.3, 0.6)[attempt])
@@ -323,7 +359,7 @@ class Intercom(_Service):
             self._set_reachable(False, msg)
         else:
             self._set_reachable(True)
-            self._apply(data)
+            self._apply(data.get("data") if isinstance(data, dict) else None)
         self._wake.set()
         if kind == "ok" or (kind == "always_on" and off):  # bus toujours ouvert : rien à refermer
             self.last = (kind, "", "")
@@ -343,7 +379,7 @@ class Intercom(_Service):
         return self.buses.get(_BUS_IDS.get(str(name), str(name).lower()), {})
 
     def bus_choices(self) -> list[tuple[str, str]]:
-        """Bus proposés par ce serveur (lus sur /status), sinon la liste habituelle."""
+        """Bus proposés par ce serveur (lus sur /api/deck/state), sinon la liste habituelle."""
         if self.buses:
             return [(k, bus_label(k)) for k in self.buses]
         return list(INTERCOM_BUSES)
@@ -396,6 +432,20 @@ DECK_APPS: dict[str, dict] = {
                  "hint": "MixPanel décrit lui-même ses touches (scènes, macros, ducking, page A / B, "
                          "verrouillage, mode de la X-Touch, état de vMix et de la X-Touch) et les met à jour en "
                          "direct : bibliothèque (Intégrations) ou action « Touche d'une app »."},
+    # DMAIX (contrôleur DMX, dmaix-v2) : scènes, effets, Stop effets, Blackout, état de la sortie DMX. Souvent sur
+    # un autre poste : pas d'adresse par défaut ; une IP seule suffit, le port 6174 est ajouté.
+    "dmaix": {"name": "DMAIX", "label": "DMAIX", "cfg": "dmaix", "default": "", "example": "192.168.1.30:6174",
+              "token_required": False, "token_where": "dans DMAIX, Réglages → Intégration",
+              "public_404": False, "port": 6174, "section": "CONTRÔLEUR DMX",
+              "hint": "DMAIX décrit lui-même ses touches (une par scène et par effet de sa bibliothèque, Stop "
+                      "effets, Blackout, sortie DMX et scène en cours) et les met à jour en direct : bibliothèque "
+                      "(Intégrations) ou action « Touche d'une app »."},
+    # py-intercom : adresse réglée en hôte + port (bloc « intercom », partagé avec la parole), jeton facultatif
+    "intercom": {"name": "py-intercom", "label": "py-intercom", "cfg": "intercom",
+                 "default": f"http://127.0.0.1:{INTERCOM_PORT}", "example": f"192.168.1.30:{INTERCOM_PORT}",
+                 "token_required": False,
+                 "token_where": "dans py-intercom, Réglages → Contrôle à distance → Jeton",
+                 "public_404": False, "port": INTERCOM_PORT},
 }
 DECK_DEFAULT_APP = "orchestream"  # app d'une touche qui n'en précise pas
 
@@ -430,7 +480,10 @@ def deck_url(app: str, url: str) -> str:
 def deck_config(cfg: dict, app: str) -> tuple[str, str]:
     """(adresse, jeton) réglés pour une app, adresse par défaut comprise."""
     block = (cfg.get("integrations") or {}).get(deck_spec(app)["cfg"]) or {}
-    return deck_url(app, str(block.get("url") or "")), str(block.get("token") or "").strip()
+    url = str(block.get("url") or "")
+    if not url and app == "intercom":  # réglé en hôte + port
+        url = f"http://{str(block.get('host') or '127.0.0.1').strip()}:{int(block.get('port') or INTERCOM_PORT)}"
+    return deck_url(app, url), str(block.get("token") or "").strip()
 
 
 def deck_configured(cfg: dict, app: str) -> bool:
@@ -480,6 +533,9 @@ def explain_deck(app: str, url: str, status: int | None = None, data=None, exc: 
         if token == "" and not spec["token_required"]:
             return f"{name} demande un jeton API : {token_help(app)}"
         return f"{name} refuse le jeton API (absent, inconnu ou révoqué) : {token_help(app)}"
+    if status == 403 and code == "FORBIDDEN":  # py-intercom : en-tête Origin / Referer refusé
+        return (f"{name} a refusé la requête (403, en-tête de navigateur) : un proxy ou un antivirus modifie-t-il "
+                f"les requêtes vers {where} ?")
     if status == 403:
         return f"{name} : {msg or 'le jeton n’a pas la permission de cette commande'}"
     if status == 404 and code == "NOT_FOUND" and spec["public_404"]:  # adresse publique : pas de régie
@@ -516,15 +572,16 @@ def _auth_headers(token: str, accept: str = "application/json") -> dict:
 
 
 def _deck_request(method: str, url: str, token: str, body: dict | None = None,
-                  timeout: float = 3.0) -> tuple[int, object, dict]:
-    """Requête vers /api/deck : (statut, JSON, en-têtes). Lève NET_ERRORS si injoignable."""
+                  timeout: float = 3.0, direct: bool = False) -> tuple[int, object, dict]:
+    """Requête vers /api/deck : (statut, JSON, en-têtes). Lève NET_ERRORS si injoignable. Jamais d'en-tête
+    Origin ni Referer (py-intercom les refuse) ; direct : jamais par un proxy (py-intercom)."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     headers = _auth_headers(token)
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with open_url(req, timeout) as resp:
+        with (DIRECT.open(req, timeout=timeout) if direct else open_url(req, timeout)) as resp:
             return resp.status, _read_json(resp), dict(resp.headers)
     except urllib.error.HTTPError as e:
         return e.code, _read_json(e), dict(e.headers or {})
@@ -1075,8 +1132,9 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
         out.append(("intercom", "py-intercom", ic.online,
                     f"{state}  ·  {buses or 'aucun bus proposé'}" if ic.online else
                     f"{state} : le client n'est pas en ligne, connecte-le au serveur intercom."))
-    for app, spec in DECK_APPS.items():  # apps à touches décrites : orchestream, py-multiview…
-        out.append((app, spec["name"], *deck_status(engine.deck(app))))
+    for app, spec in DECK_APPS.items():  # apps à touches décrites (py-intercom : sa ligne est celle du dessus)
+        if app != "intercom":
+            out.append((app, spec["name"], *deck_status(engine.deck(app))))
     ta = engine.tallies
     if not ta.devices:
         out.append(("tallies", "Tally32", None, "Aucun tally renseigné."))

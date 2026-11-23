@@ -1,4 +1,4 @@
-"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32, py-multiview et MixPanel pour les tests."""
+"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32, py-multiview, MixPanel et DMAIX pour les tests."""
 import json
 import socket
 import sys
@@ -27,21 +27,28 @@ def serve_vmix(port: int) -> "fake_vmix.FakeVmix":
 
 
 class FakeIntercom:
-    """Comme l'API HTTP du client py-intercom (client/remote.py + gui._handle_remote_command) :
-    route avec numéros de bus et paramètres d'URL, 403 navigateur, 409 hors ligne (avec l'état), 404 bus
-    inconnu / non proposé par le serveur, 400 si /ptt/all/<autre que off>, Always On (« on » accepté sans effet,
-    off / toggle refusés en 409), 503 « interface occupée » à la demande. Seuls les bus de self.buses sont
-    proposés ; « active » est faux pour tous quand le client n'est pas en ligne."""
+    """Comme l'API Stream Deck du client py-intercom (client/deck.py + remote.py), seule API servie : /api/deck
+    (state, events SSE, commands, POST commands/<id>), jeton facultatif (token=None : accès libre), 403 si
+    Origin / Referer, 409 COMMAND_REFUSED hors ligne ou bus Permanent, 422 bus manquant / inconnu, 404
+    COMMAND_NOT_FOUND, 503 « interface occupée » à la demande ; toute autre route : 404 ROUTE_NOT_FOUND.
+    Seuls les bus de self.buses sont proposés ; « active » est faux pour tous quand le client n'est pas en ligne."""
     KEYS = {"regie": 0, "plateau": 1, "vmix": 2}
+    NAMES = {"regie": "Régie", "plateau": "Plateau", "vmix": "VMix"}
+    TONES = {"regie": "blue", "plateau": "amber", "vmix": "violet"}
 
-    def __init__(self, port):
+    def __init__(self, port, token=None):
         self.online = True
+        self.token = token
         self.buses = {"regie": {"mode": "ptt", "active": False}, "plateau": {"mode": "toggle", "active": False},
                       "vmix": {"mode": "always_on", "active": True}}
         self.log = []
+        self.seen_origin = []  # Origin / Referer reçus (LiveDeck n'en envoie jamais)
+        self.auth = []  # en-têtes Authorization reçus
+        self.requests = []  # (méthode, chemin)
         self.ignore_off = 0  # nombre de « off » acceptés (200) mais sans effet : « off » perdu côté client
         self.busy = 0  # nombre de réponses 503 « interface occupée » à renvoyer
         self.slow: list[float] = []  # délais (s) des prochaines commandes : client lent mais vivant
+        self.no_stream = False  # flux SSE indisponible : le client lit l'état en secours
         self._gui = threading.Lock()
         fake = self
 
@@ -57,52 +64,112 @@ class FakeIntercom:
                 except OSError:  # LiveDeck a abandonné (délai dépassé) : la commande est appliquée quand même
                     pass
 
+            def _err(self, code, name, message, details=None):
+                err = {"code": name, "message": message}
+                if details:
+                    err["details"] = details
+                self._send(code, {"error": err})
+
+            def _stream(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                old = fake.state()
+                try:
+                    self.wfile.write(f"event: state\ndata: {json.dumps(old, ensure_ascii=False)}\n\n".encode())
+                    self.wfile.flush()
+                    idle = 0
+                    while True:
+                        time.sleep(0.05)
+                        new = fake.state()
+                        a = {k: v for k, v in old.items() if k != "updatedAt"}
+                        b = {k: v for k, v in new.items() if k != "updatedAt"}
+                        if a != b:
+                            keys = {k["id"]: k for k in old["keys"]}
+                            patch = {"changed": {k: v for k, v in b.items() if k != "keys" and a.get(k) != v},
+                                     "keys": [k for k in new["keys"] if keys.get(k["id"]) != k],
+                                     "removedKeys": [], "updatedAt": new["updatedAt"]}
+                            self.wfile.write(f"event: patch\ndata: {json.dumps(patch, ensure_ascii=False)}\n\n".encode())
+                            self.wfile.flush()
+                            old, idle = new, 0
+                        else:
+                            idle += 1
+                            if idle % 100 == 0:
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
+                except OSError:
+                    pass
+
             def _handle(self, method):
+                fake.requests.append((method, self.path))
                 if self.headers.get("Origin") or self.headers.get("Referer"):
-                    return self._send(403, {"error": "requêtes de navigateur refusées"})
+                    fake.seen_origin.append(self.headers.get("Origin") or self.headers.get("Referer"))
+                    return self._err(403, "FORBIDDEN", "requêtes de navigateur refusées")
+                fake.auth.append(self.headers.get("Authorization"))
+                if fake.token is not None and self.headers.get("Authorization") != f"Bearer {fake.token}":
+                    return self._err(401, "INVALID_TOKEN", "jeton API absent ou incorrect")
                 parts = [p for p in self.path.split("?", 1)[0].split("/") if p]
-                if parts == ["status"]:
-                    if method != "GET":
-                        return self._send(405, {"error": "utilisez GET /status"})
-                    return self._send(200, fake.payload())
-                if len(parts) != 3 or parts[0] != "ptt":
-                    return self._send(404, {"error": "routes : GET /status, POST /ptt/<bus>/<on|off|toggle>"})
-                if method != "POST":
-                    return self._send(405, {"error": "les commandes PTT exigent POST"})
-                _, token, cmd = parts
-                cmd = cmd.lower()
-                fake.log.append((token.lower(), cmd))
+                if parts[:2] != ["api", "deck"]:
+                    return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                rest = parts[2:]
+                if rest == ["state"] and method == "GET":
+                    return self._send(200, fake.state())
+                if rest == ["events"] and method == "GET":
+                    if fake.no_stream:
+                        return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                    return self._stream()
+                if rest == ["commands"] and method == "GET":
+                    return self._send(200, {"commands": fake.state()["commands"]})
+                if len(rest) != 2 or rest[0] != "commands" or method != "POST":
+                    if method == "GET":
+                        return self._err(404, "ROUTE_NOT_FOUND", "route inconnue")
+                    return self._err(405, "METHOD_NOT_ALLOWED", "méthode non permise")
+                cid = rest[1]
+                if cid not in ("ptt.toggle", "ptt.on", "ptt.off", "ptt.allOff"):
+                    return self._err(404, "COMMAND_NOT_FOUND", f"commande « {cid} » inconnue")
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                except ValueError:
+                    return self._err(422, "VALIDATION_FAILED", "JSON illisible")
+                args = body.get("args") if isinstance(body, dict) else None
+                bus, cmd = None, cid.split(".")[1]
+                if cid == "ptt.allOff":
+                    cmd = "off"
+                else:
+                    value = str((args or {}).get("bus") or "").strip().lower()
+                    if not value:
+                        return self._err(422, "VALIDATION_FAILED", "argument « bus » manquant",
+                                         {"args.bus": "argument « bus » manquant"})
+                    bus = next((k for k, i in fake.KEYS.items() if value in (k, str(i))), None)
+                    if bus is None:
+                        return self._err(422, "VALIDATION_FAILED", f"bus « {value} » inconnu",
+                                         {"args.bus": f"bus « {value} » inconnu"})
+                fake.log.append((bus or "all", cmd))
                 with fake._gui:  # comme le QtDispatcher du client : une commande à la fois, dans l'ordre
                     if fake.slow:  # interface occupée : la commande est appliquée (et répondue) en retard
                         time.sleep(fake.slow.pop(0))
-                    if token.lower() == "all":
-                        if cmd != "off":
-                            return self._send(400, {"error": "seul POST /ptt/all/off est accepté"})
-                        bus = None
-                    else:
-                        bus = next((k for k, i in fake.KEYS.items() if token.lower() in (k, str(i))), None)
-                        if bus is None:
-                            return self._send(404, {"error": f"bus inconnu « {token} » ; attendus : regie, plateau, vmix"})
-                        if cmd not in ("on", "off", "toggle"):
-                            return self._send(404, {"error": "action attendue : on, off ou toggle"})
                     if fake.busy > 0:
                         fake.busy -= 1
-                        return self._send(503, {"error": "interface occupée, réessayez"})
-                    if not fake.online:
-                        return self._send(409, {"error": "PTT désarmé : le client n'est pas en ligne", **fake.payload()})
+                        return self._err(503, "BUSY", "Interface occupée, réessayez.")
+                    if not fake.online and cmd != "off":
+                        return self._err(409, "COMMAND_REFUSED", "PTT désarmé : le client n'est pas en ligne")
                     if bus is not None and bus not in fake.buses:
-                        return self._send(404, {"error": "bus non proposé par ce serveur"})
+                        return self._err(422, "VALIDATION_FAILED", "bus non proposé par ce serveur",
+                                         {"args.bus": "bus non proposé"})
                     for b in ([bus] if bus else list(fake.buses)):
                         st = fake.buses[b]
                         if st["mode"] == "always_on":
                             if bus is not None and cmd != "on":
-                                return self._send(409, {"error": "bus en mode Always On : changez son mode dans le client"})
+                                return self._err(409, "COMMAND_REFUSED",
+                                                 "Bus en mode Permanent : changez son mode dans le poste.")
                             continue
                         if cmd == "off" and fake.ignore_off > 0:
                             fake.ignore_off -= 1
                             continue
                         st["active"] = (not st["active"]) if cmd == "toggle" else cmd == "on"
-                    self._send(200, fake.payload())
+                    self._send(200, {"ok": True, "message": "fait", "data": fake.payload()})
 
             def do_GET(self):
                 self._handle("GET")
@@ -115,12 +182,48 @@ class FakeIntercom:
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         self.srv.daemon_threads = True
+        self.port = self.srv.server_address[1]  # port 0 : celui que le système a donné
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
+    def buses_list(self) -> list[dict]:
+        on = self.online
+        return [{"id": k, "name": self.NAMES[k], "mode": v["mode"],
+                 "active": bool(on and (v["mode"] == "always_on" or v["active"]))} for k, v in self.buses.items()]
+
     def payload(self) -> dict:
+        """Ce que renvoie une commande : data = état de la fenêtre (buses : dictionnaire)."""
         return {"state": "En ligne" if self.online else "Hors ligne", "online": self.online,
-                "buses": {k: {"mode": v["mode"], "active": bool(self.online and (v["mode"] == "always_on" or v["active"]))}
-                          for k, v in self.buses.items()}}
+                "operational": "online" if self.online else "disconnected", "detail": None,
+                "buses": {b["id"]: {"mode": b["mode"], "active": b["active"]} for b in self.buses_list()}}
+
+    def state(self) -> dict:
+        """GET /api/deck/state : token, client, buses, commands, keys, updatedAt (comme client/deck.py)."""
+        online = self.online
+        buses = self.buses_list()
+        keys = [{"id": "client.status", "group": "État", "command": None, "args": {}, "title": "Intercom",
+                 "subtitle": "En ligne" if online else "Hors ligne", "active": online,
+                 "tone": "success" if online else "neutral", "available": True, "reason": None}]
+        for b in buses:
+            reason = None
+            if not online:
+                reason = "Le poste n'est pas en ligne."
+            elif b["mode"] == "always_on":
+                reason = "Bus en mode Permanent : changez son mode dans le poste."
+            keys.append({"id": f"ptt.toggle:{b['id']}", "group": "Parole", "command": "ptt.toggle",
+                         "args": {"bus": b["id"]}, "title": b["name"],
+                         "subtitle": "Hors ligne" if not online else ("Tu parles" if b["active"] else "Prêt"),
+                         "active": b["active"], "tone": "live" if b["active"] else self.TONES[b["id"]],
+                         "available": reason is None, "reason": reason})
+        keys.append({"id": "ptt.allOff", "group": "Parole", "command": "ptt.allOff", "args": {},
+                     "title": "Tout couper", "subtitle": None, "active": False, "tone": "danger",
+                     "available": True, "reason": None})
+        cmds = [{"id": c, "label": c, "argNames": [] if c == "ptt.allOff" else ["bus"], "available": True,
+                 "reason": None} for c in ("ptt.toggle", "ptt.on", "ptt.off", "ptt.allOff")]
+        return {"token": {"name": "jeton API" if self.token else "accès libre", "permissions": []},
+                "client": {"state": "online" if online else "disconnected",
+                           "label": "En ligne" if online else "Hors ligne", "online": online, "detail": None},
+                "buses": buses, "commands": cmds, "keys": keys,
+                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
 
     def stop(self):
         self.srv.shutdown()
@@ -910,3 +1013,184 @@ class FakeMixPanel:
     def close(self):
         self.srv.shutdown()
         self.srv.server_close()
+
+
+class FakeDmaix:
+    """API Stream Deck de DMAIX (dmaix-v2 : apps/server/src/services/deck.ts et http/routes/deck.ts) :
+    jeton facultatif (vide = API ouverte, sinon « Authorization: Bearer », 401 INVALID_TOKEN), touches
+    construites comme buildKeys (État, Scènes, Effets, Commandes), flux /api/deck/events (« state » puis
+    « patch »), erreurs { error: { code, message } } : 404 COMMAND_NOT_FOUND / ROUTE_NOT_FOUND, 409
+    COMMAND_REFUSED, 422 VALIDATION_FAILED. Jamais de 404 NOT_FOUND."""
+    TO_FIX = "Élément à corriger dans la bibliothèque."
+    COMMANDS = {"scene.play": "scene", "effect.toggle": "effect", "effect.start": "effect",
+                "effect.stop": "effect", "effects.stopAll": None, "dmx.blackout": None}
+
+    def __init__(self, port, token=""):
+        self.token = token
+        self.output = {"enabled": True, "driver": "enttec", "connected": True}
+        self.scenes = [{"id": "sc-1", "name": "Plein feu", "playable": True},
+                       {"id": "sc-2", "name": "Ambiance bleue", "playable": True},
+                       {"id": "sc-3", "name": "Cassée", "playable": False}]
+        self.effects = [{"id": "fx-1", "name": "Strobe", "durationMs": 4000, "playable": True},
+                        {"id": "fx-2", "name": "Chase", "durationMs": None, "playable": True}]
+        self.scene = None         # {"libraryItemId", "name", "modified"}
+        self.running = []         # libraryItemId des effets en cours
+        self.blackouts = 0
+        self.calls = []           # (commande, corps, en-tête Authorization)
+        self.streams = 0
+        self.reads = 0
+        fake = self
+
+        def key(kid, group, command, args, title, subtitle, active, tone, reason=None):
+            return {"id": kid, "group": group, "command": command, "args": args, "title": title,
+                    "subtitle": subtitle or None, "active": active, "tone": tone,
+                    "available": reason is None, "reason": reason}
+
+        def keys():
+            o, sc, n = fake.output, fake.scene, len(fake.running)
+            out = [key("output.status", "État", None, {}, "Sortie DMX",
+                       "Désactivée" if not o["enabled"] else "Connectée" if o["connected"] else "Déconnectée",
+                       o["connected"], "neutral" if not o["enabled"] else "success" if o["connected"] else "danger"),
+                   key("scene.current", "État", None, {}, "Scène",
+                       f"{sc['name']}{' (modifiée)' if sc['modified'] else ''}" if sc else "Aucune",
+                       sc is not None, "info" if sc else "neutral")]
+            for it in fake.scenes:
+                cur = bool(sc) and sc["libraryItemId"] == it["id"]
+                out.append(key(f"scene.play:{it['id']}", "Scènes", "scene.play", {"scene": it["id"]}, it["name"],
+                               ("Modifiée" if sc["modified"] else "En cours") if cur else None, cur,
+                               "success" if cur else "neutral", None if it["playable"] else fake.TO_FIX))
+            for it in fake.effects:
+                on = it["id"] in fake.running
+                dur = f"{it['durationMs'] // 1000} s" if it["durationMs"] else "Boucle"
+                out.append(key(f"effect.toggle:{it['id']}", "Effets", "effect.toggle", {"effect": it["id"]},
+                               it["name"], "En cours" if on else dur, on, "live" if on else "neutral",
+                               None if it["playable"] or on else fake.TO_FIX))
+            out += [key("effects.stopAll", "Commandes", "effects.stopAll", {}, "Stop effets",
+                        f"{n} en cours" if n else "Aucun", n > 0, "warning" if n else "neutral",
+                        None if n else "Aucun effet en cours."),
+                    key("dmx.blackout", "Commandes", "dmx.blackout", {}, "Blackout", None, False, "danger")]
+            return out
+
+        def state():
+            names = {e["id"]: e["name"] for e in fake.effects}
+            return {"token": {"name": "jeton API" if fake.token else "accès libre", "permissions": []},
+                    "output": dict(fake.output), "scene": dict(fake.scene) if fake.scene else None,
+                    "effects": [{"executionId": f"x-{i}", "libraryItemId": r, "name": names.get(r)}
+                                for i, r in enumerate(fake.running)],
+                    "library": {"scenes": [dict(s) for s in fake.scenes], "effects": [dict(e) for e in fake.effects]},
+                    "commands": [{"id": c, "label": c, "argNames": [a] if a else [], "available": True,
+                                  "reason": None} for c, a in fake.COMMANDS.items()],
+                    "keys": keys(), "updatedAt": "2026-11-23T12:00:00Z"}
+
+        def patch(old, new):
+            changed = {k: v for k, v in new.items() if k not in ("keys", "updatedAt") and old.get(k) != v}
+            before, now = {k["id"]: k for k in old["keys"]}, {k["id"]: k for k in new["keys"]}
+            keys_ = [k for kid, k in now.items() if before.get(kid) != k]
+            removed = [kid for kid in before if kid not in now]
+            if not (changed or keys_ or removed):
+                return None
+            return {"changed": changed, "keys": keys_, "removedKeys": removed, "updatedAt": new["updatedAt"]}
+
+        self.state = state
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def _send(self, code, data):
+                body = json.dumps(data, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _err(self, code, ecode, msg):
+                self._send(code, {"error": {"code": ecode, "message": msg}})
+
+            def _auth(self):
+                auth = self.headers.get("Authorization") or ""
+                if fake.token and auth != f"Bearer {fake.token}":
+                    self._err(401, "INVALID_TOKEN", "Jeton API absent ou invalide.")
+                    return False
+                return True
+
+            def _events(self):
+                fake.streams += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                last = state()
+                self.wfile.write(f"event: state\ndata: {json.dumps(last, ensure_ascii=False)}\n\n".encode())
+                self.wfile.flush()
+                beat = time.monotonic()
+                while True:
+                    time.sleep(0.05)
+                    new = state()
+                    p = patch(last, new)
+                    if p:
+                        last = new
+                        self.wfile.write(f"event: patch\ndata: {json.dumps(p, ensure_ascii=False)}\n\n".encode())
+                        self.wfile.flush()
+                    elif time.monotonic() - beat > 1:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        beat = time.monotonic()
+
+            def do_GET(self):
+                if not self._auth():
+                    return
+                fake.reads += 1
+                path = self.path.split("?")[0]
+                if path == "/api/deck/events":
+                    try:
+                        return self._events()
+                    except OSError:
+                        return
+                if path == "/api/deck/state":
+                    return self._send(200, state())
+                self._err(404, "ROUTE_NOT_FOUND", "Route inconnue.")
+
+            def do_POST(self):
+                if not self._auth():
+                    return
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                cid = unquote(self.path.split("/api/deck/commands/", 1)[-1].split("?")[0])
+                fake.calls.append((cid, body, self.headers.get("Authorization")))
+                if cid not in fake.COMMANDS:
+                    return self._err(404, "COMMAND_NOT_FOUND", f"Commande inconnue : {cid}.")
+                arg = fake.COMMANDS[cid]
+                val = ((body or {}).get("args") or {}).get(arg) if arg else None
+                items = {i["id"]: i for i in (fake.scenes if arg == "scene" else fake.effects)} if arg else {}
+                if arg and val not in items:
+                    return self._send(422, {"error": {"code": "VALIDATION_FAILED", "message": "Argument invalide.",
+                                                      "details": {f"args.{arg}": "Valeur inconnue."}}})
+                it = items.get(val)
+                if it is not None and not it["playable"]:
+                    return self._err(409, "COMMAND_REFUSED", f"« {it['name']} » est à corriger.")
+                if cid == "scene.play":
+                    fake.scene = {"libraryItemId": val, "name": it["name"], "modified": False}
+                    return self._send(200, {"ok": True, "message": f"Scène « {it['name']} » jouée", "data": {}})
+                if cid == "effect.toggle":
+                    if val in fake.running:
+                        fake.running.remove(val)
+                        return self._send(200, {"ok": True, "message": f"Effet « {it['name']} » arrêté"})
+                    fake.running.append(val)
+                    return self._send(200, {"ok": True, "message": f"Effet « {it['name']} » lancé"})
+                if cid == "effects.stopAll":
+                    fake.running.clear()
+                    return self._send(200, {"ok": True, "message": "Effets arrêtés"})
+                if cid == "dmx.blackout":
+                    fake.blackouts += 1
+                    return self._send(200, {"ok": True, "message": "Blackout"})
+                self._send(200, {"ok": True, "message": f"{cid} : fait"})
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        self.srv.daemon_threads = True
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()

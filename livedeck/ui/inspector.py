@@ -161,7 +161,7 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
     integ = engine.cfg.get("integrations", {})
     if key == "intercom":
         ic = integ.get("intercom") or {}
-        return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
+        return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080), token=ic.get("token", ""))
     if key in DECK_APPS:
         return probe_deck(key, *deck_config(engine.cfg, key))
     devices = integ.get("tallies") or []

@@ -50,7 +50,7 @@ flowchart LR
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
-| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview, MixPanel ; MixPanel reconnu au test par `app.name`) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, tests de connexion, conversion des bricolages Companion |
+| `integrations.py` | py-intercom (`Intercom` : parole et bus par `GET /api/deck/state` et `POST /api/deck/commands/ptt.*`, messages d'erreur, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview, MixPanel, DMAIX, py-intercom ; MixPanel reconnu au test par `app.name`) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, tests de connexion, conversion des bricolages Companion |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |
@@ -90,7 +90,7 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
   bornée à ~2,5 s). `changed()` relâche aussi un interrupteur verrouillé dont la touche a disparu, n'est plus un
   interrupteur ou a d'autres actions maintenues.
 - **« off » py-intercom confirmé** : un « off » est réessayé 3 fois ; s'il échoue, le bus est surveillé (jusqu'à
-  ~60 s si le client revient). La 1re lecture de `/status` après le « off » décide : bus encore ouvert, « off »
+  ~60 s si le client revient). La 1re lecture de `/api/deck/state` après le « off » décide : bus encore ouvert, « off »
   renvoyé (2 fois au plus, une seule alerte) ; bus fermé, ou en mode bascule dans le client (l'opérateur a pu le
   rouvrir), surveillance terminée. Un nouvel appui annule ce renvoi. Un bus « Toujours actif » n'est jamais coupé.
   Raccourci de secours utilisé après un « on » resté sans réponse : le relâché envoie quand même « off ».

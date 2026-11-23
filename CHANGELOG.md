@@ -22,6 +22,22 @@
   Réglages › Pilotage à distance*. Il faut une version de MixPanel qui expose `/api/deck`.
 - Barre d'état : un voyant MixPanel quand une touche l'utilise.
 
+- **py-intercom décrit ses touches** : une par bus (Régie, Plateau, vMix : bleu, ambre, violet, rouge « live » quand
+  le bus transmet), *Tout couper* et l'état de la liaison. Choisis-les dans la bibliothèque (*Intégrations*) ou
+  l'action *Touche d'une app* (app *py-intercom*) ; elles suivent le flux `/api/deck/events` du poste et se
+  grisent avec la raison (hors ligne, bus en mode Permanent). Adresse `127.0.0.1:5080` par défaut, **jeton API
+  facultatif** (champ dans Réglages → Intégrations).
+- **La parole (action *Intercom*) passe elle aussi par `/api/deck`** : py-intercom ne sert plus que cette API, les
+  anciennes routes `/ptt/<bus>/…` et `/status` n'existent plus (404). LiveDeck lit l'état sur
+  `GET /api/deck/state` et commande `POST /api/deck/commands/ptt.on | ptt.off | ptt.toggle | ptt.allOff`.
+  Il faut un client py-intercom qui sert `/api/deck` ; **Tester** le dit sinon. Rien à refaire sur les touches
+  existantes, mais elles ne marchent plus avec un ancien client.
+- Aucun en-tête `Origin` ni `Referer` n'est envoyé (py-intercom les refuse comme venant d'un navigateur).
+- **DMAIX** (contrôleur DMX) se pilote aussi : une touche par scène et par effet de sa bibliothèque, Stop effets,
+  Blackout, l'état de la sortie DMX et de la scène en cours, avec leur texte, leur couleur et leur état en direct.
+  Réglages → Intégrations : section **DMAIX** (adresse, port `6174` ajouté s'il manque, **Jeton API facultatif**,
+  **Tester**). Il faut une version de DMAIX qui expose `/api/deck`.
+
 ### Retiré
 - L'ancienne intégration py-multiview (`GET /status`, `POST /<objet>/<verbe>`) : l'action *py-multiview*,
   *py-multiview : volume du retour*, le retour d'état *py-multiview* et leurs presets. Toutes ses touches passent

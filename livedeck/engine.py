@@ -275,7 +275,7 @@ class Engine:
         """Réglages des intégrations + n'activer que celles qu'une touche utilise."""
         integ = self.cfg.get("integrations", {})
         ic = integ.get("intercom", {})
-        self.intercom.configure(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
+        self.intercom.configure(ic.get("host", "127.0.0.1"), ic.get("port", 5080), ic.get("token", ""))
         for app, d in self.deck_apps.items():
             d.configure(*deck_config(self.cfg, app))
         self.tallies.configure(integ.get("tallies", []))
@@ -291,7 +291,7 @@ class Engine:
             apps.update(x.get("app") or DECK_DEFAULT_APP for x in items + cs
                         if x.get("type") in ("deck.key", "deckkey"))
         used = {t.split(".")[0] for t in types} | conds
-        self.intercom.set_wanted("intercom" in used)
+        self.intercom.set_wanted("intercom" in used or "intercom" in apps)  # parole, ou touches décrites
         for app, d in self.deck_apps.items():
             d.set_wanted(app in apps)
         self.tallies.set_wanted("tally" in used)
