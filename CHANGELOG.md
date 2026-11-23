@@ -1,5 +1,13 @@
 # Journal des versions
 
+## 1.10.1 — 2026-11-23
+
+### Retiré
+- La conversion des anciennes touches orchestream (*Overlay orchestream*, *orchestream : commande régie*) à
+  l'ouverture d'une configuration ou d'une page : elles ont été converties par la 1.10.0. orchestream n'a plus les
+  raccourcis publics `/api/overlay/<widget>/show|hide` ; l'import Companion « intégrations natives » continue de
+  transformer un interrupteur show / hide vers un overlay en touche `overlay.toggle:<widget>`.
+
 ## 1.10.0 — 2026-11-23
 
 ### Touches orchestream décrites par le serveur

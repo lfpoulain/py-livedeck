@@ -247,12 +247,6 @@ def normalize_config(cfg: dict) -> dict:
                 if not c["actions"]:
                     c["actions"] = c["actions_cw"] + c["actions_ccw"]
                 c["actions_cw"], c["actions_ccw"] = [], []
-    # Anciennes touches orchestream (overlays publics, liste de commandes en dur) -> touches décrites par
-    # orchestream-v2. Ici plutôt que par numéro de version : un fichier chargé ou importé passe aussi par là.
-    from .integrations import convert_orchestream
-    notes = convert_orchestream(cfg)
-    if notes:  # clé « _ » : jamais écrite sur disque, à montrer une fois par l'interface
-        cfg.setdefault("_migration_notes", []).extend(notes)
     return cfg
 
 

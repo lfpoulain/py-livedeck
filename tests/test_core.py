@@ -3678,56 +3678,18 @@ def test_orchestream_wanted(tmp_path):
     e.stop()
 
 
-def test_orchestream_old_keys_converted(tmp_path):
-    """Les anciennes touches (overlays publics sans jeton, commandes d'une liste en dur) deviennent des touches
-    Orchestream : overlay.<mode>:<widget>, <commande> ou <commande>:<valeur>."""
-    import json
-    old = {"version": 4, "vmix": {"host": "127.0.0.1", "port": 8099}, "decks": {}, "options": {},
-           "integrations": {"orchestream": {"url": "http://orch.local", "overlays": [{"name": "quiz", "label": "Q"}]}},
-           "pages": [{"id": "p", "name": "P", "cols": 5, "rows": 3, "buttons": {
-               "0,0": {"id": "a", "actions": [{"type": "orchestream.overlay", "overlay": "poll", "mode": "toggle"}]},
-               "0,1": {"id": "b", "actions": [{"type": "orchestream.overlay", "overlay": "twizz", "mode": "show"}],
-                       "actions_off": [{"type": "orchestream.overlay", "overlay": "twizz", "mode": "hide"}],
-                       "mode": "toggle"},
-               "0,2": {"id": "c", "actions": [{"type": "orchestream.command", "command": "game.advance", "arg": ""}]},
-               "0,3": {"id": "d", "actions": [{"type": "orchestream.command", "command": "twizz.start",
-                                               "arg": "q-1"}],
-                       "feedbacks": [{"cond": {"type": "orchdeck", "command": "twizz.start", "state": "unavailable"},
-                                      "bg": "#111111"},
-                                     {"cond": {"type": "orchestream", "overlay": "twizz", "state": "visible"},
-                                      "bg": "#facc15"}]},
-               "0,4": {"id": "e", "actions": [{"type": "http", "method": "POST",
-                                               "url": "http://orch.local/api/overlay/poll/show"}]}},
-               "controls": {"knobTL": {"id": "k", "kind": "rotary", "actions_cw": [
-                   {"type": "orchestream.command", "command": "overlay.show", "arg": "poll"}]}}}]}
-    p = Path(tmp_path) / "config.json"
-    p.write_text(json.dumps(old), encoding="utf-8")
-    cfg = load_config(p)
-    b = cfg["pages"][0]["buttons"]
-    assert b["0,0"]["actions"] == [{"type": "orchestream.key", "key": "overlay.toggle:poll", "title": ""}]
-    assert b["0,1"]["actions"][0]["key"] == "overlay.show:twizz"
-    assert b["0,1"]["actions_off"][0]["key"] == "overlay.hide:twizz"
-    assert b["0,2"]["actions"][0]["key"] == "game.advance"
-    assert b["0,3"]["actions"][0]["key"] == "twizz.start:q-1"
-    conds = [f["cond"] for f in b["0,3"]["feedbacks"]]
-    assert conds == [{"type": "orchkey", "key": "twizz.start", "state": "unavailable"},
-                     {"type": "orchkey", "key": "overlay.toggle:twizz", "state": "active"}], conds
-    assert b["0,4"]["actions"][0]["type"] == "http", "une requête HTTP écrite à la main reste telle quelle"
-    assert cfg["pages"][0]["controls"]["knobTL"]["actions_cw"][0]["key"] == "overlay.show:poll"
-    assert "overlays" not in cfg["integrations"]["orchestream"]
-    notes = cfg["_migration_notes"]
-    assert any("jeton API" in n for n in notes), notes
-    assert "orchestream.overlay" not in config_text(cfg) and "orchestream.command" not in config_text(cfg)
-    # déjà convertie : rien ne change, aucune note
-    again = json.loads(config_text(cfg))
-    assert not integrations.convert_orchestream(again)
-    # import Companion « intégrations natives » : les requêtes show / hide isolées sont converties aussi
-    comp = {"pages": [{"buttons": {"0,0": {"actions": [{"type": "http", "url": "http://o.local/api/overlay/poll/hide"}],
-                                           "actions_off": [], "feedbacks": [], "label": ""}}}]}
+def test_orchestream_companion_overlay_toggle():
+    """Import Companion « intégrations natives » : un interrupteur show / hide vers un overlay d'orchestream
+    devient la touche overlay.toggle:<widget> d'orchestream-v2."""
+    comp = {"pages": [{"buttons": {"0,0": {
+        "label": "Poll", "mode": "toggle", "feedbacks": [],
+        "actions": [{"type": "http", "method": "POST", "url": "http://o.local/api/overlay/poll/show"}],
+        "actions_off": [{"type": "http", "method": "POST", "url": "http://o.local/api/overlay/poll/hide"}]}}}]}
     integrations.migrate(comp)
-    assert comp["pages"][0]["buttons"]["0,0"]["actions"][0] == {"type": "orchestream.key", "key": "overlay.hide:poll",
-                                                                 "title": ""}
+    b = comp["pages"][0]["buttons"]["0,0"]
+    assert b["actions"] == [{"type": "orchestream.key", "key": "overlay.toggle:poll"}] and b["mode"] == "press"
     assert comp["integrations"]["orchestream"]["url"] == "http://o.local"
+    assert not hasattr(integrations, "convert_orchestream"), "plus de conversion des anciennes touches"
 
 
 def test_orchestream_catalog_and_picker(tmp_path):

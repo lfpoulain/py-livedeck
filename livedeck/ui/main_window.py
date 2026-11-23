@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
 from .. import __version__, presets
 from ..actions import to_take
 from ..companion_import import import_companion
-from ..integrations import convert_orchestream, integration_status, merge_integrations
+from ..integrations import integration_status, merge_integrations
 from .. import updater
 from ..model import (CONFIG_VERSION, DECK_SIZES, HOME, config_text, key, new_id, normalize_button, normalize_config,
                      parse_control, parse_key, surface_of)
@@ -1193,7 +1193,6 @@ class MainWindow(QMainWindow):
             p["cols"], p["rows"] = int(p.get("cols") or 8), int(p.get("rows") or 4)
             p["buttons"] = {k: normalize_button({**b, "id": new_id()}) for k, b in p["buttons"].items()
                             if isinstance(b, dict) and self.engine.in_grid(p, k)}
-            convert_orchestream({"pages": [p]})  # page exportée avant les touches décrites par orchestream-v2
         except (OSError, ValueError, TypeError) as e:
             QMessageBox.warning(self, "Import impossible", f"Ce fichier n'a pas pu être lu :\n{e}")
             return None

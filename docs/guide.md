@@ -336,10 +336,6 @@ espacé ; s'il ne peut pas ouvrir le flux alors qu'orchestream répond, il relit
 attendant. Le jeton part dans l'en-tête `Authorization`, jamais dans l'adresse ; si orchestream signale trop de
 requêtes, LiveDeck attend le délai demandé.
 
-Les anciennes touches (*Overlay orchestream* sans jeton, *orchestream : commande régie*) sont converties à
-l'ouverture : un overlay devient `overlay.toggle:<widget>` (ou `overlay.show:` / `overlay.hide:` selon son
-mode), une commande devient sa touche (`game.advance`, `twizz.start:<quiz>`). Il faut alors un jeton API.
-
 ### Tally32
 
 Un tally par ligne, `Nom = IP`. Si un tally répond sans connaître `/vmix/reconnect`, le Moniteur te demande de

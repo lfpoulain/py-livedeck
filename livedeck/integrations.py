@@ -809,86 +809,6 @@ def _peek_json(e: urllib.error.HTTPError) -> object:
     return e._livedeck_json
 
 
-# --- anciennes touches orchestream -> touches décrites par le serveur ----------------------------
-
-_ACTION_LISTS = ("actions", "actions_off", "long_actions", "actions_cw", "actions_ccw")
-_SHOW = {"toggle": "toggle", "show": "show", "hide": "hide"}
-
-
-def legacy_key(a: dict, http: bool = False) -> str | None:
-    """Identifiant de touche d'une ancienne action orchestream (overlay public ou commande régie), sinon None.
-    http : convertit aussi une requête HTTP vers les raccourcis publics de l'overlay (import Companion)."""
-    t = a.get("type")
-    if t == "orchestream.overlay":
-        widget = str(a.get("overlay") or "twizz").strip()
-        return f"overlay.{_SHOW.get(a.get('mode'), 'toggle')}:{widget}"
-    if t == "orchestream.command":
-        cid = str(a.get("command") or "game.advance").strip()
-        arg = str(a.get("arg") or "").strip()
-        return f"{cid}:{arg}" if arg else cid
-    if t == "http" and http:  # requête vers les raccourcis publics /api/overlay/<widget>/show|hide, bientôt retirés
-        m = _ORCH.match(str(a.get("url") or "").strip())
-        return f"overlay.{m.group(3)}:{m.group(2)}" if m else None
-    return None
-
-
-def _legacy_cond(c: dict) -> dict | None:
-    t = c.get("type")
-    if t == "orchestream":  # overlay affiché / masqué / inconnu
-        widget = str(c.get("overlay") or "twizz").strip()
-        state = {"hidden": "inactive", "unknown": "offline"}.get(c.get("state"), "active")
-        return {"type": "orchkey", "key": f"overlay.toggle:{widget}", "state": state}
-    if t == "orchdeck":  # état de la régie (commande indisponible, partie en cours…)
-        cid = str(c.get("command") or "game.advance").strip()
-        state = c.get("state", "unavailable")
-        key = f"{cid}:{c.get('widget')}" if state == "widget" and c.get("widget") else cid
-        return {"type": "orchkey", "key": key,
-                "state": state if state in ("unavailable", "offline") else "active"}
-    return None
-
-
-def convert_orchestream(cfg: dict, http: bool = False) -> list[str]:
-    """Remplace les anciennes touches orchestream (overlays publics sans jeton, commandes d'une liste en dur)
-    par l'action « Orchestream » : son identifiant de touche est celui que décrit orchestream-v2.
-    Sans effet sur une configuration déjà convertie (appelée à chaque chargement et import)."""
-    n_keys = n_conds = 0
-    found_url = ""
-    for page in cfg.get("pages") or []:
-        for b in list((page.get("buttons") or {}).values()) + list((page.get("controls") or {}).values()):
-            if not isinstance(b, dict):
-                continue
-            for lst in _ACTION_LISTS:
-                for i, a in enumerate(b.get(lst) or []):
-                    key = legacy_key(a, http) if isinstance(a, dict) else None
-                    if key is not None:
-                        m = _ORCH.match(str(a.get("url") or "").strip()) if a.get("type") == "http" else None
-                        found_url = found_url or (m.group(1) if m else "")
-                        b[lst][i] = {"type": "orchestream.key", "key": key, "title": ""}
-                        n_keys += 1
-            for f in b.get("feedbacks") or []:
-                c = f.get("cond") if isinstance(f, dict) else None
-                new = _legacy_cond(c) if isinstance(c, dict) else None
-                if new is not None:
-                    f["cond"] = new
-                    n_conds += 1
-    integ = cfg.get("integrations")
-    orch = integ.get("orchestream") if isinstance(integ, dict) else None
-    if found_url and isinstance(integ, dict) and not isinstance(orch, dict):
-        orch = integ["orchestream"] = {}
-    if isinstance(orch, dict):
-        orch.pop("overlays", None)  # les widgets viennent désormais d'orchestream
-        if found_url and not orch.get("url"):
-            orch["url"] = found_url
-    notes = []
-    if n_keys or n_conds:
-        what = f"{n_keys} touche(s)" + (f" et {n_conds} retour(s) d'état" if n_conds else "")
-        notes.append(f"orchestream : {what} passé(s) aux touches décrites par orchestream-v2 (texte, couleur "
-                     "et état en direct)."
-                     + ("" if (orch or {}).get("token") else
-                        " Il faut maintenant un jeton API : Réglages → Intégrations."))
-    return notes
-
-
 # --- Tally32 --------------------------------------------------------------------------------
 
 
@@ -1375,7 +1295,6 @@ def migrate(cfg: dict) -> list[str]:
                 counts["intercom"] += 1
                 converted.append(f"« {(b.get('label') or '').replace(chr(10), ' ')} » ({page.get('name')}) : "
                                  f"{keys or '?'} → bus {bus_label(bus)}")
-    notes += convert_orchestream(cfg, http=True)  # requêtes show / hide isolées vers les mêmes raccourcis
     if counts["orch"]:
         notes.append(f"{counts['orch']} interrupteur(s) d'overlay orchestream passés aux touches d'orchestream-v2 "
                      "(état en direct ; jeton API à renseigner dans Réglages → Intégrations).")

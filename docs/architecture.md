@@ -50,7 +50,7 @@ flowchart LR
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
-| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), orchestream-v2 (touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton dans l'en-tête ; conversion des anciennes touches), Tally32, py-multiview (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
+| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), orchestream-v2 (touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton dans l'en-tête), Tally32, py-multiview (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |
