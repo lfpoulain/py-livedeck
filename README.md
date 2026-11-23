@@ -57,11 +57,15 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 <table>
 <tr>
 <td width="50%"><img src="docs/images/etapes.png" alt="Étapes"><p align="center"><sub>Étapes d'une touche, prochain appui</sub></p></td>
-<td width="50%"><img src="docs/images/integrations.png" alt="Intégrations"><p align="center"><sub>Intégrations py-intercom, orchestream, Tally32</sub></p></td>
+<td width="50%"><img src="docs/images/integrations.png" alt="Intégrations"><p align="center"><sub>Réglages : une page par outil, avec son état</sub></p></td>
 </tr>
 <tr>
 <td width="50%"><img src="docs/images/diagnostic.png" alt="Diagnostic"><p align="center"><sub>Diagnostic des Stream Decks</sub></p></td>
 <td width="50%"><img src="docs/images/touche-vide.png" alt="Touche vide"><p align="center"><sub>Toutes les actions, avec recherche</sub></p></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/outils.png" alt="Outils"><p align="center"><sub>Onglet Outils : chaque outil, son état, ses touches</sub></p></td>
+<td width="50%"><img src="docs/images/recherche.png" alt="Recherche"><p align="center"><sub>Recherche d'une touche (Ctrl+F)</sub></p></td>
 </tr>
 </table>
 

@@ -280,6 +280,8 @@ elles sont toutes surveillées.
 
 ![Intégrations](images/integrations.png)
 
+![Outils](images/outils.png)
+
 | Outil | Ce que fait LiveDeck | Retour sur la touche |
 |---|---|---|
 | **py-intercom** (API Stream Deck du client, `http://127.0.0.1:5080`, jeton facultatif) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus ; ou les touches que py-intercom décrit (une par bus, *Tout couper*, état de la liaison) | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon ; pour les touches décrites : texte, couleur et état donnés par py-intercom, en direct |

@@ -78,3 +78,13 @@ que tu la lances en exe ou depuis les sources. Rien n'est écrit dans le dépôt
 (`*.companionconfig`) sont exclus par `.gitignore` : ta config de régie reste sur ton PC.
 Les tests utilisent une config de démonstration anonymisée (`tests/fixtures/demo.companionconfig`) et des serveurs
 simulés (vMix, py-intercom, orchestream, Tally32) sur `127.0.0.1`.
+
+## Refaire les captures d'écran de la doc
+
+```bash
+python tools/screenshots.py
+```
+
+Le script redessine les images de `docs/images` hors écran, avec la configuration de démonstration et de faux
+serveurs (vMix, Stream Deck XL, py-intercom, orchestream, py-multiview, MixPanel, DMAIX, Tally32, caméra ONVIF) :
+rien de réel n'est touché. À relancer quand l'interface change, avant de publier.
