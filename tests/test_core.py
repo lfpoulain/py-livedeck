@@ -3624,7 +3624,7 @@ def test_orchestream_token_refused_and_revoked(tmp_path):
     assert ok is True and "Stream Deck plateau" in msg and "touche(s)" in msg, msg
     assert integrations.probe_orchestream("127.0.0.1:18262", "")[0] is None, "sans jeton : à renseigner"
     e.stop()
-    e2, od2, pg2, _ = orch_engine(tmp_path / "bad", 18263, token="osk_mauvais")
+    e2, od2, pg2, _ = orch_engine(Path(tmp_path) / "bad", 18263, token="osk_mauvais")
     assert wait(lambda: "jeton" in e2.orchestream.error, 5), e2.orchestream.error
     assert not od2.calls and od2.streams == 0
     e2.stop()
