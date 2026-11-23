@@ -1,6 +1,6 @@
 # Journal des versions
 
-## 1.11.0 — à paraître
+## 1.11.0 — 2026-11-23
 
 ### Touches décrites par chaque app (API Stream Deck commune)
 - **py-multiview décrit ses touches** comme orchestream : réception, chaque flux, le son de chaque flux, émission
@@ -44,10 +44,6 @@
   par `/api/deck`.
 - Aucune conversion : les anciennes touches *Orchestream* (`orchestream.key`) et *py-multiview* d'une
   configuration existante ne sont plus reconnues ; à reposer depuis la bibliothèque.
-
-## 1.10.1 — 2026-11-23
-
-### Retiré
 - La conversion des anciennes touches orchestream (*Overlay orchestream*, *orchestream : commande régie*) à
   l'ouverture d'une configuration ou d'une page : elles ont été converties par la 1.10.0. orchestream n'a plus les
   raccourcis publics `/api/overlay/<widget>/show|hide` ; l'import Companion « intégrations natives » continue de
