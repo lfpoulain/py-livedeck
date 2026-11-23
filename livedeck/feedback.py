@@ -8,8 +8,7 @@ from . import adjust
 from .actions import F
 from .adjust import WIN_TARGETS
 from .health import JSON_OPS, json_compare, json_path, json_text, parse_targets
-from .integrations import (DECK_APPS, DECK_DEFAULT_APP, MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS,
-                           bus_label, de, deck_name)
+from .integrations import DECK_APPS, DECK_DEFAULT_APP, bus_label, de, deck_name
 
 RED, GREEN, YELLOW, BLUE = "#e5262b", "#22c55e", "#facc15", "#4040ff"
 OFF_BG, OFF_FG = "#1a1d24", "#5a6273"  # intégration indisponible : touche grisée
@@ -57,14 +56,6 @@ CONDITIONS: dict[str, dict] = {
                 "fields": [F("app", "App", "choice", DECK_DEFAULT_APP, [(k, v["label"]) for k, v in DECK_APPS.items()]),
                            F("key", "Touche", "deck_key", ""),
                            F("state", "Quand", "choice", "active", DECK_KEY_STATES)]},
-    "multiview": {"label": "py-multiview",
-                  "fields": [F("target", "Cible", "choice", "sender", MULTIVIEW_TARGETS),
-                             F("ref", "Lequel", "mv_item", "", placeholder="nom ou numéro (1, 2…)",
-                               when={"target": MULTIVIEW_NEEDS_REF}),
-                             F("state", "Quand", "choice", "on",
-                               [("on", "En marche"), ("off", "À l'arrêt"),
-                                ("error", "En défaut (attente, erreur)"),
-                                ("unknown", "État inconnu (py-multiview injoignable)")])]},
     "flag": {"label": "État vMix (rec, stream…)", "fields": [F("flag", "État", "choice", "recording", FLAGS)]},
     "toggle": {"label": "Interrupteur activé", "fields": []},
     "pressed": {"label": "Touche enfoncée", "fields": []},
@@ -215,13 +206,6 @@ def _auto_press(b: dict) -> list[dict]:
             target = a.get("target", "all")
             return [fb("tally", "#237423", WHITE, target=target, state="ok"),
                     fb("tally", "#cc0000", WHITE, target=target, state="ko")]
-        if t == "multiview.control":
-            target, ref = a.get("target", "sender"), a.get("ref", "")
-            # Le son coupé est un état « en défaut » plutôt qu'une marche : rouge.
-            on_colour = "#cc0000" if target == "mute" else "#15803d"
-            return [fb("multiview", on_colour, WHITE, target=target, ref=ref, state="on"),
-                    fb("multiview", "#7c2d12", WHITE, target=target, ref=ref, state="error"),
-                    fb("multiview", bar="#5a6273", target=target, ref=ref, state="unknown")]
         if t == "vmix.function":
             name = (a.get("function") or "").strip().lower()
             for flag, names in _FLAG_FUNCS.items():
@@ -309,19 +293,6 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         return ok, {"label": fmt.replace("\\n", "\n").replace("{value}", json_text(val))} if ok and fmt else {}
     if t == "deckkey":
         return _eval_deckkey(engine, b, cond)
-    if t == "multiview":
-        mv = engine.multiview
-        target, ref = cond.get("target", "sender"), cond.get("ref", "")
-        state = cond.get("state", "on")
-        if state == "unknown":
-            why = mv.unavailable()
-            return bool(why), {"label": f"{(b.get('label') or 'py-multiview').strip()}\n{why}"} if why else {}
-        if state == "error":  # démarré mais rien ne passe : attente, relance, erreur
-            return mv.status_of(target, ref) in ("waiting", "retrying", "error"), {}
-        running = mv.running(target, ref)
-        if running is None:
-            return False, {}
-        return (running if state == "on" else not running), {}
     if t == "tally":
         ok, down = engine.tallies.summary(cond.get("target", "all"))
         if ok is None:
@@ -365,17 +336,6 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
     return False, {}
 
 
-def _multiview_text(c: dict) -> str:
-    target = c.get("target", "sender")
-    what = MULTIVIEW_TARGET_LABEL.get(target, target).lower()
-    if target in MULTIVIEW_NEEDS_REF and c.get("ref"):
-        what = f"{what} « {c['ref']} »"
-    return {"off": f"py-multiview : {what} à l'arrêt",
-            "error": f"py-multiview : {what} en défaut",
-            "unknown": "py-multiview est injoignable (texte : HORS LIGNE)"}.get(
-        c.get("state"), f"py-multiview : {what} en marche")
-
-
 def describe(f: dict) -> str:
     c = f["cond"]
     t = c.get("type")
@@ -397,7 +357,6 @@ def describe(f: dict) -> str:
                           f"{dict(JSON_OPS).get(c.get('op'), c.get('op'))}"
                           + (f" « {c.get('value')} »" if c.get("op") not in ("truthy",) else ""))),
         "tally": "tous les tallys sont connectés" if c.get("state") == "ok" else "un tally est hors ligne",
-        "multiview": _multiview_text(c),
         "deckkey": {"show": f"toujours : texte, couleur et état de la touche {de(app)}",
                     "offline": f"{app} est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
                     "unavailable": f"la touche ne peut pas servir maintenant (texte : la raison {de(app)})",
@@ -423,7 +382,3 @@ def describe(f: dict) -> str:
             "#b45309": "orange"}.get((color or "").lower(), color or "")
     return f"{effect.capitalize()} {name} quand {what}"
 
-
-# Noms d'avant les touches décrites par d'autres apps qu'orchestream
-ORCH_KEY_STATES = DECK_KEY_STATES
-orch_key_look = deck_key_look

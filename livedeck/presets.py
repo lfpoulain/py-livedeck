@@ -48,14 +48,6 @@ def _deck(app: str, key_id: str = "", title: str = "") -> dict:
     return new_button(label="", bg="#1f2937", actions=[new_action("deck.key", app=app, **values)])
 
 
-def _orch(key_id: str = "", title: str = "") -> dict:
-    return _deck("orchestream", key_id, title)
-
-
-def _mv(target: str, label: str, ref: str = "", bg: str = "#0f2a24") -> dict:
-    return new_button(label=label, bg=bg,
-                      actions=[new_action("multiview.control", target=target, ref=ref)])
-
 
 def _json_value() -> dict:
     return new_button(label="API", bg="#172554", feedbacks=[
@@ -129,7 +121,6 @@ PRESETS: dict[str, tuple] = {
     "function": ("vMix avancé", "Fonction vMix", "Toute l'API vMix", lambda: new_button(
         bg="#1e293b", actions=[new_action("vmix.function")])),
     "talk": ("Intégrations", "Talkback", "py-intercom, maintenu", lambda: _talk("regie")),
-    "orch": ("Intégrations", "Touche orchestream", "Décrite par orchestream, à choisir", lambda: _orch()),
     "talk_regie": ("Intégrations", "Talkback Régie", "py-intercom, maintenu", lambda: _talk("regie", "Régie")),
     "talk_plateau": ("Intégrations", "Talkback Plateau", "py-intercom, maintenu", lambda: _talk("plateau", "Plateau")),
     "talk_vmix": ("Intégrations", "Talkback vMix", "py-intercom, maintenu", lambda: _talk("vmix", "vMix")),
@@ -137,16 +128,6 @@ PRESETS: dict[str, tuple] = {
         label="Intercom\nOFF", bg="#1a1d24", actions=[new_action("intercom.ptt", mode="alloff")])),
     "tallies": ("Intégrations", "Tallys", "Vert si tous connectés, reconnecte", lambda: new_button(
         label="Tallys", bg="#000000", actions=[new_action("tally.reconnect")])),
-    "mv_sender": ("Intégrations", "Émission OMT", "py-multiview, état en direct",
-                  lambda: _mv("sender", "Émission\nOMT")),
-    "mv_reception": ("Intégrations", "Réception multiview", "py-multiview, tous les flux",
-                     lambda: _mv("reception", "Réception")),
-    "mv_monitor": ("Intégrations", "Retour audio", "py-multiview, écoute du master",
-                   lambda: _mv("monitor", "Retour\naudio")),
-    "mv_floating": ("Intégrations", "Fenêtre de retour", "py-multiview, fenêtre flottante",
-                    lambda: _mv("floating", "Fenêtre\nretour")),
-    "mv_stream": ("Intégrations", "Un flux multiview", "py-multiview, à préciser",
-                  lambda: _mv("stream", "Flux 1", "1")),
     # -- molettes : la rotation règle, l'appui coupe ----------------------------------
     "knob_master": ("Molette", "Volume Master", "Tourner : volume · appuyer : couper",
                     lambda: _vol("master", "Master", "MasterAudio")),
@@ -296,13 +277,10 @@ def make(preset_id: str, engine=None) -> dict | None:
         return None
     if preset_id.startswith("talk:"):
         return _talk(preset_id[5:])
-    if preset_id.startswith(("orch:", "deck:")):
-        # « deck:<app>:<id de touche> » (l'id peut contenir « : »), « deck:<app> » à choisir ;
-        # « orch:<id> » : nom d'avant les autres apps
-        app, _, kid = preset_id[5:].partition(":") if preset_id.startswith("deck:") else ("orchestream", "", preset_id[5:])
+    if preset_id.startswith("deck:"):
+        # « deck:<app>:<id de touche> » (l'id peut contenir « : »), « deck:<app> » à choisir
+        app, _, kid = preset_id[5:].partition(":")
         return _deck(app, kid, str(((engine.deck(app).key(kid) if engine and kid else None) or {}).get("title") or ""))
-    if preset_id.startswith("mv:"):
-        return _mv("stream", preset_id[3:], preset_id[3:])
     entry = PRESETS.get(preset_id)
     return entry[3]() if entry else None
 
@@ -319,8 +297,6 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
         out += _deck_keys(engine, app)
     out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
                 else "Tally32 à régler : Réglages → Intégrations"))
-    # py-multiview : ses touches décrites (ci-dessus) remplacent les presets de son ancienne API, qui
-    # restent créables (« mv_sender », « mv:<flux> ») pour les pages déjà faites.
     return out
 
 
@@ -350,13 +326,11 @@ def needs_setup(preset_id: str, engine) -> str:
             return "intercom"
         bus = preset_id[5:] if preset_id.startswith(("talk:", "talk_")) else ""
         return "always_on" if bus and engine.intercom.bus(bus).get("mode") == "always_on" else ""
-    if preset_id == "orch" or preset_id.startswith(("orch:", "deck:")):
-        app = preset_id[5:].partition(":")[0] if preset_id.startswith("deck:") else "orchestream"
+    if preset_id.startswith("deck:"):
+        app = preset_id[5:].partition(":")[0]
         return "" if deck_configured(engine.cfg, app) else app
     if preset_id == "tallies":
         return "" if integ.get("tallies") else "tallies"
-    if preset_id.startswith("mv"):
-        return ""  # adresse par défaut : ce poste (http://127.0.0.1:5090)
     return ""
 
 

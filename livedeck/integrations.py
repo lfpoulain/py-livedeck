@@ -1,5 +1,5 @@
-"""Intégrations maison : py-intercom (talkback), Tally32 (tallys ESP32), py-multiview (multiviewer SRT/OMT),
-et les apps qui exposent l'API Stream Deck commune /api/deck (orchestream-v2, py-multiview…).
+"""Intégrations maison : py-intercom (talkback), Tally32 (tallys ESP32), et les apps qui exposent l'API
+Stream Deck commune /api/deck (orchestream-v2, py-multiview…).
 
 Chaque client tourne dans son propre thread et ne travaille que si une touche l'utilise (ou pendant que la
 fenêtre Réglages est ouverte). Les appels vers ces services ne passent jamais par un proxy quand l'adresse
@@ -27,17 +27,6 @@ INTERCOM_BUSES = [("regie", "Régie"), ("plateau", "Plateau"), ("vmix", "vMix")]
 _BUS_IDS = {"0": "regie", "1": "plateau", "2": "vmix"}  # l'API accepte aussi les numéros de bus
 BUS_MODES = {"ptt": "maintenu", "toggle": "bascule", "always_on": "toujours actif"}
 INTERCOM_MIN = "version 2.0.x du 29/10/2026 ou plus récente"
-# py-multiview : port par défaut de son API, et ce que chaque cible pilote
-MULTIVIEW_PORT = 5090
-MULTIVIEW_TARGETS = [("reception", "Réception (tous les flux)"), ("stream", "Un flux"),
-                     ("mute", "Son d'un flux"), ("sender", "Émission OMT"),
-                     ("monitor", "Retour audio"), ("floating", "Fenêtre de retour"),
-                     ("route", "Route multicast")]
-MULTIVIEW_TARGET_LABEL = dict(MULTIVIEW_TARGETS)
-MULTIVIEW_SECTION = {"reception": "reception", "sender": "sender", "monitor": "monitor",
-                     "floating": "floating"}
-# cibles qui demandent de préciser lequel
-MULTIVIEW_NEEDS_REF = ("stream", "mute", "route")
 # py-intercom n'a pas été atteint (ou ce n'est pas lui qui répond) : le raccourci de secours a un sens
 UNREACHABLE = {"refused", "timeout", "dns", "reset", "network", "notapi", "proxy", "forbidden"}
 
@@ -385,8 +374,7 @@ def normalize_url(url: str) -> str:
     return url
 
 
-# Apps qui exposent /api/deck. « cfg » : bloc de Réglages → Intégrations (l'adresse de py-multiview sert aussi
-# à son ancienne API) ; « default » : adresse quand rien n'est saisi ; « token_required » : sans jeton, rien
+# Apps qui exposent /api/deck. « cfg » : bloc de Réglages → Intégrations ; « default » : adresse quand rien n'est saisi ; « token_required » : sans jeton, rien
 # n'est envoyé (orchestream refuse tout) ; sinon le jeton est facultatif, et seul un 401 dit qu'il en faut un.
 DECK_APPS: dict[str, dict] = {
     "orchestream": {"name": "orchestream", "label": "Orchestream", "cfg": "orchestream", "default": "",
@@ -398,7 +386,7 @@ DECK_APPS: dict[str, dict] = {
                   "token_where": "dans py-multiview, Préférences → Pilotage à distance",
                   "public_404": False, "port": 5090},
 }
-DECK_DEFAULT_APP = "orchestream"  # touches enregistrées avant l'arrivée des autres apps
+DECK_DEFAULT_APP = "orchestream"  # app d'une touche qui n'en précise pas
 
 
 def deck_spec(app: str) -> dict:
@@ -914,13 +902,6 @@ class DeckApp(_Service):
         return False
 
 
-class Orchestream(DeckApp):
-    """API Stream Deck d'orchestream-v2 (jeton obligatoire)."""
-
-    def __init__(self, on_change, log):
-        super().__init__("orchestream", on_change, log)
-
-
 def _peek_json(e: urllib.error.HTTPError) -> object:
     """Corps JSON d'une erreur HTTP, lu une seule fois (relu ensuite depuis le cache)."""
     if not hasattr(e, "_livedeck_json"):
@@ -1033,231 +1014,6 @@ class Tallies(_Service):
         return not down, down
 
 
-# --- py-multiview ---------------------------------------------------------------------------
-
-
-def multiview_url(url: str) -> str:
-    """Adresse normalisée : « 192.168.1.42 » suffit, le port 5090 est ajouté."""
-    url = normalize_url(url)
-    if not url:
-        return ""
-    scheme, _, rest = url.partition("://")
-    host, _, path = rest.partition("/")
-    if ":" not in host.strip("[]") or host.endswith("]"):
-        host = f"{host}:{MULTIVIEW_PORT}"
-    return f"{scheme}://{host}" + (f"/{path}" if path else "")
-
-
-def _mv_state(url: str, timeout: float) -> tuple[int, dict | None]:
-    return _http("GET", f"{url}/status", timeout=timeout)
-
-
-def _is_mv_state(status: int, data) -> bool:
-    """py-multiview se reconnaît à « streams » et à son nom : une autre API ne passe pas."""
-    return status == 200 and isinstance(data, dict) and isinstance(data.get("streams"), list) \
-        and data.get("app") == "py-multiview"
-
-
-def explain_multiview(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
-    where = _hostport(url)[1]
-    if exc is not None:
-        kind = error_kind(exc, _hostport(url)[0])
-        if kind == "refused":
-            return f"py-multiview : {where} refuse la connexion (API fermée ? Préférences → Pilotage à distance)"
-        return _net_text(kind, "py-multiview", where)
-    if _is_proxy_reply(status or 0, data):
-        return _net_text("proxy", "py-multiview", where)
-    if status == 404:
-        return f"{where} répond, mais ce n'est pas l'API de py-multiview (GET /status)"
-    if isinstance(data, dict) and isinstance(data.get("error"), dict):
-        return f"py-multiview : {data['error'].get('message') or data['error'].get('code')}"
-    return f"py-multiview : {where} a répondu HTTP {status}"
-
-
-def probe_multiview(url: str, token: str = "", timeout: float = 4.0) -> tuple[bool | None, str]:
-    """Test ponctuel (bouton « Tester ») : l'API d'origine (GET /status), puis l'API Stream Deck (/api/deck)
-    qui décrit ses touches. (True les deux / None joignable, touches indisponibles / False, message)."""
-    url = multiview_url(url) or deck_url("multiview", "")
-    try:
-        status, data = _mv_state(url, timeout)
-    except NET_ERRORS as e:
-        return False, explain_multiview(url, exc=e)
-    if not _is_mv_state(status, data):
-        return False, explain_multiview(url, status, data)
-    streams = data.get("streams") or []
-    live = sum(1 for s in streams if s.get("running"))
-    bits = [f"version {data.get('version', '?')}", f"{live}/{len(streams)} flux en lecture"]
-    if (data.get("sender") or {}).get("running"):
-        bits.append("émission OMT en cours")
-    text = "py-multiview : " + ", ".join(bits)
-    ok, deck = probe_deck("multiview", url, token, timeout)
-    return (True if ok else None), f"{text}  ·  touches : {deck.removeprefix('py-multiview : ')}"
-
-
-class Multiview(_Service):
-    """py-multiview : flux, émission OMT et retours, par son API locale.
-
-    Un seul GET /status porte tout l'état, et chaque commande le renvoie : une
-    touche est donc à jour dès la réponse, sans attendre la lecture suivante.
-    Comme pour orchestream, « bascule » est résolu ici à partir de l'état connu,
-    pour qu'un double appui n'envoie pas deux fois la même chose.
-    """
-
-    def __init__(self, on_change, log):
-        super().__init__(on_change, log)
-        self.url = ""
-        self.reachable: bool | None = None
-        self.error = ""
-        self.state: dict = {}  # dernier /status reçu
-
-    def configure(self, url: str) -> None:
-        url = multiview_url(url) or deck_url("multiview", "")  # même adresse par défaut que ses touches
-        if url != self.url:
-            self.url, self.reachable, self.error, self.state = url, None, "", {}
-        self._wake.set()
-
-    # -- lecture d'état ----------------------------------------------------
-
-    def _apply(self, data: dict | None) -> None:
-        if not isinstance(data, dict) or not isinstance(data.get("streams"), list):
-            return
-        if data != self.state:
-            self.state = data
-            self._on_change()
-
-    def _set_reachable(self, ok: bool, why: str = "") -> None:
-        self.error = "" if ok else why
-        if ok != self.reachable:
-            if (self.reachable is not None or not ok) and self.wanted:
-                self._log("info" if ok else "warn",
-                          f"py-multiview joignable ({self.url})" if ok else (why or "py-multiview injoignable"))
-            self.reachable = ok
-            if not ok:
-                self.state = {}
-            self._on_change()
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            if not self.active or not self.url:
-                self._sleep(5)
-                continue
-            try:
-                status, data = _mv_state(self.url, 1.5)
-            except NET_ERRORS as e:
-                self._set_reachable(False, explain_multiview(self.url, exc=e))
-            else:
-                if _is_mv_state(status, data):
-                    self._set_reachable(True)
-                    self._apply(data)
-                else:
-                    self._set_reachable(False, explain_multiview(self.url, status, data))
-            self._sleep(1 if self.reachable else 3)
-
-    # -- ce que l'état contient -------------------------------------------
-
-    def items(self, target: str) -> list[dict]:
-        key = "routes" if target == "route" else "streams"
-        items = self.state.get(key)
-        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
-
-    def choices(self, target: str) -> list[tuple[str, str]]:
-        """(nom, description) des flux ou des routes, lus sur /status."""
-        out = []
-        for item in self.items(target):
-            name = str(item.get("name") or "").strip() or str(item.get("index") or "")
-            if name:
-                extra = " · ".join(str(x) for x in (item.get("index"), item.get("source")) if x)
-                out.append((name, f"{name}  ·  {extra}" if extra else name))
-        return out
-
-    def find(self, target: str, ref: str) -> dict | None:
-        """Un flux ou une route par position, nom ou identifiant — comme l'API elle-même."""
-        ref = str(ref or "").strip()
-        items = self.items(target)
-        if not ref:
-            return None
-        if ref.isdigit():
-            return next((i for i in items if str(i.get("index")) == ref), None)
-        low = ref.casefold()
-        return (next((i for i in items if i.get("id") == ref), None)
-                or next((i for i in items if str(i.get("name", "")).casefold() == low), None))
-
-    def running(self, target: str, ref: str = "") -> bool | None:
-        """État d'une cible, ou None tant qu'il n'est pas connu."""
-        if not self.state:
-            return None
-        if target in ("stream", "mute", "route"):
-            item = self.find("route" if target == "route" else "stream", ref)
-            if item is None:
-                return None
-            return bool(item.get("muted") if target == "mute" else item.get("running"))
-        section = self.state.get(MULTIVIEW_SECTION.get(target, target))
-        return bool(section.get("running")) if isinstance(section, dict) else None
-
-    def status_of(self, target: str, ref: str = "") -> str:
-        """« active », « waiting », « error »… tel que py-multiview le rapporte."""
-        if target in ("stream", "route"):
-            item = self.find(target, ref)
-            return str(item.get("status", "")) if item else ""
-        section = self.state.get(MULTIVIEW_SECTION.get(target, target))
-        return str(section.get("status", "")) if isinstance(section, dict) else ""
-
-    def volume(self) -> int | None:
-        monitor = self.state.get("monitor")
-        return int(monitor.get("volume", 0)) if isinstance(monitor, dict) else None
-
-    def unavailable(self) -> str:
-        """Texte court pour la touche quand la commande ne passera pas."""
-        if not self.url:
-            return "NON RÉGLÉ"
-        return "HORS LIGNE" if self.reachable is False else ""
-
-    # -- commandes ---------------------------------------------------------
-
-    def _send(self, path: str, what: str) -> bool:
-        if not self.url:
-            self._log("error", "py-multiview : adresse non réglée (Réglages → Intégrations)")
-            return False
-        try:
-            status, data = _http("POST", f"{self.url}{path}", timeout=4)
-        except NET_ERRORS as e:
-            self._set_reachable(False, explain_multiview(self.url, exc=e))
-            self._log("error", self.error)
-            return False
-        if 200 <= status < 300:
-            self._set_reachable(True)
-            self._apply(data)
-            self._wake.set()
-            return True
-        message = ""
-        if isinstance(data, dict) and isinstance(data.get("error"), dict):
-            message = str(data["error"].get("message") or "")
-        self._log("error", f"py-multiview : {message}" if message
-                  else f"py-multiview a refusé {what} (HTTP {status})")
-        self._wake.set()
-        return False
-
-    def command(self, target: str, ref: str, mode: str) -> bool:
-        """Pilote une cible. « toggle » est résolu ici quand l'état est connu."""
-        if mode == "toggle":
-            current = self.running(target, ref)
-            if current is not None:
-                mode = "off" if current else "on"
-        if target in ("stream", "mute", "route"):
-            if not str(ref or "").strip():
-                self._log("error", f"py-multiview : aucun {'flux' if target != 'route' else 'route'} choisi")
-                return False
-            quoted = urllib.parse.quote(str(ref).strip(), safe="")
-            path = (f"/stream/{quoted}/mute/{mode}" if target == "mute"
-                    else f"/{'route' if target == 'route' else 'stream'}/{quoted}/{mode}")
-        else:
-            path = f"/{target}/{mode}"
-        return self._send(path, MULTIVIEW_TARGET_LABEL.get(target, target).lower())
-
-    def set_volume(self, value: int) -> bool:
-        return self._send(f"/monitor/volume/{max(0, min(100, int(value)))}", "le volume du retour")
-
-
 # --- état lisible (Réglages, voyants) -----------------------------------------------------------------
 
 
@@ -1281,33 +1037,6 @@ def deck_status(d: DeckApp) -> tuple[bool | None, str]:
     return True, "  ·  ".join(parts)
 
 
-def _multiview_status(mv: "Multiview", d: DeckApp) -> tuple[bool | None, str]:
-    """py-multiview : son API d'origine (anciennes touches) et ses touches décrites, en une ligne."""
-    rows = []
-    if mv.active:
-        if mv.reachable is None:
-            rows.append((None, f"Connexion à {mv.url}…"))
-        elif not mv.reachable:
-            rows.append((False, mv.error or f"Injoignable sur {mv.url}."))
-        else:
-            streams = mv.items("stream")
-            live = sum(1 for s in streams if s.get("running"))
-            parts = [f"{live}/{len(streams)} flux en lecture"]
-            for key, text in (("sender", "émission OMT"), ("monitor", "retour audio"), ("floating", "fenêtre")):
-                if mv.running(key):
-                    parts.append(text)
-            rows.append((True, "  ·  ".join(parts)))
-    if d.active:
-        ok, text = deck_status(d)
-        rows.append((ok, f"touches : {text}" if mv.active else text))
-    if not rows:
-        return None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."
-    oks = [ok for ok, _ in rows]
-    if len(rows) == 2 and rows[0][0] is False and rows[1][0] is False:
-        rows = rows[:1]  # éteint : une seule fois
-    return (False if False in oks else None if None in oks else True), "  ·  ".join(t for _, t in rows)
-
-
 def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
     """[(clé, nom, état, texte)] des trois intégrations. état : True OK, False en défaut, None inactif ou
     pas encore connu. Une intégration n'est surveillée que si une touche l'utilise (ou si forcée)."""
@@ -1326,10 +1055,8 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
         out.append(("intercom", "py-intercom", ic.online,
                     f"{state}  ·  {buses or 'aucun bus proposé'}" if ic.online else
                     f"{state} : le client n'est pas en ligne, connecte-le au serveur intercom."))
-    out.append(("orchestream", "orchestream", *deck_status(engine.orchestream)))
-    for app, spec in DECK_APPS.items():  # autres apps à touches décrites (py-multiview : plus bas, avec son API)
-        if app not in ("orchestream", "multiview"):
-            out.append((app, spec["name"], *deck_status(engine.deck(app))))
+    for app, spec in DECK_APPS.items():  # apps à touches décrites : orchestream, py-multiview…
+        out.append((app, spec["name"], *deck_status(engine.deck(app))))
     ta = engine.tallies
     if not ta.devices:
         out.append(("tallies", "Tally32", None, "Aucun tally renseigné."))
@@ -1353,7 +1080,6 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
                 oks.append(bool(s.get("connected")))
         ok = False if False in oks else None if None in oks else True
         out.append(("tallies", "Tally32", ok, "  ·  ".join(parts)))
-    out.append(("multiview", "py-multiview", *_multiview_status(engine.multiview, engine.deck("multiview"))))
     return out
 
 

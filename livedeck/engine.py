@@ -10,7 +10,7 @@ import time
 from . import actions, adjust, feedback, winsys
 from . import vars as textvars
 from .health import HealthMonitor, JsonPoller, parse_targets
-from .integrations import DECK_APPS, DECK_DEFAULT_APP, DeckApp, Intercom, Multiview, Tallies, deck_config
+from .integrations import DECK_APPS, DECK_DEFAULT_APP, DeckApp, Intercom, Tallies, deck_config
 from .model import (CONFIG_PATH, backup_config, config_text, control_key, has_backup_today, new_page,
                     normalize_button, normalize_control, open_config, parse_control, parse_key,
                     save_config_text)
@@ -101,15 +101,14 @@ class Engine:
         self.deck_apps = {app: DeckApp(app, lambda: self.emit("state"), self.log) for app in DECK_APPS}
         self.orchestream = self.deck_apps["orchestream"]
         self.tallies = Tallies(lambda: self.emit("state"), self.log)
-        self.multiview = Multiview(lambda: self.emit("state"), self.log)
         self.decks = None
         if enable_decks:
             from .deck import DeckHub
             self.decks = DeckHub(self)  # Stream Deck et Loupedeck derrière la même API
 
     def deck(self, app: str) -> DeckApp:
-        """Client de l'API Stream Deck d'une app ; une app inconnue (config d'une version plus récente) en
-        reçoit un, jamais démarré : ses touches restent grisées au lieu de planter."""
+        """Client de l'API Stream Deck d'une app ; une app inconnue en reçoit un, jamais démarré : ses
+        touches restent grisées au lieu de planter."""
         d = self.deck_apps.get(app)
         if d is None:
             d = DeckApp(app, lambda: self.emit("state"), self.log)
@@ -128,7 +127,7 @@ class Engine:
         self.apply_integrations()
         self._ids = {b["id"] for _, _, b in self.all_buttons()}
         self._applied_decks = copy.deepcopy(self.cfg["decks"])
-        for s in (self.intercom, *self.deck_apps.values(), self.tallies, self.multiview):
+        for s in (self.intercom, *self.deck_apps.values(), self.tallies):
             s.start()
         if self.decks:
             self.decks.start()
@@ -142,7 +141,7 @@ class Engine:
             steps.append(self.decks.stop)
         steps += [self.vmix.stop, self.health.stop, self.jsonpoll.stop, self.intercom.stop,
                   *(d.stop for d in self.deck_apps.values()), self.tallies.stop,
-                  self.multiview.stop, self._stop_runners, self.flush_save]
+                  self._stop_runners, self.flush_save]
         for step in steps:
             try:
                 step()
@@ -280,7 +279,6 @@ class Engine:
         for app, d in self.deck_apps.items():
             d.configure(*deck_config(self.cfg, app))
         self.tallies.configure(integ.get("tallies", []))
-        self.multiview.configure((integ.get("multiview") or {}).get("url", ""))
         types, conds, apps = set(), set(), set()
         for _, _, b in self.all_buttons():
             # Toutes les listes, rotation des molettes comprise : une molette qui ne fait que tourner
@@ -297,7 +295,6 @@ class Engine:
         for app, d in self.deck_apps.items():
             d.set_wanted(app in apps)
         self.tallies.set_wanted("tally" in used)
-        self.multiview.set_wanted("multiview" in used)
 
     def _sync_settings(self) -> None:
         """Après une modif, un annuler ou un rétablir : le vMix, la santé et la luminosité suivent la config."""

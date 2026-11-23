@@ -18,8 +18,7 @@ from ..actions import (ACTIONS, CATEGORIES, change_type, integration_of, new_act
                        to_take)
 from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
-from ..integrations import (DECK_APPS, deck_config, integration_status, probe_deck, probe_intercom,
-                            probe_multiview, probe_tally)
+from ..integrations import DECK_APPS, deck_config, integration_status, probe_deck, probe_intercom, probe_tally
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
 from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..webreq import parse_curl
@@ -163,8 +162,6 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
     if key == "intercom":
         ic = integ.get("intercom") or {}
         return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
-    if key == "multiview":
-        return probe_multiview(*deck_config(engine.cfg, "multiview"))
     if key in DECK_APPS:
         return probe_deck(key, *deck_config(engine.cfg, key))
     devices = integ.get("tallies") or []

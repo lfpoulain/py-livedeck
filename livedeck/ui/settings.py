@@ -14,8 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
-from ..integrations import (DECK_APPS, integration_status, probe_deck, probe_intercom, probe_multiview,
-                            probe_tally)
+from ..integrations import DECK_APPS, integration_status, probe_deck, probe_intercom, probe_tally
 from . import theme as T
 from .widgets import Seg, label
 
@@ -82,7 +81,7 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, *engine.deck_apps.values(), engine.tallies, engine.multiview):
+        for svc in (engine.intercom, *engine.deck_apps.values(), engine.tallies):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
@@ -93,8 +92,7 @@ class SettingsDialog(QDialog):
         # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
         # à chaque ouverture des Réglages.
         self._timer.stop()
-        for svc in (self.engine.intercom, *self.engine.deck_apps.values(), self.engine.tallies,
-                    self.engine.multiview):
+        for svc in (self.engine.intercom, *self.engine.deck_apps.values(), self.engine.tallies):
             svc.set_forced(False)
         super().done(r)
 
@@ -294,8 +292,7 @@ class SettingsDialog(QDialog):
         self.mv_status = self._test_row(v, "multiview")
         v.addWidget(label("py-multiview décrit lui-même ses touches (réception, flux, son, émission OMT, retour, "
                           "routes) et les met à jour en direct : bibliothèque (Intégrations) ou action « Touche "
-                          "d'une app ». Les touches « py-multiview » déjà posées continuent de marcher.",
-                          "Hint", True))
+                          "d'une app ».", "Hint", True))
         # Autres apps qui exposent l'API Stream Deck commune : une section chacune
         self.deck_status: dict = {}
         for app, spec in DECK_APPS.items():
@@ -341,11 +338,6 @@ class SettingsDialog(QDialog):
 
             def run():
                 return probe_intercom(host, port)
-        elif key == "multiview":
-            mv_url, mv_token = self.mv_url.text(), self.mv_token.text()
-
-            def run():
-                return probe_multiview(mv_url, mv_token)
         elif key in self._deck_edits:
             url, token = (w.text() for w in self._deck_edits[key])
 

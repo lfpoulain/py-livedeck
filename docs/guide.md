@@ -267,7 +267,6 @@ elles sont toutes surveillées.
 | **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, API Stream Deck, jeton facultatif) | Toute touche que py-multiview décrit : réception, un flux, le son d'un flux, émission OMT, retour audio et son volume, fenêtre de retour, route multicast | Texte, couleur et état donnés par py-multiview, en direct ; grisée avec la raison (« Aucun écran assigné. ») |
-| **py-multiview**, anciennes touches (`GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
 
 ### Régler py-intercom
 
@@ -359,25 +358,13 @@ vide, c'est ce poste (`http://127.0.0.1:5090`).
 Côté py-multiview, il faut ouvrir l'API : **Préférences → Pilotage à distance → Ouvrir l'API locale**, en
 décochant *Ce poste uniquement* pour y accéder depuis cette machine. Le **Jeton API** est facultatif : ne le
 remplis que si un jeton est réglé dans py-multiview (il part alors dans l'en-tête `Authorization`). **Tester**
-vérifie l'API d'origine puis les touches décrites.
+vérifie l'accès et compte les touches proposées.
 
 **Touches décrites** (py-multiview avec `/api/deck`) : bibliothèque, catégorie *Intégrations*, ou l'action
 **Touche d'une app** (app *py-multiview*). Une touche par bascule : la réception, chaque flux, le son de chaque
 flux, l'émission OMT, le retour audio, volume + et −, la fenêtre de retour, chaque route. Texte, couleur et état
 viennent de py-multiview, en direct, comme pour orchestream ; un flux est désigné par son identifiant interne,
 la touche reste donc juste si on le renomme ou le déplace.
-
-**Anciennes touches** *py-multiview* (déjà posées) : elles continuent de marcher par l'API d'origine et ne sont
-pas converties (elles ont des modes *Démarrer* / *Arrêter* et désignent un flux par son nom). Pour une nouvelle
-touche, préfère les touches décrites.
-
-Une ancienne touche choisit sa **cible** — un flux, toute la réception, l'émission OMT, le retour audio, la fenêtre de
-retour, le son d'un flux ou une route multicast — et son **mode** : *Démarrer*, *Arrêter* ou *Basculer*.
-« Basculer » est résolu à partir de l'état lu, donc deux appuis rapides ne se croisent pas.
-
-Un flux se désigne par son **nom** ou par son **numéro** (`1`, `2`…) : la liste est proposée dès que LiveDeck
-a vu py-multiview au moins une fois, et reste saisissable à la main sinon. Nommer le flux plutôt que le
-numéroter garde la touche juste même si l'ordre change.
 
 ### Conversion depuis Companion
 

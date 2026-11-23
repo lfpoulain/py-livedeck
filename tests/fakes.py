@@ -251,8 +251,7 @@ class FakeTally:
 
 
 class FakeMultiview:
-    """API locale de py-multiview : GET /status, commandes POST à corps vide ; et l'API Stream Deck commune
-    (/api/deck), d'après py_multiview/deck.py et api.py : touches décrites, flux « state » puis « patch »,
+    """API Stream Deck commune de py-multiview (/api/deck), d'après py_multiview/deck.py et api.py : touches décrites, flux « state » puis « patch »,
     jeton facultatif (vide : accès libre), cible inconnue -> 422 VALIDATION_FAILED, jamais 404 NOT_FOUND.
     deck=False : version d'avant /api/deck."""
 
@@ -265,7 +264,6 @@ class FakeMultiview:
         self.monitor = False
         self.floating = False
         self.volume = 100
-        self.calls = []
         self.refuse = ""  # message d'un refus métier (409)
         self.token, self.deck = token, deck
         self.deck_calls = []    # (commande, args, en-tête Authorization)
@@ -391,12 +389,6 @@ class FakeMultiview:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _error(self, code, msg):
-                self._send(code, {"error": {"code": "REFUSED", "message": msg}})
-
-            def _find(self, ref):
-                return next((s for s in fake.streams if ref in (str(s["index"]), s["id"], s["name"])), None)
-
             def _deck_auth(self):
                 fake.deck_headers.append(dict(self.headers))
                 if not fake.token:
@@ -432,8 +424,6 @@ class FakeMultiview:
                         beat = time.monotonic()
 
             def do_GET(self):
-                if self.path == "/status":
-                    return self._send(200, payload())
                 if fake.deck and self.path.startswith("/api/deck"):
                     if not self._deck_auth():
                         return
@@ -458,36 +448,7 @@ class FakeMultiview:
                     args = (body or {}).get("args") or {}
                     fake.deck_calls.append((cid, args, self.headers.get("Authorization")))
                     return self._send(*deck_run(cid, args))
-                parts = [unquote(p) for p in self.path.strip("/").split("/") if p]
-                fake.calls.append("/".join(parts))
-                if fake.refuse:
-                    return self._error(409, fake.refuse)
-                if len(parts) == 2 and parts[0] in ("sender", "monitor", "floating", "reception"):
-                    want = parts[1] == "on"
-                    if parts[0] == "reception":
-                        for s in fake.streams:
-                            s["running"] = want
-                            s["status"] = "active" if want else "stopped"
-                    else:
-                        setattr(fake, parts[0], want)
-                    return self._send(200, payload())
-                if len(parts) == 3 and parts[:2] == ["monitor", "volume"]:
-                    fake.volume = int(parts[2])
-                    return self._send(200, payload())
-                if len(parts) == 3 and parts[0] == "stream":
-                    s = self._find(parts[1])
-                    if s is None:
-                        return self._error(404, f"flux « {parts[1]} » inconnu")
-                    s["running"] = parts[2] == "on"
-                    s["status"] = "active" if s["running"] else "stopped"
-                    return self._send(200, payload())
-                if len(parts) == 4 and parts[0] == "stream" and parts[2] == "mute":
-                    s = self._find(parts[1])
-                    if s is None:
-                        return self._error(404, f"flux « {parts[1]} » inconnu")
-                    s["muted"] = parts[3] == "on"
-                    return self._send(200, payload())
-                self._error(404, "route inconnue")
+                self._send(404, {"error": {"code": "NOT_FOUND", "message": "route inconnue"}})
 
             def log_message(self, *a):
                 pass
