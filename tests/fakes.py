@@ -1,4 +1,4 @@
-"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32 et py-multiview pour les tests."""
+"""Faux serveurs vMix, py-intercom, orchestream-v2, Tally32, py-multiview et MixPanel pour les tests."""
 import json
 import socket
 import sys
@@ -707,3 +707,206 @@ class FakeOrchDeck:
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+
+class FakeMixPanel:
+    """API Stream Deck de MixPanel (console X-Touch pour vMix), d'après pymixpanel/deck.py et api.py : état
+    avec « app » {name, version}, touches décrites (état, scènes, macros, ducking, page, verrouillage, mode
+    de la X-Touch), flux « state » puis « patch », jeton facultatif (vide : accès libre), 401 INVALID_TOKEN,
+    cible inconnue -> 422 VALIDATION_FAILED, refus 409 REFUSED. name : ce que l'état dit être l'app."""
+
+    def __init__(self, port, token="", name="MixPanel"):
+        self.token, self.name = token, name
+        self.vmix = True
+        self.xtouch, self.mode = True, "standard"
+        self.page, self.locked = "A", False
+        self.ducking = {"enabled": False, "active": False, "configured": True}
+        self.scenes = [{"id": "s1", "name": "Jeu", "active": True}, {"id": "s2", "name": "Plateau", "active": False}]
+        self.macros = [{"id": "m1", "name": "Fin", "steps": 2, "running": False},
+                       {"id": "m2", "name": "Vide", "steps": 0, "running": False}]
+        self.deck_calls = []    # (commande, args, en-tête Authorization)
+        self.deck_headers = []
+        self.deck_streams = 0
+        self.deck_reads = 0
+        fake = self
+
+        def key(kid, group, command, args, title, subtitle, active, tone, reason=None):
+            return {"id": kid, "group": group, "command": command, "args": args, "title": title,
+                    "subtitle": subtitle or None, "active": bool(active), "tone": tone,
+                    "available": reason is None, "reason": reason}
+
+        def keys():
+            mc, no_vmix = fake.mode == "mc", None if fake.vmix else "vMix n'est pas connecté."
+            out = [key("status.vmix", "État", None, {}, "vMix", "v27" if fake.vmix else "Déconnecté", fake.vmix,
+                       "success" if fake.vmix else "danger"),
+                   key("status.xtouch", "État", None, {}, "X-Touch",
+                       ("Mode Mackie (en pause)" if mc else "Connectée") if fake.xtouch else "Déconnectée",
+                       fake.xtouch, ("warning" if mc else "success") if fake.xtouch else "danger")]
+            for s in fake.scenes:
+                out.append(key(f"scene.recall:{s['id']}", "Scènes", "scene.recall", {"scene": s["id"]}, s["name"],
+                               "En place" if s["active"] else "Rappeler", s["active"],
+                               "success" if s["active"] else "neutral", no_vmix))
+            for m in fake.macros:
+                steps = f"{m['steps']} étape{'s' if m['steps'] > 1 else ''}"
+                out.append(key(f"macro.run:{m['id']}", "Macros", "macro.run", {"macro": m["id"]}, m["name"],
+                               "En cours" if m["running"] else steps, m["running"],
+                               "info" if m["running"] else "neutral", None if m["steps"] else "Macro vide."))
+            d = fake.ducking
+            sub, tone = (("Musique baissée", "warning") if d["active"] else ("Activé", "success") if d["enabled"]
+                         else ("Désactivé", "neutral"))
+            out.append(key("ducking.toggle", "Automatisation", "ducking.toggle", {}, "Ducking", sub, d["enabled"],
+                           tone, None if d["configured"] or d["enabled"] else "Ducking non configuré."))
+            out += [key("page.toggle", "Console", "page.toggle", {}, "Page", f"Page {fake.page}", fake.page == "B",
+                        "accent" if fake.page == "B" else "neutral"),
+                    key("lock.toggle", "Console", "lock.toggle", {}, "Verrouillage",
+                        "Verrouillé" if fake.locked else "Déverrouillé", fake.locked,
+                        "danger" if fake.locked else "neutral"),
+                    key("console.modeToggle", "Console", "console.modeToggle", {}, "Mode X-Touch",
+                        "Mackie (MC)" if mc else "Standard", mc, "warning" if mc else "neutral",
+                        None if fake.xtouch else "X-Touch non connectée.")]
+            return out
+
+        def deck_state():
+            return {"token": {"name": "jeton API" if fake.token else "accès libre", "permissions": []},
+                    "app": {"name": fake.name, "version": "1.2.1"}, "profile": {"name": "Show"},
+                    "vmix": {"connected": fake.vmix, "version": "27"},
+                    "xtouch": {"connected": fake.xtouch, "port": "X-TOUCH", "mode": fake.mode},
+                    "page": fake.page, "locked": fake.locked, "ducking": dict(fake.ducking),
+                    "scenes": [dict(s) for s in fake.scenes], "macros": [dict(m) for m in fake.macros],
+                    "commands": [{"id": c, "label": c, "argNames": []} for c in
+                                 ("scene.recall", "macro.run", "ducking.toggle", "page.toggle", "lock.toggle",
+                                  "console.modeToggle")],
+                    "keys": keys(), "updatedAt": "2026-11-23T12:00:00Z"}
+
+        def deck_patch(old, new):
+            changed = {k: v for k, v in new.items() if k not in ("keys", "updatedAt") and old.get(k) != v}
+            before, now = {k["id"]: k for k in old["keys"]}, {k["id"]: k for k in new["keys"]}
+            ks = [k for kid, k in now.items() if before.get(kid) != k]
+            removed = [kid for kid in before if kid not in now]
+            if not (changed or ks or removed):
+                return None
+            return {"changed": changed, "keys": ks, "removedKeys": removed, "updatedAt": new["updatedAt"]}
+
+        def invalid(name, msg):
+            return 422, {"error": {"code": "VALIDATION_FAILED", "message": msg, "details": {f"args.{name}": msg}}}
+
+        def refused(msg):
+            return 409, {"error": {"code": "REFUSED", "message": msg}}
+
+        def deck_run(cid, args):
+            if cid in ("scene.recall", "macro.run"):
+                name = "scene" if cid == "scene.recall" else "macro"
+                items = fake.scenes if name == "scene" else fake.macros
+                ref = args.get(name)
+                if not ref:
+                    return invalid(name, f"argument « {name} » manquant")
+                item = next((i for i in items if i["id"] == ref), None)
+                if item is None:
+                    return invalid(name, f"{'scène' if name == 'scene' else 'macro'} « {ref} » introuvable")
+                if name == "scene":
+                    if not fake.vmix:
+                        return refused("vMix n'est pas connecté.")
+                    for x in fake.scenes:
+                        x["active"] = x is item
+                    done = f"Scène « {item['name']} » rappelée"
+                else:
+                    if not item["steps"]:
+                        return refused(f"La macro « {item['name']} » est vide.")
+                    item["running"] = True
+                    done = f"Macro « {item['name']} » lancée"
+            elif cid == "ducking.toggle":
+                fake.ducking["enabled"] = not fake.ducking["enabled"]
+                done = "Ducking " + ("activé" if fake.ducking["enabled"] else "désactivé")
+            elif cid == "page.toggle":
+                fake.page = "B" if fake.page == "A" else "A"
+                done = f"Page {fake.page}"
+            elif cid == "lock.toggle":
+                fake.locked = not fake.locked
+                done = "Verrouillé" if fake.locked else "Déverrouillé"
+            elif cid == "console.modeToggle":
+                if not fake.xtouch:
+                    return refused("X-Touch non connectée.")
+                fake.mode = "standard" if fake.mode == "mc" else "mc"
+                done = "X-Touch en mode " + ("Mackie (MC)" if fake.mode == "mc" else "standard")
+            else:
+                return 404, {"error": {"code": "COMMAND_NOT_FOUND", "message": f"commande « {cid} » inconnue"}}
+            return 200, {"ok": True, "message": done, "data": None}
+
+        self.deck_state = deck_state
+
+        class H(BaseHTTPRequestHandler):
+            def _send(self, code, data):
+                body = json.dumps(data, ensure_ascii=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _auth(self):
+                fake.deck_headers.append(dict(self.headers))
+                if fake.token and (self.headers.get("Authorization") or "") != f"Bearer {fake.token}":
+                    self._send(401, {"error": {"code": "INVALID_TOKEN", "message": "jeton API absent ou invalide"}})
+                    return False
+                return True
+
+            def _events(self):
+                fake.deck_streams += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                last = deck_state()
+                self.wfile.write(f"event: state\ndata: {json.dumps(last, ensure_ascii=False)}\n\n".encode())
+                self.wfile.flush()
+                beat = time.monotonic()
+                while True:
+                    time.sleep(0.05)
+                    new = deck_state()
+                    pt = deck_patch(last, new)
+                    if pt:
+                        last = new
+                        self.wfile.write(f"event: patch\ndata: {json.dumps(pt, ensure_ascii=False)}\n\n".encode())
+                        self.wfile.flush()
+                    elif time.monotonic() - beat > 1:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        beat = time.monotonic()
+
+            def do_GET(self):
+                if not self._auth():
+                    return
+                if self.path == "/api/deck/events":
+                    try:
+                        return self._events()
+                    except OSError:
+                        return
+                if self.path == "/api/deck/state":
+                    fake.deck_reads += 1
+                    return self._send(200, deck_state())
+                self._send(404, {"error": {"code": "ROUTE_NOT_FOUND", "message": "route inconnue"}})
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                if not self._auth():
+                    return
+                if not self.path.startswith("/api/deck/commands/"):
+                    return self._send(404, {"error": {"code": "ROUTE_NOT_FOUND", "message": "route inconnue"}})
+                cid = unquote(self.path.split("/api/deck/commands/", 1)[1])
+                args = (json.loads(raw) if raw else {}).get("args") or {}
+                fake.deck_calls.append((cid, args, self.headers.get("Authorization")))
+                return self._send(*deck_run(cid, args))
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        self.srv.daemon_threads = True
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()

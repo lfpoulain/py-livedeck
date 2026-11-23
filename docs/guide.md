@@ -267,6 +267,7 @@ elles sont toutes surveillées.
 | **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
 | **py-multiview** (multiviewer SRT/OMT, API Stream Deck, jeton facultatif) | Toute touche que py-multiview décrit : réception, un flux, le son d'un flux, émission OMT, retour audio et son volume, fenêtre de retour, route multicast | Texte, couleur et état donnés par py-multiview, en direct ; grisée avec la raison (« Aucun écran assigné. ») |
+| **MixPanel** (console X-Touch pour vMix, API Stream Deck, jeton facultatif) | Toute touche que MixPanel décrit : rappeler une scène, lancer une macro, ducking, page A / B, verrouillage, mode de la X-Touch ; état de vMix et de la X-Touch (affichage seul) | Texte, couleur et état donnés par MixPanel, en direct (« Jeu / En place », « Ducking / Musique baissée ») ; grisée avec la raison (« Macro vide. », « X-Touch non connectée. ») |
 
 ### Régler py-intercom
 
@@ -298,12 +299,12 @@ lui envoie donc aussi « off ». À la conversion d'une config Companion, l'anci
 Les adresses locales (127.0.0.1, réseau privé, noms en `.local`) ne passent jamais par le proxy de Windows :
 un proxy d'entreprise ne peut plus bloquer le talkback.
 
-### Touches décrites par l'app (orchestream, py-multiview…)
+### Touches décrites par l'app (orchestream, py-multiview, MixPanel…)
 
-orchestream-v2 et py-multiview parlent le même langage, l'**API Stream Deck** (`/api/deck`) : l'app décrit
+orchestream-v2, py-multiview et MixPanel parlent le même langage, l'**API Stream Deck** (`/api/deck`) : l'app décrit
 elle-même chaque touche qu'elle propose et l'envoie en direct. Dans l'inspecteur, l'action **Touche d'une app**
 choisit l'app puis la touche ; la touche enregistre l'app et l'identifiant de la touche
-(`orchestream` + `game.advance`, `multiview` + `sender.toggle`). Le retour d'état **Touche d'une app** colore
+(`orchestream` + `game.advance`, `multiview` + `sender.toggle`, `mixpanel` + `scene.recall:<scène>`). Le retour d'état **Touche d'une app** colore
 une autre touche selon une touche d'une app. Ce qui suit vaut pour toutes ; seuls le jeton et l'adresse changent.
 
 ### orchestream-v2
@@ -365,6 +366,32 @@ vérifie l'accès et compte les touches proposées.
 flux, l'émission OMT, le retour audio, volume + et −, la fenêtre de retour, chaque route. Texte, couleur et état
 viennent de py-multiview, en direct, comme pour orchestream ; un flux est désigné par son identifiant interne,
 la touche reste donc juste si on le renomme ou le déplace.
+
+### Régler MixPanel
+
+Indique l'adresse du poste MixPanel : `192.168.1.42` suffit, le port `5085` est ajouté tout seul. Laissée vide,
+c'est ce poste (`http://127.0.0.1:5085`).
+
+Côté MixPanel, l'API est **fermée par défaut** : **Réglages → Pilotage à distance (Stream Deck)**, coche *Ouvrir
+l'API locale* (port `5085`), et décoche *Ce poste uniquement* si LiveDeck tourne sur un autre PC. Le **Jeton API**
+est facultatif : ne le remplis que si un jeton est réglé dans MixPanel (bouton *Générer*) ; il part alors dans
+l'en-tête `Authorization`. **Tester** donne le nom et la version de MixPanel et le nombre de touches ; si rien ne
+répond, il rappelle où ouvrir l'API, et si un autre logiciel répond à cette adresse, il le dit.
+
+Les touches : bibliothèque, catégorie *Intégrations*, ou l'action **Touche d'une app** (app *MixPanel*), rangées
+par rubrique :
+
+| Touche | Rubrique | Ce qu'elle fait et affiche |
+|---|---|---|
+| vMix, X-Touch | État | Affichage seul : version de vMix ou « Déconnecté », X-Touch « Connectée », « Mode Mackie (en pause) » ou « Déconnectée » |
+| une par scène | Scènes | Rappelle la scène ; allumée (verte) quand la console y est ; grisée sans vMix |
+| une par macro | Macros | Lance la macro ; « En cours » pendant l'exécution ; grisée si elle est vide |
+| Ducking | Automatisation | Active / désactive ; « Musique baissée » quand il agit ; grisée tant qu'il n'est pas configuré |
+| Page, Verrouillage, Mode X-Touch | Console | Basculent la page A / B, le verrouillage de la console, le mode standard / Mackie |
+
+Une scène ou une macro créée dans MixPanel apparaît toute seule ; la touche la désigne par son identifiant interne,
+elle reste donc juste si on la renomme. Supprimée, la touche affiche INTROUVABLE. Les sources vMix se pilotent
+directement depuis LiveDeck : MixPanel ne propose que ce qui lui est propre.
 
 ### Conversion depuis Companion
 

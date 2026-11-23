@@ -38,7 +38,7 @@ HINT = ("Clic : sélectionner  ·  Glisser : déplacer (Ctrl = copier)  ·  Clic
 TOAST_MS = {"error": 9000, "warn": 6000}
 MONITOR_FILTERS = [("all", "Tout"), ("problems", "Erreurs et alertes"), ("action", "Actions envoyées")]
 INTEG_PILLS = [("intercom", "Intercom"), ("orchestream", "Orchestream"), ("tallies", "Tallys"),
-               ("multiview", "Multiview")]
+               ("multiview", "Multiview"), ("mixpanel", "MixPanel")]
 HINT_LOCK = "Verrouillé : plus d'édition ni de clic sur les touches (les Stream Decks restent actifs)  ·  Ctrl+L pour déverrouiller"
 HINT_LIVE = "Mode Live : un clic déclenche la touche comme sur le Stream Deck  ·  F5 pour revenir à l'édition"
 

@@ -385,6 +385,17 @@ DECK_APPS: dict[str, dict] = {
                   "default": "http://127.0.0.1:5090", "example": "192.168.1.42:5090", "token_required": False,
                   "token_where": "dans py-multiview, Préférences → Pilotage à distance",
                   "public_404": False, "port": 5090},
+    # MixPanel (console X-Touch pour vMix) : scènes, macros, ducking, page, verrouillage, mode de la X-Touch.
+    # API fermée par défaut ; « app.name » de son état sert à le reconnaître au test.
+    "mixpanel": {"name": "MixPanel", "label": "MixPanel", "cfg": "mixpanel",
+                 "default": "http://127.0.0.1:5085", "example": "192.168.1.42:5085", "token_required": False,
+                 "token_where": "dans MixPanel, Réglages › Pilotage à distance (bouton Générer)",
+                 "public_404": False, "port": 5085, "app_name": "MixPanel",
+                 "closed_help": "API fermée ? MixPanel › Réglages › Pilotage à distance",
+                 "section": "CONSOLE X-TOUCH",
+                 "hint": "MixPanel décrit lui-même ses touches (scènes, macros, ducking, page A / B, "
+                         "verrouillage, mode de la X-Touch, état de vMix et de la X-Touch) et les met à jour en "
+                         "direct : bibliothèque (Intégrations) ou action « Touche d'une app »."},
 }
 DECK_DEFAULT_APP = "orchestream"  # app d'une touche qui n'en précise pas
 
@@ -458,6 +469,8 @@ def explain_deck(app: str, url: str, status: int | None = None, data=None, exc: 
     if exc is not None:
         kind = error_kind(exc, host)
         if kind == "refused":
+            if spec.get("closed_help"):
+                return f"{name} ne répond pas sur {where} : est-il lancé ? {spec['closed_help']}"
             return f"{name} ne répond pas sur {where} : le serveur est-il lancé, l'adresse et le port sont-ils bons ?"
         return _net_text(kind, name, where)
     if _is_proxy_reply(status or 0, data):
@@ -535,6 +548,11 @@ def probe_deck(app: str, url: str, token: str, timeout: float = 4.0) -> tuple[bo
     except NET_ERRORS as e:
         return False, explain_deck(app, url, exc=e)
     if _is_state(status, data):
+        about = data.get("app") if isinstance(data.get("app"), dict) else {}
+        if spec.get("app_name") and about.get("name") and about["name"] != spec["app_name"]:
+            _, where = _hostport(url)
+            return False, (f"{where} répond, mais c'est {about['name']}, pas {name} : vérifie l'adresse "
+                           "et le port")
         tok = data.get("token") or {}
         keys = data.get("keys")
         who = (f"jeton « {tok.get('name') or '?'} » accepté" if token else
@@ -543,6 +561,8 @@ def probe_deck(app: str, url: str, token: str, timeout: float = 4.0) -> tuple[bo
             return False, (f"{who}, mais cet {name} ne décrit pas les touches (version trop ancienne) : "
                            f"mets {name} à jour")
         extra = []
+        if spec.get("app_name") and about.get("name"):  # « MixPanel 1.2.1 » en tête : c'est bien lui
+            who = f"{about['name']} {about.get('version') or ''}".strip() + f" · {who}"
         if app == "orchestream":
             extra.append("live en cours" if (data.get("live") or {}).get("active") else "aucun live en cours")
         return True, " · ".join([who, f"{len(keys)} touche(s)"] + extra)

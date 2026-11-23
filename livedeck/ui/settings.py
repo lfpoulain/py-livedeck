@@ -299,10 +299,22 @@ class SettingsDialog(QDialog):
             if app in ("orchestream", "multiview"):
                 continue
             v.addSpacing(6)
-            v.addWidget(label(f"{spec['name'].upper()}  ·  TOUCHES DÉCRITES PAR L'APP", "H2"))
-            self._deck_fields(v, app, f"Jeton API {'(obligatoire)' if spec['token_required'] else '(facultatif)'} : "
-                                      f"{spec['token_where']}.", "" if spec["token_required"] else "facultatif")
+            section = spec.get("section") or "TOUCHES DÉCRITES PAR L'APP"
+            v.addWidget(label(f"{spec['name'].upper()}  ·  {section}", "H2"))
+            url, _ = self._deck_fields(
+                v, app, f"Jeton API {'(obligatoire)' if spec['token_required'] else '(facultatif)'} : "
+                f"{spec['token_where']}." + ("" if spec["token_required"] else " Vide : accès libre."),
+                "" if spec["token_required"] else "facultatif")
+            if spec["default"]:
+                tip = f"Adresse du poste {spec['name']} (vide : ce poste, {spec['default'].removeprefix('http://')})."
+                if spec["port"]:
+                    tip += f" Le port {spec['port']} est ajouté s'il manque."
+                if spec.get("closed_help"):
+                    tip += "\n" + spec["closed_help"]
+                url.setToolTip(tip)
             self.deck_status[app] = self._test_row(v, app)
+            if spec.get("hint"):
+                v.addWidget(label(spec["hint"], "Hint", True))
 
         v.addWidget(label("Une intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
                           "Intégrations) ; pendant que cette fenêtre est ouverte, elles sont toutes surveillées.",
@@ -415,7 +427,9 @@ class SettingsDialog(QDialog):
                                  "port": self.ic_port.value()}
             integ["tallies"] = tallies
             for app, (url, token) in deck.items():
-                block = integ[DECK_APPS[app]["cfg"]] = {**(integ.get(DECK_APPS[app]["cfg"]) or {}), "url": url}
+                if not (url or token or DECK_APPS[app]["cfg"] in integ):
+                    continue  # app jamais réglée et laissée vide : pas de bloc ajouté
+                block =integ[DECK_APPS[app]["cfg"]] = {**(integ.get(DECK_APPS[app]["cfg"]) or {}), "url": url}
                 if token or "token" in block:
                     block["token"] = token  # pas de clé vide ajoutée : rien de modifié, pas d'« annuler »
         trial = copy.deepcopy(e.cfg)

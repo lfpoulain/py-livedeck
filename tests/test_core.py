@@ -62,7 +62,7 @@ from PySide6.QtCore import QMimeData, QPointF, Qt  # noqa: E402
 from PySide6.QtWidgets import QLabel, QPlainTextEdit  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "demo.companionconfig"
-VMIX_PORT = 18191
+VMIX_PORT = int(os.environ.get("LIVEDECK_TEST_VMIX_PORT") or 18191)  # autre port : deux suites en même temps
 app = QApplication.instance() or QApplication([])
 app.setStyleSheet(theme.QSS)
 _vmix = None
@@ -3771,6 +3771,236 @@ def test_multiview_deck_settings(tmp_path):
     assert e.deck("multiview").token == "abc"
     w.quit_app()
     mv.srv.shutdown()
+
+
+# -- MixPanel (console X-Touch pour vMix) : touches décrites par /api/deck -------------------------------
+def mixpanel_engine(tmp_path, port, token_cfg="", **fake):
+    """Faux MixPanel + des touches qu'il décrit (état, scène, macro, page, verrouillage, ducking)."""
+    mp = fakes.FakeMixPanel(port, **fake)
+    keys = {"0,0": "scene.recall:s2", "0,1": "page.toggle", "0,2": "status.vmix", "0,3": "macro.run:m2",
+            "0,4": "scene.recall:s9", "1,0": "lock.toggle", "1,1": "ducking.toggle", "1,2": "console.modeToggle"}
+    buttons = {k: new_button(actions=[new_action("deck.key", app="mixpanel", key=v)]) for k, v in keys.items()}
+    e, pg, logs = one_page(tmp_path, buttons, {"mixpanel": {"url": f"127.0.0.1:{port}", "token": token_cfg}})
+    return e, mp, pg, logs
+
+
+def test_mixpanel_deck_keys_follow_the_stream(tmp_path):
+    """MixPanel par l'API Stream Deck commune : sans jeton (aucun en-tête Authorization), touches décrites
+    par MixPanel, état puis patchs du flux, appui -> POST de la commande de la touche avec ses arguments."""
+    from livedeck.feedback import ORCH_TONES
+    assert "mixpanel" in integrations.DECK_APPS
+    e, mp, pg, logs = mixpanel_engine(tmp_path, 18275)
+    d = e.deck("mixpanel")
+    assert d.name == "MixPanel" and d is not e.orchestream and d is not e.deck("multiview")
+    assert wait(lambda: d.connected and d.mode == "stream", 5), d.error
+    assert not e.orchestream.wanted and not e.deck("multiview").wanted
+    assert mp.deck_headers and not any("Authorization" in h for h in mp.deck_headers), "jeton vide : aucun en-tête"
+    assert d.get("app.name") == "MixPanel"
+    # État complet à l'ouverture
+    v = vis_of(e, pg, "0,0")
+    assert v["label"] == "Plateau\nRappeler" and v["bg"] == ORCH_TONES["neutral"][1], v
+    assert vis_of(e, pg, "0,1")["label"] == "Page\nPage A"
+    assert vis_of(e, pg, "0,2")["label"] == "vMix\nv27"
+    assert "Macro vide" in vis_of(e, pg, "0,3")["label"], "indisponible : la raison donnée par MixPanel"
+    assert "INTROUVABLE" in vis_of(e, pg, "0,4")["label"], "scène supprimée dans MixPanel"
+    # Appui : la commande et ses arguments, puis la touche suit par le flux (patch)
+    tap(e, pg, "0,0")
+    assert wait(lambda: mp.deck_calls and mp.deck_calls[-1] == ("scene.recall", {"scene": "s2"}, None), 3), \
+        mp.deck_calls
+    assert wait(lambda: vis_of(e, pg, "0,0")["label"] == "Plateau\nEn place", 1.5), vis_of(e, pg, "0,0")
+    assert vis_of(e, pg, "0,0")["bg"] == ORCH_TONES["success"][0]
+    tap(e, pg, "0,1")
+    assert wait(lambda: ("page.toggle", {}, None) in mp.deck_calls, 3), mp.deck_calls
+    assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Page\nPage B", 1.5)
+    assert vis_of(e, pg, "0,1")["bg"] == ORCH_TONES["accent"][0]
+    tap(e, pg, "1,0")
+    assert wait(lambda: vis_of(e, pg, "1,0")["label"] == "Verrouillage\nVerrouillé", 3)
+    # Changé dans MixPanel lui-même (X-Touch, vMix) : suivi en direct par le flux
+    mp.vmix = False
+    assert wait(lambda: vis_of(e, pg, "0,2")["label"] == "vMix\nDéconnecté", 1.5)
+    assert vis_of(e, pg, "0,2")["bg"] == ORCH_TONES["danger"][1], "éteinte : teinte sombre"
+    mp.ducking["active"], mp.ducking["enabled"] = True, True
+    assert wait(lambda: vis_of(e, pg, "1,1")["label"] == "Ducking\nMusique baissée", 1.5)
+    assert mp.deck_reads == 0 and mp.deck_streams == 1, "le flux suffit"
+    # Touche d'affichage seul (command: null) : rien n'est envoyé
+    n = len(mp.deck_calls)
+    tap(e, pg, "0,2")
+    time.sleep(0.3)
+    assert len(mp.deck_calls) == n, mp.deck_calls
+    # Refus motivé de MixPanel : son message, au nom de l'app
+    mp.xtouch = False
+    assert wait(lambda: "X-Touch non connectée" in vis_of(e, pg, "1,2")["label"], 1.5)
+    tap(e, pg, "1,2")
+    assert wait(lambda: any(m.startswith("MixPanel") and "X-Touch non connectée" in m for _, m in logs), 3), logs
+    # Réglages et voyants
+    row = next(r for r in integrations.integration_status(e) if r[0] == "mixpanel")
+    assert row[1] == "MixPanel" and row[2] is True and "touche(s)" in row[3] and "flux en direct" in row[3], row
+    # Bibliothèque et sélecteur de l'inspecteur : les touches que décrit MixPanel
+    lib = dict(presets.library(e))["Intégrations"]
+    ids = {pid_ for pid_, _, _ in lib}
+    assert {"deck:mixpanel:scene.recall:s1", "deck:mixpanel:macro.run:m1", "deck:mixpanel:page.toggle",
+            "deck:mixpanel:console.modeToggle", "deck:mixpanel:status.xtouch"} <= ids, ids
+    b = presets.make("deck:mixpanel:scene.recall:s1", e)
+    assert b["actions"][0] == {"type": "deck.key", "app": "mixpanel", "key": "scene.recall:s1", "title": "Jeu"}
+    assert summary(b["actions"][0]) == "MixPanel · Jeu"
+    picker = ui_widgets.DeckKeyPicker(e, "page.toggle", "mixpanel")
+    groups = [picker.tree.topLevelItem(i).text(0) for i in range(picker.tree.topLevelItemCount())]
+    assert groups[:5] == ["État", "Scènes", "Macros", "Automatisation", "Console"], groups
+    # MixPanel fermé : HORS LIGNE (pas « JETON ? » : jeton facultatif), avec où ouvrir l'API
+    mp.close()
+    d._abort()
+    assert wait(lambda: not d.connected, 8)
+    assert d.unavailable() == "HORS LIGNE" and vis_of(e, pg, "0,1")["label"].endswith("HORS LIGNE")
+    assert wait(lambda: "Pilotage à distance" in (d.error or ""), 8), d.error
+    e.stop()
+
+
+def test_mixpanel_deck_optional_token_and_probe(tmp_path):
+    """Jeton facultatif : réglé dans MixPanel, il part dans « Authorization: Bearer ». Tester reconnaît MixPanel
+    par « app.name », ajoute le port 5085 à une IP seule et dit où ouvrir l'API quand elle est fermée."""
+    e, mp, pg, logs = mixpanel_engine(tmp_path, 18276, token="s3cret")
+    d = e.deck("mixpanel")
+    assert wait(lambda: d.error and "demande un jeton" in d.error, 5), d.error
+    assert d.unavailable() == "JETON ?" and vis_of(e, pg, "0,1")["label"].endswith("JETON ?")
+    assert "MixPanel, Réglages › Pilotage à distance" in d.error
+    e.mutate(lambda c: c["integrations"]["mixpanel"].update(token="faux"))
+    assert wait(lambda: d.token == "faux" and d.auth_failed, 5), d.error
+    assert d.unavailable() == "JETON REFUSÉ"
+    e.mutate(lambda c: c["integrations"]["mixpanel"].update(token="s3cret"))
+    d._wake.set()
+    assert wait(lambda: d.connected, 12), d.error
+    assert mp.deck_headers[-1].get("Authorization") == "Bearer s3cret"
+    tap(e, pg, "0,1")
+    assert wait(lambda: mp.deck_calls and mp.deck_calls[-1] == ("page.toggle", {}, "Bearer s3cret"), 3), \
+        mp.deck_calls
+    row = next(r for r in integrations.integration_status(e) if r[0] == "mixpanel")
+    assert row[2] is True and "jeton « jeton API »" in row[3], row
+    e.stop()
+    # Tester (Réglages) : sans jeton, avec, et un autre serveur /api/deck à cette adresse
+    ok, msg = integrations.probe_deck("mixpanel", "127.0.0.1:18276", "")
+    assert ok is False and "MixPanel demande un jeton" in msg, msg
+    ok, msg = integrations.probe_deck("mixpanel", "127.0.0.1:18276", "s3cret")
+    assert ok is True and msg.startswith("MixPanel 1.2.1 · jeton « jeton API » accepté") and "touche(s)" in msg, msg
+    mp.close()
+    other = fakes.FakeMixPanel(18277, name="py-multiview")
+    ok, msg = integrations.probe_deck("mixpanel", "127.0.0.1:18277", "")
+    assert ok is False and "c'est py-multiview, pas MixPanel" in msg, msg
+    other.close()
+    ok, msg = integrations.probe_deck("mixpanel", "127.0.0.1:18277", "")  # plus rien n'écoute
+    assert ok is False and "API fermée ? MixPanel › Réglages › Pilotage à distance" in msg, msg
+    # Adresse : ce poste par défaut, le port 5085 ajouté à une IP seule
+    assert integrations.deck_url("mixpanel", "") == "http://127.0.0.1:5085"
+    assert integrations.deck_url("mixpanel", "192.168.1.42") == "http://192.168.1.42:5085"
+    assert integrations.deck_url("mixpanel", "192.168.1.42:6000") == "http://192.168.1.42:6000"
+    assert integrations.deck_configured({"integrations": {}}, "mixpanel"), "jeton facultatif"
+    # Le contrôle d'identité est propre à MixPanel : py-multiview n'envoie pas « app » dans l'état
+    assert "app_name" not in integrations.DECK_APPS["multiview"]
+
+
+def test_mixpanel_deck_settings(tmp_path):
+    """Réglages → Intégrations : MixPanel a sa section (adresse, jeton facultatif) et un Tester qui marche ;
+    enregistrer écrit son bloc, et rien n'est ajouté si rien n'a changé."""
+    mp = fakes.FakeMixPanel(18278)
+    e, pid, logs = one_page(tmp_path, {}, {"mixpanel": {"url": "127.0.0.1:18278"}})
+    w = MainWindow(e)
+    dlg = SettingsDialog(e, w)
+    dlg.show()
+    assert "mixpanel" in dlg._deck_edits and "mixpanel" in dlg.deck_status
+    url, token = dlg._deck_edits["mixpanel"]
+    assert url.text() == "127.0.0.1:18278" and "127.0.0.1:5085" in url.placeholderText()
+    assert "Pilotage à distance" in url.toolTip() and "5085" in url.toolTip()
+    assert token.placeholderText() == "facultatif"
+    assert e.deck("mixpanel").forced
+    assert wait(lambda: e.deck("mixpanel").connected, 6), e.deck("mixpanel").error
+    dlg._test("mixpanel")
+    result = dlg._tests["mixpanel"][1]
+    assert wait(lambda: "touche(s)" in result.text(), 6), result.text()
+    assert "MixPanel 1.2.1" in result.text()
+    dlg._refresh_status()
+    assert "touche(s)" in dlg.deck_status["mixpanel"].text(), dlg.deck_status["mixpanel"].text()
+    before = json.dumps(e.cfg["integrations"], sort_keys=True)
+    dlg._save()
+    assert json.dumps(e.cfg["integrations"], sort_keys=True) == before, "rien de modifié : pas de clé ajoutée"
+    dlg = SettingsDialog(e, w)
+    dlg._deck_edits["mixpanel"][1].setText("abc")
+    dlg._save()
+    assert e.cfg["integrations"]["mixpanel"] == {"url": "127.0.0.1:18278", "token": "abc"}
+    assert e.deck("mixpanel").token == "abc" and not e.deck("mixpanel").forced
+    assert "mixpanel" in w.integ_pills, "un voyant MixPanel dans la barre d'état"
+    w.quit_app()
+    mp.close()
+
+
+def _mixpanel_source() -> Path | None:
+    """Dépôt py-mix-panel à côté de py-livedeck (ou MIXPANEL_SRC), pour le tester contre le vrai serveur."""
+    env = os.environ.get("MIXPANEL_SRC")
+    candidates = [Path(env)] if env else [p / "py-mix-panel" for p in Path(__file__).resolve().parents]
+    return next((p for p in candidates if (p / "pymixpanel" / "api.py").is_file()), None)
+
+
+def test_mixpanel_real_server(tmp_path):
+    """Contre le vrai serveur HTTP de MixPanel (pymixpanel.api, routage et touches de pymixpanel.deck), ouvert
+    sur 127.0.0.1 port 0, sans son moteur vMix/X-Touch. Ne fait rien si le dépôt py-mix-panel est absent."""
+    src = _mixpanel_source()
+    if src is None:
+        print("py-mix-panel introuvable : test du vrai serveur sauté")
+        return
+    sys.path.insert(0, str(src))
+    try:
+        from pymixpanel import deck as mp_deck
+        from pymixpanel.api import ApiServer, dispatch
+    finally:
+        sys.path.remove(str(src))
+    status = {"app": {"name": "MixPanel", "version": "x"}, "profile": {"name": "Show"},
+              "vmix": {"connected": True, "version": "27"},
+              "xtouch": {"connected": True, "port": "X-TOUCH", "mode": "standard"},
+              "page": "A", "locked": False, "ducking": {"enabled": False, "active": False, "configured": True},
+              "scenes": [{"id": "s1", "name": "Jeu", "active": True}, {"id": "s2", "name": "Plateau", "active": False}],
+              "macros": [{"id": "m1", "name": "Fin", "steps": 2, "running": False}]}
+    server = ApiServer(None)
+    calls = []
+
+    class Control(mp_deck.DeckControl):
+        def status(self):
+            return json.loads(json.dumps(status))
+
+        def recall_scene(self, sid):
+            calls.append(("scene", sid))
+            for s in status["scenes"]:
+                s["active"] = s["id"] == sid
+            return self.status()
+
+        def set_page(self, page):
+            calls.append(("page", page))
+            status["page"] = page
+            return self.status()
+
+    ctl = Control(engine=None, token=lambda: server.token)
+    server._call = lambda method, path, body=b"": dispatch(method, path, ctl, body)
+    assert server.start("127.0.0.1", 0) == ""
+    port = server.port
+    try:
+        buttons = {"0,0": new_button(actions=[new_action("deck.key", app="mixpanel", key="scene.recall:s2")]),
+                   "0,1": new_button(actions=[new_action("deck.key", app="mixpanel", key="page.toggle")])}
+        e, pg, logs = one_page(tmp_path, buttons, {"mixpanel": {"url": f"127.0.0.1:{port}"}})
+        d = e.deck("mixpanel")
+        assert wait(lambda: d.connected and d.mode == "stream", 6), d.error
+        assert vis_of(e, pg, "0,0")["label"] == "Plateau\nRappeler"
+        ok, msg = integrations.probe_deck("mixpanel", f"127.0.0.1:{port}", "")
+        assert ok is True and msg.startswith("MixPanel x · API Stream Deck (accès libre)"), msg
+        tap(e, pg, "0,0")
+        assert wait(lambda: ("scene", "s2") in calls, 4), (calls, logs)
+        assert wait(lambda: vis_of(e, pg, "0,0")["label"] == "Plateau\nEn place", 3), vis_of(e, pg, "0,0")
+        tap(e, pg, "0,1")
+        assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Page\nPage B", 3), vis_of(e, pg, "0,1")
+        # Jeton réglé dans MixPanel : LiveDeck le demande, puis l'envoie
+        server.token = "s3cret"
+        assert integrations.probe_deck("mixpanel", f"127.0.0.1:{port}", "")[0] is False
+        ok, msg = integrations.probe_deck("mixpanel", f"127.0.0.1:{port}", "s3cret")
+        assert ok is True and "jeton « jeton API » accepté" in msg, msg
+        e.stop()
+    finally:
+        server.stop()
 
 
 def test_winaudio_cache():

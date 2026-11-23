@@ -14,6 +14,13 @@
   l'app en demande un, JETON REFUSÉ si celui réglé est refusé. orchestream exige toujours le sien.
 - Réglages → Intégrations : py-multiview a son champ **Jeton API (facultatif)** et son **Tester**. Sans adresse, py-multiview est cherché sur ce poste (`127.0.0.1:5090`).
 - Messages d'erreur et Moniteur au nom de l'app (« py-multiview · Émission OMT : aucun écran assigné »).
+- **MixPanel** (console X-Touch pour vMix) se pilote aussi : état de vMix et de la X-Touch, chaque scène, chaque
+  macro, ducking, page A / B, verrouillage et mode de la X-Touch, avec leur texte, leur couleur et leur état en
+  direct. Réglages → Intégrations : section **MixPanel** (adresse, **Jeton API facultatif**, **Tester**). Sans
+  adresse, MixPanel est cherché sur ce poste (`127.0.0.1:5085`) ; une IP seule suffit, le port `5085` est ajouté.
+  **Tester** reconnaît MixPanel (nom et version) et, si rien ne répond, rappelle d'ouvrir l'API dans *MixPanel ›
+  Réglages › Pilotage à distance*. Il faut une version de MixPanel qui expose `/api/deck`.
+- Barre d'état : un voyant MixPanel quand une touche l'utilise.
 
 ### Retiré
 - L'ancienne intégration py-multiview (`GET /status`, `POST /<objet>/<verbe>`) : l'action *py-multiview*,

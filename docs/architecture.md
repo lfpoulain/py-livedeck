@@ -15,7 +15,7 @@ flowchart LR
     A --> HK[hotkeys.py<br/>pynput]
     A --> WR[webreq.py<br/>HTTP]
     A --> NS[netsend.py<br/>TCP · UDP · OSC]
-    A --> IN[integrations.py<br/>py-intercom · Tally32<br/>apps /api/deck : orchestream, py-multiview]
+    A --> IN[integrations.py<br/>py-intercom · Tally32<br/>apps /api/deck : orchestream, py-multiview, MixPanel]
     VX -- TALLY / ACTS / XML --> E
     IN -- état en direct --> E
     HL[health.py<br/>ping · HTTP · JSON] --> E
@@ -50,7 +50,7 @@ flowchart LR
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
-| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, tests de connexion, conversion des bricolages Companion |
+| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview, MixPanel ; MixPanel reconnu au test par `app.name`) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, tests de connexion, conversion des bricolages Companion |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |
@@ -106,7 +106,7 @@ Tous les fils sont démons et protégés : une exception est écrite dans le jou
 
 `tests/test_core.py` lance de vrais scénarios de bout en bout : faux vMix (`tools/fake_vmix.py`, Mix 1 à 4, titres,
 vidéos, vMix lent ou figé), faux Stream Deck, faux Loupedeck (port série simulé : poignée de main, trames, molettes,
-tactile), faux py-intercom, orchestream-v2 (touches et flux en direct), Tally32, py-multiview, API JSON et faux clavier
+tactile), faux py-intercom, orchestream-v2 (touches et flux en direct), Tally32, py-multiview, MixPanel (et le vrai serveur de MixPanel si le dépôt `py-mix-panel` est à côté), API JSON et faux clavier
 (`tests/fakes.py`), interface Qt hors écran. Rien ne sort de `127.0.0.1`, aucune vraie touche n'est simulée et le
 registre Windows n'est jamais touché.
 

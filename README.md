@@ -42,7 +42,7 @@ Mieux encore : **glisse plusieurs inputs sur le deck** et toute une rangée est 
 | ⌨️ **Clavier et HTTP** | Raccourcis enregistrés en appuyant sur les touches (maintenus ou non), requêtes HTTP en collant une commande `curl`. |
 | 📡 **OSC, TCP / UDP, API JSON** | Pilote QLab, Reaper, une X32, un projecteur ou une caméra VISCA, et affiche la valeur d'une API JSON sur une touche. |
 | 🔤 **Texte dynamique** | Titre à l'antenne, temps restant d'une vidéo, texte d'un titre, heure… mis à jour en direct sur les touches. |
-| 🎙️ **Intégrations maison** | Talkback **py-intercom**, **touches décrites par orchestream et py-multiview** (jeu suivant, tirage, widget, Studio, flux, émission OMT…), **Tally32** et **py-multiview**, avec leur état en direct, un bouton Tester et des messages d'erreur clairs. |
+| 🎙️ **Intégrations maison** | Talkback **py-intercom**, **touches décrites par orchestream, py-multiview et MixPanel** (jeu suivant, tirage, widget, Studio, flux, émission OMT, scènes et macros de la X-Touch…), **Tally32** et **py-multiview**, avec leur état en direct, un bouton Tester et des messages d'erreur clairs. |
 | 🛟 **Sûr en direct** | Un talkback se coupe toujours au relâché, même si la touche change entre-temps ; tout est relâché au débranchement ou à la fermeture. Sauvegardes quotidiennes. |
 | 🔒 **Mode Live** | L'édition se verrouille pendant le direct, seul ▶ Tester reste actif. |
 | 🔎 **Recherche (Ctrl+F)** | Retrouve une touche sur toutes les pages ; la touche vide propose toutes les actions, avec recherche et catégories. |
@@ -120,7 +120,7 @@ py-livedeck/
 │   ├── feedback.py         # retours d'état automatiques
 │   ├── vars.py             # texte dynamique $(vmix:…)
 │   ├── netsend.py          # TCP / UDP / OSC
-│   ├── integrations.py     # py-intercom, orchestream, Tally32, py-multiview
+│   ├── integrations.py     # py-intercom, orchestream, Tally32, py-multiview, MixPanel
 │   ├── companion_import.py # import Bitfocus Companion
 │   └── ui/                 # interface PySide6
 ├── tools/
@@ -147,7 +147,7 @@ python tests/test_core.py
 ```
 
 Ce script lance les tests de bout en bout : import Companion, vMix, Take, appui long, Stream Deck simulé,
-édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream, Tally32 et py-multiview.
+édition, mode Live, recherche, diagnostic, relâché sûr, texte dynamique, OSC / TCP, py-intercom, orchestream, Tally32, py-multiview et MixPanel.
 Ils fonctionnent aussi avec `pytest`.
 À chaque push sur `main`, GitHub Actions les relance, et publie l'installateur quand la version change.
 
