@@ -251,9 +251,12 @@ class FakeTally:
 
 
 class FakeMultiview:
-    """API locale de py-multiview : GET /status, commandes POST à corps vide."""
+    """API locale de py-multiview : GET /status, commandes POST à corps vide ; et l'API Stream Deck commune
+    (/api/deck), d'après py_multiview/deck.py et api.py : touches décrites, flux « state » puis « patch »,
+    jeton facultatif (vide : accès libre), cible inconnue -> 422 VALIDATION_FAILED, jamais 404 NOT_FOUND.
+    deck=False : version d'avant /api/deck."""
 
-    def __init__(self, port):
+    def __init__(self, port, token="", deck=True):
         self.streams = [{"index": 1, "id": "s-1", "name": "Caméra 1", "source": "srt", "running": False,
                          "status": "stopped", "detail": "", "muted": False, "display": "Écran 2"},
                         {"index": 2, "id": "s-2", "name": "Plateau", "source": "omt", "running": True,
@@ -264,6 +267,11 @@ class FakeMultiview:
         self.volume = 100
         self.calls = []
         self.refuse = ""  # message d'un refus métier (409)
+        self.token, self.deck = token, deck
+        self.deck_calls = []    # (commande, args, en-tête Authorization)
+        self.deck_headers = []  # en-têtes reçus sur /api/deck
+        self.deck_streams = 0
+        self.deck_reads = 0
         fake = self
 
         def payload():
@@ -282,6 +290,98 @@ class FakeMultiview:
 
         self.payload = payload
 
+        tones = {"active": "success", "waiting": "warning", "retrying": "warning", "error": "danger"}
+
+        def dkey(kid, group, command, args, title, subtitle, active, tone, reason=None):
+            return {"id": kid, "group": group, "command": command, "args": args, "title": title,
+                    "subtitle": subtitle or None, "active": bool(active), "tone": tone,
+                    "available": reason is None, "reason": reason}
+
+        def keys():
+            st = payload()
+            rec, out = st["reception"], []
+            out.append(dkey("reception.toggle", "Réception", "reception.toggle", {}, "Réception",
+                            f"{rec['active']}/{rec['total']} actifs" if rec["running"] else "Arrêtée",
+                            rec["running"], "success" if rec["running"] else "neutral"))
+            for x in st["streams"]:
+                out.append(dkey(f"stream.toggle:{x['id']}", "Flux", "stream.toggle", {"stream": x["id"]}, x["name"],
+                                "Actif" if x["running"] else "Arrêté", x["running"],
+                                tones.get(x["status"], "neutral") if x["running"] else "neutral",
+                                None if x["running"] or x.get("display") else "Aucun écran assigné."))
+            for x in st["streams"]:
+                out.append(dkey(f"stream.muteToggle:{x['id']}", "Son des flux", "stream.muteToggle",
+                                {"stream": x["id"]}, x["name"], "Son coupé" if x["muted"] else "Son actif",
+                                x["muted"], "danger" if x["muted"] else "neutral"))
+            out.append(dkey("sender.toggle", "Émission", "sender.toggle", {}, "Émission OMT",
+                            "Actif" if fake.sender else "Régie", fake.sender, "live" if fake.sender else "neutral"))
+            out.append(dkey("monitor.toggle", "Retour audio", "monitor.toggle", {}, "Retour audio",
+                            "RÉGIE (Master)", fake.monitor, "success" if fake.monitor else "neutral"))
+            out.append(dkey("monitor.volumeUp", "Retour audio", "monitor.volumeUp", {}, "Volume +",
+                            f"{fake.volume} %", False, "neutral",
+                            "Volume déjà au maximum." if fake.volume >= 100 else None))
+            for r in st["routes"]:
+                out.append(dkey(f"route.toggle:{r['id']}", "Routes", "route.toggle", {"route": r["id"]}, r["name"],
+                                "Arrêtée", r["running"], "neutral"))
+            return out
+
+        def deck_state():
+            st = payload()
+            st.pop("app"), st.pop("version"), st.pop("connected")
+            return {"token": {"name": "jeton API" if fake.token else "accès libre", "permissions": []}, **st,
+                    "commands": [{"id": c, "label": c, "argNames": []} for c in
+                                 ("reception.toggle", "stream.toggle", "sender.toggle", "monitor.toggle")],
+                    "keys": keys(), "updatedAt": "2026-11-23T12:00:00Z"}
+
+        def deck_patch(old, new):
+            changed = {k: v for k, v in new.items() if k not in ("keys", "updatedAt") and old.get(k) != v}
+            before, now = {k["id"]: k for k in old["keys"]}, {k["id"]: k for k in new["keys"]}
+            ks = [k for kid, k in now.items() if before.get(kid) != k]
+            removed = [kid for kid in before if kid not in now]
+            if not (changed or ks or removed):
+                return None
+            return {"changed": changed, "keys": ks, "removedKeys": removed, "updatedAt": new["updatedAt"]}
+
+        def deck_run(cid, args):
+            """(statut, réponse) d'une commande, comme deck.run_command."""
+            obj, _, verb = cid.partition(".")
+
+            def find(name, items):
+                ref = args.get(name)
+                if not ref:
+                    raise ValueError(name, f"argument « {name} » manquant")
+                item = next((i for i in items if i["id"] == ref), None)
+                if item is None:
+                    raise ValueError(name, f"{name} « {ref} » inconnu")
+                return item
+            try:
+                if obj in ("reception", "sender", "monitor", "floating") and verb in ("start", "stop", "toggle"):
+                    cur = any(x["running"] for x in fake.streams) if obj == "reception" else getattr(fake, obj)
+                    want = {"start": True, "stop": False}.get(verb, not cur)
+                    if obj == "reception":
+                        for x in fake.streams:
+                            x["running"], x["status"] = want, "active" if want else "stopped"
+                    else:
+                        setattr(fake, obj, want)
+                elif cid in ("stream.start", "stream.stop", "stream.toggle"):
+                    x = find("stream", fake.streams)
+                    x["running"] = {"start": True, "stop": False}.get(verb, not x["running"])
+                    x["status"] = "active" if x["running"] else "stopped"
+                elif cid == "stream.muteToggle":
+                    x = find("stream", fake.streams)
+                    x["muted"] = not x["muted"]
+                elif cid == "monitor.volumeUp":
+                    fake.volume = min(100, fake.volume + 5)
+                else:
+                    return 404, {"error": {"code": "COMMAND_NOT_FOUND", "message": f"commande « {cid} » inconnue"}}
+            except ValueError as e:
+                return 422, {"error": {"code": "VALIDATION_FAILED", "message": e.args[1],
+                                       "details": {f"args.{e.args[0]}": e.args[1]}}}
+            if fake.refuse:
+                return 409, {"error": {"code": "REFUSED", "message": fake.refuse}}
+            return 200, {"ok": True, "message": f"{cid} : fait", "data": None}
+
+        self.deck_state = deck_state
+
         class MV(BaseHTTPRequestHandler):
             def _send(self, code, data):
                 body = json.dumps(data, ensure_ascii=False).encode()
@@ -297,12 +397,67 @@ class FakeMultiview:
             def _find(self, ref):
                 return next((s for s in fake.streams if ref in (str(s["index"]), s["id"], s["name"])), None)
 
+            def _deck_auth(self):
+                fake.deck_headers.append(dict(self.headers))
+                if not fake.token:
+                    return True
+                if (self.headers.get("Authorization") or "") != f"Bearer {fake.token}":
+                    self._send(401, {"error": {"code": "INVALID_TOKEN", "message": "jeton API absent ou invalide"}})
+                    return False
+                return True
+
+            def _events(self):
+                fake.deck_streams += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                last = deck_state()
+                self.wfile.write(f"event: state\ndata: {json.dumps(last, ensure_ascii=False)}\n\n".encode())
+                self.wfile.flush()
+                beat = time.monotonic()
+                while True:
+                    time.sleep(0.05)
+                    new = deck_state()
+                    pt = deck_patch(last, new)
+                    if pt:
+                        last = new
+                        self.wfile.write(f"event: patch\ndata: {json.dumps(pt, ensure_ascii=False)}\n\n".encode())
+                        self.wfile.flush()
+                    elif time.monotonic() - beat > 1:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        beat = time.monotonic()
+
             def do_GET(self):
                 if self.path == "/status":
                     return self._send(200, payload())
+                if fake.deck and self.path.startswith("/api/deck"):
+                    if not self._deck_auth():
+                        return
+                    if self.path == "/api/deck/events":
+                        try:
+                            return self._events()
+                        except OSError:
+                            return
+                    if self.path == "/api/deck/state":
+                        fake.deck_reads += 1
+                        return self._send(200, deck_state())
+                    return self._send(404, {"error": {"code": "ROUTE_NOT_FOUND", "message": "route inconnue"}})
                 self._send(404, {"error": {"code": "NOT_FOUND", "message": "routes : GET /status"}})
 
             def do_POST(self):
+                if fake.deck and self.path.startswith("/api/deck/commands/"):
+                    if not self._deck_auth():
+                        return
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                    cid = unquote(self.path.split("/api/deck/commands/", 1)[1])
+                    args = (body or {}).get("args") or {}
+                    fake.deck_calls.append((cid, args, self.headers.get("Authorization")))
+                    return self._send(*deck_run(cid, args))
                 parts = [unquote(p) for p in self.path.strip("/").split("/") if p]
                 fake.calls.append("/".join(parts))
                 if fake.refuse:
@@ -338,6 +493,7 @@ class FakeMultiview:
                 pass
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), MV)
+        self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
 

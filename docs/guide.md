@@ -88,7 +88,8 @@ seul **▶ Tester** reste actif. De quoi laisser l'écran ouvert pendant le dire
   (Take, Program, Preview, Preview + Program sur 2 rangées, Overlay 1-4, Couper le son).
 - **Bibliothèque « Boutons »** : CUT, Fade, Stinger, FTB, REC, STREAM, MultiCorder, talkback py-intercom, touches
   orchestream, raccourci maintenu, HTTP, OSC, TCP, interrupteur, liens directs vers chaque page… à glisser sur une
-  touche ou à double-cliquer. Les bus py-intercom et les touches qu'orchestream décrit y apparaissent en direct.
+  touche ou à double-cliquer. Les bus py-intercom et les touches qu'orchestream et py-multiview décrivent y
+  apparaissent en direct.
 - **Double-clic sur une touche existante** : un input double-cliqué remplace son input, et son texte suit.
 - **Convertir en Take** : clic droit sur une touche Preview ou Program, sur sa rangée, ou menu de l'onglet pour
   toute la page.
@@ -265,7 +266,8 @@ elles sont toutes surveillées.
 | **py-intercom** (API du client, `http://127.0.0.1:5080`) | Talkback maintenu (`on` à l'appui, `off` au relâché), basculer, ouvrir, fermer, couper tous les bus | Bleu micro ouvert ; HORS LIGNE, DÉSARMÉ, BUS ABSENT ou PERMANENT sinon |
 | **orchestream-v2** (API Stream Deck, jeton) | Toute touche qu'orchestream décrit : jeu suivant, tirage, Twizz, widget, raccourci Studio, remercier, fin du live, état d'une intégration… | Texte, couleur et état donnés par orchestream, en direct (« Fermer Q3 », « 3 à remercier », « Allumé ») ; grisée avec la raison quand elle ne peut pas servir |
 | **Tally32** (`GET /status`, `POST /vmix/reconnect`) | Reconnecter un tally ou tous à vMix, surveillance toutes les 3 s | Vert si tous sont connectés à vMix, rouge avec le nom des tallys en défaut |
-| **py-multiview** (multiviewer SRT/OMT, `GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
+| **py-multiview** (multiviewer SRT/OMT, API Stream Deck, jeton facultatif) | Toute touche que py-multiview décrit : réception, un flux, le son d'un flux, émission OMT, retour audio et son volume, fenêtre de retour, route multicast | Texte, couleur et état donnés par py-multiview, en direct ; grisée avec la raison (« Aucun écran assigné. ») |
+| **py-multiview**, anciennes touches (`GET /status`) | Démarrer / arrêter un flux, toute la réception, l'émission OMT, le retour audio ou la fenêtre de retour ; couper le son d'un flux ; régler le volume du retour | Vert quand c'est en marche, brun en défaut (attente, relance), liseré gris et HORS LIGNE si py-multiview ne répond pas |
 
 ### Régler py-intercom
 
@@ -297,6 +299,14 @@ lui envoie donc aussi « off ». À la conversion d'une config Companion, l'anci
 Les adresses locales (127.0.0.1, réseau privé, noms en `.local`) ne passent jamais par le proxy de Windows :
 un proxy d'entreprise ne peut plus bloquer le talkback.
 
+### Touches décrites par l'app (orchestream, py-multiview…)
+
+orchestream-v2 et py-multiview parlent le même langage, l'**API Stream Deck** (`/api/deck`) : l'app décrit
+elle-même chaque touche qu'elle propose et l'envoie en direct. Dans l'inspecteur, l'action **Touche d'une app**
+choisit l'app puis la touche ; la touche enregistre l'app et l'identifiant de la touche
+(`orchestream` + `game.advance`, `multiview` + `sender.toggle`). Le retour d'état **Touche d'une app** colore
+une autre touche selon une touche d'une app. Ce qui suit vaut pour toutes ; seuls le jeton et l'adresse changent.
+
 ### orchestream-v2
 
 orchestream décrit lui-même **chaque touche** que ton jeton peut poser : son texte, sa couleur, si elle est
@@ -312,7 +322,7 @@ liste de commandes en dur : une nouveauté d'orchestream (raccourci Studio, sond
    nombre de touches qu'il permet. Son adresse publique (tunnel, passerelle invités) est refusée : **Tester** te
    le dit et te propose l'adresse locale.
 3. Pose une touche : bibliothèque, catégorie *Intégrations* (toutes les touches d'orchestream y sont, avec leur
-   rubrique), ou l'action **Orchestream** dans l'inspecteur. La touche se choisit dans une liste groupée par
+   rubrique), ou l'action **Touche d'une app** (app *Orchestream*) dans l'inspecteur. La touche se choisit dans une liste groupée par
    rubrique (« Jeux », « Overlay », « Studio », « État »…), avec une recherche. Seul son identifiant est
    enregistré (`game.advance`, `overlay.toggle:twizz`, `studio.shortcut:…`).
 
@@ -324,10 +334,10 @@ Sur la touche :
 | couleur vive | la touche est **allumée** (widget affiché, lumière allumée, sondage en cours…) ; couleur sombre sinon |
 | gris + raison | elle ne peut pas servir maintenant (« Aucune partie en cours. ») ; l'appui part quand même, orchestream revérifie |
 | INTROUVABLE | cette touche n'existe plus dans orchestream (raccourci supprimé) ou n'est plus permise au jeton |
-| HORS LIGNE, JETON REFUSÉ, JETON ?, ADRESSE ? | orchestream ne répond pas, refuse le jeton (révoqué), ou rien n'est réglé |
+| HORS LIGNE, JETON REFUSÉ, JETON ?, ADRESSE ? | l'app ne répond pas, refuse le jeton réglé (révoqué), demande un jeton qui n'est pas réglé, ou rien n'est réglé |
 
 Une touche de la rubrique « État » (live, Hype Train, intégrations d'orchestream) ne fait qu'afficher. Le retour
-d'état **Touche orchestream** colore une autre touche selon une touche d'orchestream (allumée, éteinte,
+d'état **Touche d'une app** colore une autre touche selon une touche d'orchestream (allumée, éteinte,
 indisponible) : par exemple une touche vMix qui s'allume quand le live est en cours.
 
 Les touches arrivent par le **flux en direct** d'orchestream (`/api/deck/events`) : elles changent dans la
@@ -343,12 +353,25 @@ mettre à jour son firmware.
 
 ### Régler py-multiview
 
-Indique l'adresse du poste py-multiview : `192.168.1.42` suffit, le port `5090` est ajouté tout seul.
+Indique l'adresse du poste py-multiview : `192.168.1.42` suffit, le port `5090` est ajouté tout seul. Laissée
+vide, c'est ce poste (`http://127.0.0.1:5090`).
 
 Côté py-multiview, il faut ouvrir l'API : **Préférences → Pilotage à distance → Ouvrir l'API locale**, en
-décochant *Ce poste uniquement* pour y accéder depuis cette machine.
+décochant *Ce poste uniquement* pour y accéder depuis cette machine. Le **Jeton API** est facultatif : ne le
+remplis que si un jeton est réglé dans py-multiview (il part alors dans l'en-tête `Authorization`). **Tester**
+vérifie l'API d'origine puis les touches décrites.
 
-Une touche choisit sa **cible** — un flux, toute la réception, l'émission OMT, le retour audio, la fenêtre de
+**Touches décrites** (py-multiview avec `/api/deck`) : bibliothèque, catégorie *Intégrations*, ou l'action
+**Touche d'une app** (app *py-multiview*). Une touche par bascule : la réception, chaque flux, le son de chaque
+flux, l'émission OMT, le retour audio, volume + et −, la fenêtre de retour, chaque route. Texte, couleur et état
+viennent de py-multiview, en direct, comme pour orchestream ; un flux est désigné par son identifiant interne,
+la touche reste donc juste si on le renomme ou le déplace.
+
+**Anciennes touches** *py-multiview* (déjà posées) : elles continuent de marcher par l'API d'origine et ne sont
+pas converties (elles ont des modes *Démarrer* / *Arrêter* et désignent un flux par son nom). Pour une nouvelle
+touche, préfère les touches décrites.
+
+Une ancienne touche choisit sa **cible** — un flux, toute la réception, l'émission OMT, le retour audio, la fenêtre de
 retour, le son d'un flux ou une route multicast — et son **mode** : *Démarrer*, *Arrêter* ou *Basculer*.
 « Basculer » est résolu à partir de l'état lu, donc deux appuis rapides ne se croisent pas.
 

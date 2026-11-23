@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplicati
                                QVBoxLayout, QWidget)
 
 from ..actions import ACTIONS, CATEGORIES, VMIX_FUNCTIONS
+from ..integrations import de
 from . import theme as T
 
 
@@ -354,15 +355,15 @@ class InputCombo(QWidget):
         self.status.setStyleSheet(f"color:{T.OK if i else T.DANGER}")
 
 
-class OrchKeyPicker(QWidget):
-    """Choix d'une touche décrite par orchestream (flux /api/deck/events) : liste groupée par rubrique
-    (« Jeux », « Studio », « État »…), filtrée par la recherche (titre, rubrique, ce qui est en cours,
-    identifiant). Seul l'identifiant est enregistré."""
+class DeckKeyPicker(QWidget):
+    """Choix d'une touche décrite par une app (flux /api/deck/events) : liste groupée par rubrique
+    (« Jeux », « Studio », « Flux », « État »…), filtrée par la recherche (titre, rubrique, ce qui est en
+    cours, identifiant). Seul l'identifiant est enregistré, à côté du nom de l'app."""
     changed = Signal(str)
 
-    def __init__(self, engine, value: str = ""):
+    def __init__(self, engine, value: str = "", app: str = "orchestream"):
         super().__init__()
-        self.engine, self.value = engine, value or ""
+        self.engine, self.value, self.app = engine, value or "", app or "orchestream"
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
@@ -383,7 +384,7 @@ class OrchKeyPicker(QWidget):
         self._fill()
 
     def _fill(self, *_):
-        orch = self.engine.orchestream
+        orch = self.engine.deck(self.app)
         needle = self.search.text().strip().lower()
         self.tree.clear()
         groups: dict[str, QTreeWidgetItem] = {}
@@ -415,7 +416,7 @@ class OrchKeyPicker(QWidget):
         if not groups:
             msg = ("Aucune touche ne correspond." if needle and orch.key_list() else
                    orch.unavailable() and f"Liste indisponible : {orch.error or orch.unavailable()}" or
-                   "Liste des touches pas encore reçue d'orchestream.")
+                   f"Liste des touches pas encore reçue {de(orch.name)}.")
             QTreeWidgetItem(self.tree, [msg]).setFlags(Qt.NoItemFlags)
         self._show_current()
 
@@ -423,11 +424,12 @@ class OrchKeyPicker(QWidget):
         if not self.value:
             self.current.setText("Choisis une touche dans la liste.")
             return
-        k = self.engine.orchestream.key(self.value)
+        d = self.engine.deck(self.app)
+        k = d.key(self.value)
         if k:
             self.current.setText(f"✓  {k.get('group') or ''} › {k.get('title') or self.value}   ({self.value})")
-        elif self.engine.orchestream.has_keys:
-            self.current.setText(f"⚠  « {self.value} » n'existe plus dans orchestream (ou n'est pas permise au jeton)")
+        elif d.has_keys:
+            self.current.setText(f"⚠  « {self.value} » n'existe plus dans {d.name} (ou n'est pas permise au jeton)")
         else:
             self.current.setText(f"Touche « {self.value} »")
 
@@ -437,6 +439,9 @@ class OrchKeyPicker(QWidget):
             self.value = kid
             self._show_current()
             self.changed.emit(kid)
+
+
+OrchKeyPicker = DeckKeyPicker  # nom d'avant les autres apps
 
 
 def fill_types(combo: QComboBox, current: str) -> None:
@@ -460,15 +465,16 @@ def fill_types(combo: QComboBox, current: str) -> None:
     combo.blockSignals(False)
 
 
-def make_field(engine, spec: dict, value, on_change, page_names=None) -> QWidget:
-    """Construit le widget d'édition d'un champ d'action ou de condition."""
+def make_field(engine, spec: dict, value, on_change, page_names=None, item: dict | None = None) -> QWidget:
+    """Construit le widget d'édition d'un champ d'action ou de condition (item : l'action ou la condition,
+    pour un champ qui dépend d'un autre, comme la touche d'une app)."""
     kind = spec["kind"]
     if kind == "input":
         w = InputCombo(engine, value or "")
         w.changed.connect(on_change)
         return w
-    if kind == "orch_key":  # touches décrites par orchestream, groupées et filtrables
-        w = OrchKeyPicker(engine, value or "")
+    if kind == "deck_key":  # touches décrites par l'app choisie, groupées et filtrables
+        w = DeckKeyPicker(engine, value or "", (item or {}).get("app") or "orchestream")
         w.changed.connect(on_change)
         return w
     if kind in ("mix", "overlay", "choice", "page", "tally", "intercom_bus"):

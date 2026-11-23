@@ -266,7 +266,7 @@ def key_xy(index, cols=4, size=90, keys_x=60):
 def test_import_companion():
     plain, report = import_companion(FIXTURE)  # par défaut : pas de conversion vers les intégrations maison
     types = {a["type"] for p in plain["pages"] for b in p["buttons"].values() for a in b["actions"]}
-    assert not types & {"orchestream.key", "tally.reconnect", "intercom.ptt"}, types
+    assert not types & {"deck.key", "tally.reconnect", "intercom.ptt"}, types
     assert any("Convertir vers les intégrations natives" in line for line in report)
     cfg, report = import_companion(FIXTURE, integrations=True)
     names = [p["name"] for p in cfg["pages"]]
@@ -277,7 +277,7 @@ def test_import_companion():
     assert "orchestream.local" in integ["orchestream"]["url"]
     assert {t["host"] for t in integ["tallies"]} >= {"10.0.0.51", "10.0.0.52", "10.0.0.53"}
     types = {a["type"] for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"]}
-    assert {"vmix.preview", "vmix.program", "orchestream.key", "tally.reconnect", "intercom.ptt"} <= types, types
+    assert {"vmix.preview", "vmix.program", "deck.key", "tally.reconnect", "intercom.ptt"} <= types, types
     keys = {a.get("key") for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"]}
     assert {"overlay.toggle:twizz", "overlay.toggle:poll", "overlay.toggle:speedizz"} <= keys, keys
     ptt = [a for p in cfg["pages"] for b in p["buttons"].values() for a in b["actions"] if a["type"] == "intercom.ptt"]
@@ -297,7 +297,7 @@ def test_migration_v1(tmp_path):
     cfg = load_config(p)
     btns = cfg["pages"][0]["buttons"]
     assert cfg["version"] >= 2
-    assert btns["0,0"]["actions"][0] == {"type": "orchestream.key", "key": "overlay.toggle:poll"}
+    assert btns["0,0"]["actions"][0] == {"type": "deck.key", "app": "orchestream", "key": "overlay.toggle:poll"}
     assert btns["0,0"]["mode"] == "press" and not btns["0,0"]["actions_off"]
     assert btns["0,1"]["actions"][0]["type"] == "intercom.ptt"
     assert btns["0,1"]["actions"][0]["fallback_keys"] == "shift+z"
@@ -1511,7 +1511,7 @@ def test_integration_settings_and_details(tmp_path):
     # bibliothèque : intégrations d'après les services réglés
     from livedeck import presets
     lib = dict(presets.library(e))["Intégrations"]
-    assert {"talk:regie", "orch", "tallies"} <= {pid_ for pid_, _, _ in lib}, lib  # jeton changé : liste à relire
+    assert {"talk:regie", "deck:orchestream", "tallies"} <= {pid_ for pid_, _, _ in lib}, lib  # jeton changé
     # tally à l'ancien firmware : la reconnexion explique quoi faire
     tap(e, pid, "0,0")
     assert wait(lambda: any(lv == "error" and "firmware" in m for lv, m in logs), 5), logs
@@ -1610,18 +1610,19 @@ def test_empty_key_picker_and_take(tmp_path):
     assert cats[:2] == ["Vidéo", "Intégrations"] and {"Production", "Clavier", "Web", "Réseau", "Deck"} <= set(cats)
     ids = {pid_ for _, items in ins.picker_items() for pid_, *_ in items}
     assert {"take", "tallies", "talk_alloff", "http", "osc", "page_next"} <= ids
-    assert any(i.startswith("talk:") for i in ids) and ("orch" in ids)
+    assert any(i.startswith("talk:") for i in ids) and {"deck:orchestream", "deck:multiview"} <= ids
     ins._pick_filter(text="intercom")
     assert {c for c, _ in ins.picker_items()} == {"Intégrations"}
     names = [n for _, items in ins.picker_items() for _, n, _, _ in items]
     assert "Raccourci maintenu" not in names        # le PTT clavier n'est pas confondu avec py-intercom
     ins._pick_filter(text="", cat="Clavier")
     assert [c for c, _ in ins.picker_items()] == ["Clavier"]
-    assert dict((p, s) for _, items in presets.catalog(e) for p, _, _, s in items)["orch"] == "orchestream"
+    setup = dict((p, s) for _, items in presets.catalog(e) for p, _, _, s in items)
+    assert setup["deck:orchestream"] == "orchestream" and setup["deck:multiview"] == "", setup
     ins._pick_filter(cat="")
     # une intégration à régler : la touche est créée et l'inspecteur montre son état + « Réglages… »
-    ins._create("orch")
-    assert e.button(pid, "0,0")["actions"][0]["type"] == "orchestream.key"
+    ins._create("deck:orchestream")
+    assert e.button(pid, "0,0")["actions"][0]["type"] == "deck.key"
     assert ins._integ_lbls and "orchestream" in ins._integ_lbls[0][0].text()
     # Take : créé depuis une tuile, il demande l'input ; le prochain appui est annoncé en direct
     w.grid.select("0,1")
@@ -3526,7 +3527,7 @@ def orch_engine(tmp_path, port, token=fakes.FakeOrchDeck.TOKEN, stream=True):
     od = fakes.FakeOrchDeck(port, stream=stream)
     keys = {"0,0": "game.advance", "0,1": "activity.ackAll", "0,2": "live.end", "0,3": "twizz.start:q-2",
             "0,4": "overlay.toggle:twizz", "1,0": "status:live", "1,1": "studio.shortcut:s1"}
-    e, pg, logs = one_page(tmp_path, {k: new_button(actions=[new_action("orchestream.key", key=v)])
+    e, pg, logs = one_page(tmp_path, {k: new_button(actions=[new_action("deck.key", app="orchestream", key=v)])
                                       for k, v in keys.items()},
                            {"orchestream": {"url": f"127.0.0.1:{port}", "token": token}})
     return e, od, pg, logs
@@ -3664,15 +3665,15 @@ def test_orchestream_wanted(tmp_path):
     e.cfg["pages"] = [p]
     e.start()
     assert not e.orchestream.wanted
-    p["buttons"]["0,0"] = new_button(actions=[new_action("orchestream.key", key="draw.run")])
+    p["buttons"]["0,0"] = new_button(actions=[new_action("deck.key", key="draw.run")])
     e.apply_integrations()
     assert e.orchestream.wanted
     p["buttons"].clear()
-    p["controls"] = {"knobTL": new_control("rotary", actions_cw=[new_action("orchestream.key", key="game.advance")])}
+    p["controls"] = {"knobTL": new_control("rotary", actions_cw=[new_action("deck.key", key="game.advance")])}
     e.apply_integrations()
     assert e.orchestream.wanted, "la liste de rotation d'une molette doit compter"
     p["controls"] = {}
-    p["buttons"]["0,0"] = new_button(feedbacks=[fb("orchkey", key="status:live", state="active")])
+    p["buttons"]["0,0"] = new_button(feedbacks=[fb("deckkey", app="orchestream", key="status:live", state="active")])
     e.apply_integrations()
     assert e.orchestream.wanted, "un retour d'état orchestream compte aussi"
     e.stop()
@@ -3687,7 +3688,8 @@ def test_orchestream_companion_overlay_toggle():
         "actions_off": [{"type": "http", "method": "POST", "url": "http://o.local/api/overlay/poll/hide"}]}}}]}
     integrations.migrate(comp)
     b = comp["pages"][0]["buttons"]["0,0"]
-    assert b["actions"] == [{"type": "orchestream.key", "key": "overlay.toggle:poll"}] and b["mode"] == "press"
+    assert b["actions"] == [{"type": "deck.key", "app": "orchestream", "key": "overlay.toggle:poll"}]
+    assert b["mode"] == "press"
     assert comp["integrations"]["orchestream"]["url"] == "http://o.local"
     assert not hasattr(integrations, "convert_orchestream"), "plus de conversion des anciennes touches"
 
@@ -3695,19 +3697,22 @@ def test_orchestream_companion_overlay_toggle():
 def test_orchestream_catalog_and_picker(tmp_path):
     """Aucune liste de touches en dur : la bibliothèque et l'inspecteur proposent celles d'orchestream."""
     from livedeck.ui.widgets import OrchKeyPicker
-    assert summary(new_action("orchestream.key", key="twizz.start:q-1", title="Twizz Culture G")) == \
+    assert summary(new_action("deck.key", key="twizz.start:q-1", title="Twizz Culture G")) == \
         "Orchestream · Twizz Culture G"
-    assert summary(new_action("orchestream.key", key="draw.run")) == "Orchestream · draw.run"
+    assert summary(new_action("deck.key", key="draw.run")) == "Orchestream · draw.run"
+    assert summary(new_action("deck.key", app="multiview", key="sender.toggle")) == "py-multiview · sender.toggle"
     assert not hasattr(integrations, "ORCH_COMMANDS") and not hasattr(presets, "REGIE_PRESETS")
-    assert presets.make("orch")["actions"][0]["type"] == "orchestream.key"
+    assert presets.make("orch")["actions"][0] == {"type": "deck.key", "app": "orchestream", "key": ""}
     e, od, pg, _ = orch_engine(tmp_path, 18264)
     assert wait(lambda: e.orchestream.has_keys, 5)
     lib = dict(presets.library(e))["Intégrations"]
     ids = {pid_ for pid_, _, _ in lib}
-    assert {"orch:game.advance", "orch:studio.shortcut:s1", "orch:status:live"} <= ids, ids
-    assert "orch:live.end" not in ids, "seulement les touches permises au jeton"
-    b = presets.make("orch:twizz.start:q-1", e)
-    assert b["actions"][0] == {"type": "orchestream.key", "key": "twizz.start:q-1", "title": "Twizz Culture G"}
+    assert {"deck:orchestream:game.advance", "deck:orchestream:studio.shortcut:s1",
+            "deck:orchestream:status:live"} <= ids, ids
+    assert "deck:orchestream:live.end" not in ids, "seulement les touches permises au jeton"
+    want = {"type": "deck.key", "app": "orchestream", "key": "twizz.start:q-1", "title": "Twizz Culture G"}
+    assert presets.make("deck:orchestream:twizz.start:q-1", e)["actions"][0] == want
+    assert presets.make("orch:twizz.start:q-1", e)["actions"][0] == want, "ancien identifiant de preset"
     picker = OrchKeyPicker(e, "studio.shortcut:s1")
     groups = [picker.tree.topLevelItem(i).text(0) for i in range(picker.tree.topLevelItemCount())]
     assert groups[:3] == ["Jeux", "Tirages", "Chat et remerciements"] and "État" in groups, groups
@@ -3721,6 +3726,188 @@ def test_orchestream_catalog_and_picker(tmp_path):
     picker._picked(item)
     assert got == ["twizz.start:q-2"]
     e.stop()
+
+
+# -- API Stream Deck commune : un client par app (orchestream, py-multiview…) ----------------------------
+def test_deck_keys_converted_from_orchestream(tmp_path):
+    """Les touches orchestream d'avant les autres apps (« orchestream.key », condition « orchkey ») deviennent
+    des touches de l'app orchestream, même identifiant : rien ne casse au chargement."""
+    old = {"version": 4, "vmix": {"host": "127.0.0.1", "port": 8099}, "decks": {}, "options": {},
+           "integrations": {"orchestream": {"url": "http://o:5174", "token": "osk_1"}},
+           "pages": [{"id": "p", "name": "Régie", "cols": 5, "rows": 3, "buttons": {
+               "0,0": {"id": "a", "label": "", "actions": [
+                   {"type": "orchestream.key", "key": "twizz.start:q-1", "title": "Twizz Culture G"}],
+                   "feedbacks": [{"cond": {"type": "orchkey", "key": "status:live", "title": "Live",
+                                           "state": "active"}, "bg": "#ff0000"}]}},
+               "controls": {"knobTL": {"id": "k", "kind": "rotary",
+                                       "actions_cw": [{"type": "orchestream.key", "key": "game.advance"}]}}}]}
+    path = Path(tmp_path) / "config.json"
+    path.write_text(json.dumps(old), encoding="utf-8")
+    cfg = load_config(path)
+    b = cfg["pages"][0]["buttons"]["0,0"]
+    assert b["actions"] == [{"type": "deck.key", "app": "orchestream", "key": "twizz.start:q-1",
+                             "title": "Twizz Culture G"}], b["actions"]
+    assert b["feedbacks"][0]["cond"] == {"type": "deckkey", "app": "orchestream", "key": "status:live",
+                                         "title": "Live", "state": "active"}
+    assert b["feedbacks"][0]["bg"] == "#ff0000"
+    knob = cfg["pages"][0]["controls"]["knobTL"]
+    assert knob["actions_cw"] == [{"type": "deck.key", "app": "orchestream", "key": "game.advance"}]
+    again = normalize_config(json.loads(json.dumps(cfg)))  # déjà converti : inchangé
+    assert again["pages"][0]["buttons"]["0,0"]["actions"] == b["actions"]
+    # Page collée ou importée : normalize_button convertit aussi
+    from livedeck.model import normalize_button
+    nb = normalize_button({"actions": [{"type": "orchestream.key", "key": "draw.run"}]})
+    assert nb["actions"] == [{"type": "deck.key", "app": "orchestream", "key": "draw.run"}]
+    # Le moteur réveille bien le client orchestream pour ces touches
+    e = engine(tmp_path, cfg=cfg)
+    assert e.orchestream.wanted and not e.deck("multiview").wanted
+    assert e.orchestream is e.deck("orchestream")
+    e.stop()
+
+
+def mv_deck_engine(tmp_path, port, token_cfg="", **fake):
+    """Faux py-multiview (avec /api/deck) + touches décrites par py-multiview, et une ancienne touche."""
+    mv = fakes.FakeMultiview(port, **fake)
+    keys = {"0,0": "sender.toggle", "0,1": "stream.toggle:s-1", "0,2": "stream.muteToggle:s-2",
+            "0,3": "monitor.volumeUp", "0,4": "route.toggle:r-9"}
+    buttons = {k: new_button(actions=[new_action("deck.key", app="multiview", key=v)]) for k, v in keys.items()}
+    buttons["1,0"] = new_button(label="Retour", actions=[new_action("multiview.control", target="monitor", mode="on")])
+    e, pg, logs = one_page(tmp_path, buttons, {"multiview": {"url": f"127.0.0.1:{port}", "token": token_cfg}})
+    return e, mv, pg, logs
+
+
+def test_multiview_deck_keys_follow_the_stream(tmp_path):
+    """py-multiview par l'API Stream Deck commune : sans jeton (aucun en-tête Authorization), touches décrites
+    par le serveur et suivies en direct ; l'ancienne API sert toujours les touches « py-multiview »."""
+    from livedeck.feedback import ORCH_TONES
+    e, mv, pg, logs = mv_deck_engine(tmp_path, 18271)
+    d = e.deck("multiview")
+    assert d is not e.orchestream and d.name == "py-multiview"
+    assert wait(lambda: d.connected and d.mode == "stream", 5), d.error
+    assert not e.orchestream.wanted, "orchestream n'est pas réveillé par les touches de py-multiview"
+    assert mv.deck_headers and not any("Authorization" in h for h in mv.deck_headers), "jeton vide : aucun en-tête"
+    v = vis_of(e, pg, "0,0")
+    assert v["label"] == "Émission OMT\nRégie" and v["bg"] == ORCH_TONES["neutral"][1], v
+    assert vis_of(e, pg, "0,1")["label"] == "Caméra 1\nArrêté"
+    # Appui : la commande et ses arguments ; la touche suit dans la seconde, sans relire l'état
+    tap(e, pg, "0,0")
+    assert wait(lambda: mv.deck_calls and mv.deck_calls[-1][:2] == ("sender.toggle", {}), 3), mv.deck_calls
+    assert mv.deck_calls[-1][2] is None
+    assert wait(lambda: vis_of(e, pg, "0,0")["bg"] == ORCH_TONES["live"][0], 1.5), vis_of(e, pg, "0,0")
+    tap(e, pg, "0,1")
+    assert wait(lambda: mv.streams[0]["running"], 3)
+    assert ("stream.toggle", {"stream": "s-1"}, None) in mv.deck_calls
+    assert wait(lambda: vis_of(e, pg, "0,1")["label"] == "Caméra 1\nActif", 1.5)
+    # Changé dans py-multiview lui-même : suivi par le flux
+    mv.streams[1]["muted"] = True
+    assert wait(lambda: vis_of(e, pg, "0,2")["label"] == "Plateau\nSon coupé", 1.5)
+    mv.volume = 100
+    assert wait(lambda: "Volume déjà au maximum" in vis_of(e, pg, "0,3")["label"], 1.5)
+    assert mv.deck_reads == 0 and mv.deck_streams == 1, "le flux suffit"
+    # Touche que py-multiview ne décrit pas (route supprimée) : grisée, rien n'est envoyé
+    assert "INTROUVABLE" in vis_of(e, pg, "0,4")["label"]
+    tap(e, pg, "0,4")
+    assert wait(lambda: any("inconnue de py-multiview" in m for _, m in logs), 3), logs
+    # Refus de py-multiview : son message, préfixé du nom de l'app
+    mv.refuse = "aucun écran assigné"
+    tap(e, pg, "0,0")
+    assert wait(lambda: any(m == "py-multiview · Émission OMT : aucun écran assigné" for _, m in logs), 3), logs
+    mv.refuse = ""
+    # L'ancienne API reste en service pour les touches déjà posées
+    assert wait(lambda: e.multiview.reachable, 5)
+    tap(e, pg, "1,0")
+    assert wait(lambda: "monitor/on" in mv.calls, 3), mv.calls
+    row = next(r for r in integrations.integration_status(e) if r[0] == "multiview")
+    assert row[2] is True and "touche(s)" in row[3] and "flux en lecture" in row[3], row
+    # Bibliothèque : les touches que décrit py-multiview, plus ses anciens presets
+    lib = dict(presets.library(e))["Intégrations"]
+    ids = {pid_ for pid_, _, _ in lib}
+    assert {"deck:multiview:sender.toggle", "deck:multiview:stream.toggle:s-1"} <= ids, ids
+    assert not any(i.startswith("mv") for i in ids), "les touches décrites remplacent les anciens presets"
+    b = presets.make("deck:multiview:stream.toggle:s-2", e)
+    assert b["actions"][0] == {"type": "deck.key", "app": "multiview", "key": "stream.toggle:s-2",
+                               "title": "Plateau"}
+    assert presets.make("mv_sender")["actions"][0]["type"] == "multiview.control", "anciens presets créables"
+    # Sélecteur de l'inspecteur : les touches de l'app choisie
+    picker = ui_widgets.DeckKeyPicker(e, "sender.toggle", "multiview")
+    groups = [picker.tree.topLevelItem(i).text(0) for i in range(picker.tree.topLevelItemCount())]
+    assert groups[:3] == ["Réception", "Flux", "Son des flux"], groups
+    # py-multiview éteint : HORS LIGNE (pas « JETON ? » : il n'en demande pas)
+    mv.srv.shutdown()
+    mv.srv.server_close()
+    d._abort()
+    assert wait(lambda: not d.connected, 8)
+    assert d.unavailable() == "HORS LIGNE" and vis_of(e, pg, "0,0")["label"].endswith("HORS LIGNE")
+    e.stop()
+
+
+def test_multiview_deck_optional_token(tmp_path):
+    """Jeton facultatif : envoyé seulement s'il est rempli ; « JETON ? » seulement si l'app en demande un,
+    « JETON REFUSÉ » si celui réglé est refusé."""
+    e, mv, pg, logs = mv_deck_engine(tmp_path, 18272, token="secret")
+    d = e.deck("multiview")
+    assert wait(lambda: d.error and "demande un jeton" in d.error, 5), d.error
+    assert d.unavailable() == "JETON ?" and vis_of(e, pg, "0,0")["label"].endswith("JETON ?")
+    assert "Préférences → Pilotage à distance" in d.error
+    e.mutate(lambda c: c["integrations"]["multiview"].update(token="faux"))
+    assert wait(lambda: d.token == "faux" and d.auth_failed, 5), d.error
+    assert d.unavailable() == "JETON REFUSÉ" and "refuse le jeton" in d.error
+    e.mutate(lambda c: c["integrations"]["multiview"].update(token="secret"))
+    d._wake.set()
+    assert wait(lambda: d.connected, 12), d.error
+    assert mv.deck_headers[-1].get("Authorization") == "Bearer secret"
+    tap(e, pg, "0,0")
+    assert wait(lambda: mv.deck_calls and mv.deck_calls[-1][2] == "Bearer secret", 3), mv.deck_calls
+    e.stop()
+    # Test ponctuel des Réglages : ancienne API puis touches
+    ok, msg = integrations.probe_multiview("127.0.0.1:18272", "")
+    assert ok is None and "1/2 flux" in msg and "demande un jeton" in msg, msg
+    ok, msg = integrations.probe_multiview("127.0.0.1:18272", "secret")
+    assert ok is True and "jeton « jeton API » accepté" in msg and "touche(s)" in msg, msg
+    old = fakes.FakeMultiview(18273, deck=False)  # py-multiview d'avant /api/deck
+    ok, msg = integrations.probe_multiview("127.0.0.1:18273")
+    assert ok is None and "sans l'API Stream Deck" in msg and "mets py-multiview à jour" in msg, msg
+    assert "adresse publique" not in msg, "le cas « adresse publique » est propre à orchestream"
+    old.srv.shutdown()
+    # Adresse par défaut : ce poste
+    assert integrations.deck_url("multiview", "") == "http://127.0.0.1:5090"
+    assert integrations.deck_url("multiview", "10.0.0.2") == "http://10.0.0.2:5090"
+    assert integrations.deck_url("orchestream", "") == ""
+    # orchestream : sans jeton, rien n'est envoyé (il en exige un)
+    o = integrations.DeckApp("orchestream", lambda: None, lambda *a: None)
+    o.configure("127.0.0.1:1", "")
+    assert not o.configured and o.unavailable() == "JETON ?"
+    assert integrations.explain_deck("multiview", "http://h:5090", 404, {"error": {"code": "NOT_FOUND"}}) \
+        .startswith("h:5090 répond, mais sans l'API Stream Deck")
+    assert "adresse publique" in integrations.explain_orchestream("http://h:5174", 404, {"error": {"code": "NOT_FOUND"}})
+
+
+def test_multiview_deck_settings(tmp_path):
+    """Réglages → Intégrations : py-multiview a son jeton facultatif et son bouton Tester (les deux API)."""
+    mv = fakes.FakeMultiview(18274)
+    e, pid, logs = one_page(tmp_path, {}, {"multiview": {"url": "127.0.0.1:18274"}})
+    w = MainWindow(e)
+    dlg = SettingsDialog(e, w)
+    dlg.show()
+    assert e.deck("multiview").forced and e.multiview.forced
+    assert wait(lambda: e.deck("multiview").connected, 6), e.deck("multiview").error
+    dlg._test("multiview")
+    result = dlg._tests["multiview"][1]
+    assert wait(lambda: "touche(s)" in result.text(), 6), result.text()
+    assert "flux en lecture" in result.text()
+    dlg._refresh_status()
+    assert "touche(s)" in dlg.mv_status.text(), dlg.mv_status.text()
+    before = json.dumps(e.cfg["integrations"], sort_keys=True)
+    dlg._save()
+    assert json.dumps(e.cfg["integrations"], sort_keys=True) == before, "rien de modifié : pas de clé ajoutée"
+    dlg = SettingsDialog(e, w)
+    dlg.mv_token.setText("abc")
+    dlg._save()
+    assert e.cfg["integrations"]["multiview"] == {"url": "127.0.0.1:18274", "token": "abc"}
+    assert not e.deck("multiview").forced
+    assert e.deck("multiview").token == "abc"
+    w.quit_app()
+    mv.srv.shutdown()
 
 
 def test_winaudio_cache():

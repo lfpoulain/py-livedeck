@@ -1,5 +1,30 @@
 # Journal des versions
 
+## 1.11.0 — à paraître
+
+### Touches décrites par chaque app (API Stream Deck commune)
+- **py-multiview décrit ses touches** comme orchestream : réception, chaque flux, le son de chaque flux, émission
+  OMT, retour audio, volume, fenêtre de retour, routes. Elles sont dans la bibliothèque (*Intégrations*) avec
+  leur texte, leur couleur et leur état, mis à jour en direct par le flux `/api/deck/events` de py-multiview.
+  Il faut une version de py-multiview qui expose `/api/deck` ; **Tester** le dit sinon.
+- **Une action « Touche d'une app »** remplace l'action *Orchestream* : on choisit l'app (orchestream,
+  py-multiview…) puis la touche dans la liste qu'elle envoie. Le retour d'état *Touche orchestream* devient
+  *Touche d'une app*. Toute app qui expose le même contrat `/api/deck` se branche de la même façon.
+- **Jeton API facultatif** pour py-multiview : envoyé seulement s'il est rempli. La touche n'affiche JETON ? que si
+  l'app en demande un, JETON REFUSÉ si celui réglé est refusé. orchestream exige toujours le sien.
+- Réglages → Intégrations : py-multiview a son champ **Jeton API (facultatif)** ; son **Tester** vérifie l'API
+  d'origine et les touches décrites. Sans adresse, py-multiview est cherché sur ce poste (`127.0.0.1:5090`).
+- Messages d'erreur et Moniteur au nom de l'app (« py-multiview · Émission OMT : aucun écran assigné »).
+
+### Compatibilité
+- Les touches orchestream existantes sont **converties à l'ouverture** en touches de l'app orchestream, avec le
+  même identifiant : rien à refaire. Une configuration enregistrée par cette version ne s'ouvre plus correctement
+  dans une version plus ancienne (ses touches orchestream y seraient inconnues).
+- Les touches *py-multiview* déjà posées (ancienne API `GET /status`, `POST /<objet>/<verbe>`) **ne sont pas
+  converties** et continuent de marcher : elles désignent un flux par son nom ou son numéro et ont des modes
+  *Démarrer* / *Arrêter* que les touches décrites n'ont pas (une touche par bascule) ; la conversion demanderait
+  py-multiview allumé et changerait leur comportement. La bibliothèque propose désormais les touches décrites.
+
 ## 1.10.1 — 2026-11-23
 
 ### Retiré

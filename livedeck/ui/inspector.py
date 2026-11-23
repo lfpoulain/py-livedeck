@@ -14,11 +14,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QVBoxLayout, QWidget)
 
 from .. import feedback, presets
-from ..actions import (ACTIONS, CATEGORIES, INTEGRATION_OF, change_type, new_action, next_press, shown, summary,
+from ..actions import (ACTIONS, CATEGORIES, change_type, integration_of, new_action, next_press, shown, summary,
                        to_take)
 from ..adjust import VMIX_STEP
 from ..feedback import CONDITIONS
-from ..integrations import integration_status, probe_intercom, probe_orchestream, probe_tally
+from ..integrations import (DECK_APPS, deck_config, integration_status, probe_deck, probe_intercom,
+                            probe_multiview, probe_tally)
 from ..loupedeck import CONTROL_LABELS, HAPTIC, control_kind
 from ..model import normalize_button, normalize_control, parse_control, parse_key
 from ..webreq import parse_curl
@@ -28,8 +29,7 @@ from .deck_view import key_pixmap, preset_thumb
 from .widgets import (ColorRow, FlowLayout, InputCombo, Seg, dot_icon, fill_types, form, label, make_field,
                       section, short_label, tame_combo)
 
-INTEG_NAMES = {"intercom": "py-intercom", "orchestream": "orchestream", "tallies": "Tally32",
-               "multiview": "py-multiview"}
+INTEG_NAMES = {"intercom": "py-intercom", "tallies": "Tally32", **{k: v["name"] for k, v in DECK_APPS.items()}}
 
 
 def prepare_preset(parent, b: dict, k: str | None) -> tuple[dict, str] | None:
@@ -163,9 +163,10 @@ def probe(engine, key: str) -> tuple[bool | None, str]:
     if key == "intercom":
         ic = integ.get("intercom") or {}
         return probe_intercom(ic.get("host", "127.0.0.1"), ic.get("port", 5080))
-    if key == "orchestream":
-        orch = integ.get("orchestream") or {}
-        return probe_orchestream(orch.get("url", ""), orch.get("token", ""))
+    if key == "multiview":
+        return probe_multiview(*deck_config(engine.cfg, "multiview"))
+    if key in DECK_APPS:
+        return probe_deck(key, *deck_config(engine.cfg, key))
     devices = integ.get("tallies") or []
     if not devices:
         return None, "Aucun tally renseigné : Réglages → Intégrations."
@@ -330,7 +331,7 @@ class Inspector(QFrame):
             self.next_lbl.setText(f"Prochain appui : <b>{html.escape(nxt)}</b>")
         for lb, key, a in self._integ_lbls:
             ok, text = integration_line(self.engine, key, a)
-            lb.setText(_dot(ok) + f"<b>{INTEG_NAMES[key]}</b> · " + html.escape(text))
+            lb.setText(_dot(ok) + f"<b>{INTEG_NAMES.get(key, key)}</b> · " + html.escape(text))
 
     # -- construction ---------------------------------------------------------
     def rebuild(self) -> None:
@@ -622,11 +623,11 @@ class Inspector(QFrame):
     def _integration_rows(self, b: dict, lay=None):
         used = []
         for a in b["actions"] + b["actions_off"] + b["long_actions"]:
-            k = INTEGRATION_OF.get(a.get("type"))
+            k = integration_of(a)
             if k and k not in [u for u, _ in used]:
                 used.append((k, a))
         for f in b.get("feedbacks") or []:
-            k = INTEGRATION_OF.get((f.get("cond") or {}).get("type"))
+            k = integration_of(f.get("cond"))
             if k and k not in [u for u, _ in used]:
                 used.append((k, None))
         for k, a in used:
@@ -980,7 +981,7 @@ class Inspector(QFrame):
         spec = ACTIONS.get(a["type"], {"fields": [], "help": ""})
         if spec.get("help"):
             lay.addWidget(wrap(label(spec["help"], "Hint")))
-        integ = INTEGRATION_OF.get(a["type"])
+        integ = integration_of(a)
         if integ:
             self._integration_rows({"actions": [a], "actions_off": [], "long_actions": []}, lay)
         f = form()
@@ -992,8 +993,8 @@ class Inspector(QFrame):
             if not shown(fs, a):
                 continue  # champ sans objet pour la cible ou le mode choisis
             w = make_field(self.engine, fs, a.get(fs["key"], fs["default"]),
-                           lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names())
-            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp", "orch_key"):
+                           lambda v, k=fs["key"]: self._set_field(k, v), self.engine.page_names(), a)
+            if fs["kind"] in ("bool", "input", "multiline", "hotkey", "text", "winapp", "deck_key"):
                 if fs["kind"] != "bool":
                     f.addRow(label(short_label(fs), "Muted"))
                 f.addRow(w)
@@ -1105,9 +1106,13 @@ class Inspector(QFrame):
         if a["type"] == "vmix.adjust" and k == "target":
             # Le pas par défaut dépend de la cible : 2 % pour un volume, 1 input pour la preview…
             a["amount"] = VMIX_STEP.get(v, (1,))[0]
-        if a["type"] == "orchestream.key" and k == "key":
-            # Titre retenu pour les résumés et pour la touche tant qu'orchestream ne répond pas
-            a["title"] = str((self.engine.orchestream.key(v) or {}).get("title") or "")
+        if a["type"] == "deck.key" and k in ("app", "key"):
+            # Autre app : la touche est à rechoisir. Titre retenu pour les résumés et pour la touche tant
+            # que l'app ne répond pas.
+            if k == "app":
+                a["key"] = ""
+            a["title"] = str((self.engine.deck(a.get("app") or "orchestream").key(a.get("key") or "") or {})
+                             .get("title") or "")
             self.commit(rebuild=True)
             return
         if k in ("then", "bus", "mode") and a["type"] in ("vmix.preview", "intercom.ptt"):
@@ -1185,8 +1190,8 @@ class Inspector(QFrame):
             if not shown(fs, cond):
                 continue
             w = make_field(self.engine, fs, cond.get(fs["key"], fs["default"]),
-                           lambda v, k=fs["key"]: self._set_cond(i, k, v))
-            if fs["kind"] in ("input", "multiline", "text", "orch_key"):  # toute la largeur (URL, liste…)
+                           lambda v, k=fs["key"]: self._set_cond(i, k, v), item=cond)
+            if fs["kind"] in ("input", "multiline", "text", "deck_key"):  # toute la largeur (URL, liste…)
                 fl.addRow(label(short_label(fs), "Muted"))
                 fl.addRow(w)
             else:
@@ -1206,8 +1211,13 @@ class Inspector(QFrame):
     def _set_cond(self, i: int, k: str, v):
         cond = self.b["feedbacks"][i]["cond"]
         cond[k] = v
-        if cond.get("type") == "orchkey" and k == "key":
-            cond["title"] = str((self.engine.orchestream.key(v) or {}).get("title") or "")
+        if cond.get("type") == "deckkey" and k in ("app", "key"):
+            if k == "app":
+                cond["key"] = ""
+            cond["title"] = str((self.engine.deck(cond.get("app") or "orchestream").key(cond.get("key") or "")
+                                 or {}).get("title") or "")
+            self.commit(rebuild=True)
+            return
         fields = CONDITIONS.get(cond.get("type"), {}).get("fields", [])
         if any(k in (fs.get("when") or {}) for fs in fields):
             self.commit(rebuild=True)  # un champ dépendant apparaît ou disparaît

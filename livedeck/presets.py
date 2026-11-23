@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import feedback
 from .actions import ACTIONS, new_action
-from .integrations import bus_label
+from .integrations import DECK_APPS, bus_label, de, deck_configured, deck_name
 from .model import new_button
 
 
@@ -42,9 +42,14 @@ def _talk(bus: str, name: str = "") -> dict:
                       actions=[new_action("intercom.ptt", bus=bus)])
 
 
+def _deck(app: str, key_id: str = "", title: str = "") -> dict:
+    """Touche décrite par une app (API Stream Deck) : texte, couleur et état viennent du serveur (libellé vide)."""
+    values = {"key": key_id, **({"title": title} if title else {})}
+    return new_button(label="", bg="#1f2937", actions=[new_action("deck.key", app=app, **values)])
+
+
 def _orch(key_id: str = "", title: str = "") -> dict:
-    """Touche décrite par orchestream-v2 : texte, couleur et état viennent du serveur (libellé vide)."""
-    return new_button(label="", bg="#1f2937", actions=[new_action("orchestream.key", key=key_id, title=title)])
+    return _deck("orchestream", key_id, title)
 
 
 def _mv(target: str, label: str, ref: str = "", bg: str = "#0f2a24") -> dict:
@@ -291,9 +296,11 @@ def make(preset_id: str, engine=None) -> dict | None:
         return None
     if preset_id.startswith("talk:"):
         return _talk(preset_id[5:])
-    if preset_id.startswith("orch:"):
-        kid = preset_id[5:]
-        return _orch(kid, str(((engine.orchestream.key(kid) if engine else None) or {}).get("title") or ""))
+    if preset_id.startswith(("orch:", "deck:")):
+        # « deck:<app>:<id de touche> » (l'id peut contenir « : »), « deck:<app> » à choisir ;
+        # « orch:<id> » : nom d'avant les autres apps
+        app, _, kid = preset_id[5:].partition(":") if preset_id.startswith("deck:") else ("orchestream", "", preset_id[5:])
+        return _deck(app, kid, str(((engine.deck(app).key(kid) if engine and kid else None) or {}).get("title") or ""))
     if preset_id.startswith("mv:"):
         return _mv("stream", preset_id[3:], preset_id[3:])
     entry = PRESETS.get(preset_id)
@@ -308,27 +315,27 @@ def _integrations(engine) -> list[tuple[str, str, str]]:
     out = [(f"talk:{k}", f"Talkback {name}", modes.get(engine.intercom.bus(k).get("mode"), "py-intercom, maintenu"))
            for k, name in engine.intercom.bus_choices()]
     out.append(("talk_alloff", "Couper l'intercom", "Relâche tous les bus"))
-    orch = integ.get("orchestream") or {}
-    if not (orch.get("url") and orch.get("token")):
-        out.append(("orch", "Touche orchestream", "adresse et jeton API à régler : Réglages → Intégrations"))
-    elif engine.orchestream.has_keys:
-        # Toutes les touches que le jeton peut poser, telles qu'orchestream les décrit (aucune liste en dur)
-        out += [(f"orch:{k['id']}", str(k.get("title") or k["id"]), f"orchestream · {k.get('group') or 'Autres'}")
-                for k in engine.orchestream.key_list()]
-    else:
-        out.append(("orch", "Touche orchestream", "liste des touches en attente d'orchestream"))
+    for app in DECK_APPS:
+        out += _deck_keys(engine, app)
     out.append(("tallies", "Tallys", "Vert si tous connectés, reconnecte" if integ.get("tallies")
                 else "Tally32 à régler : Réglages → Intégrations"))
-    if (integ.get("multiview") or {}).get("url"):
-        out += [("mv_sender", "Émission OMT", "py-multiview, état en direct"),
-                ("mv_reception", "Réception multiview", "py-multiview, tous les flux"),
-                ("mv_monitor", "Retour audio", "py-multiview, écoute du master"),
-                ("mv_floating", "Fenêtre de retour", "py-multiview, fenêtre flottante")]
-        out += [(f"mv:{name}", f"Flux {name}", "py-multiview, état en direct")
-                for name, _ in engine.multiview.choices("stream")]
-    else:
-        out.append(("mv_sender", "py-multiview", "à régler : Réglages → Intégrations"))
+    # py-multiview : ses touches décrites (ci-dessus) remplacent les presets de son ancienne API, qui
+    # restent créables (« mv_sender », « mv:<flux> ») pour les pages déjà faites.
     return out
+
+
+def _deck_keys(engine, app: str) -> list[tuple[str, str, str]]:
+    """Touches que l'app décrit elle-même (aucune liste en dur), ou une entrée « à choisir » tant que la
+    liste n'est pas là : une touche posée réveille le client, qui la reçoit alors en direct."""
+    d, name = engine.deck(app), deck_name(app)
+    if not deck_configured(engine.cfg, app):
+        return [(f"deck:{app}", f"Touche {name}", "adresse et jeton API à régler : Réglages → Intégrations")]
+    if d.has_keys:
+        return [(f"deck:{app}:{k['id']}", str(k.get("title") or k["id"]), f"{name} · {k.get('group') or 'Autres'}")
+                for k in d.key_list()]
+    return [(f"deck:{app}", f"Touche {name}",
+             f"liste des touches en attente {de(name)} ({d.error})" if d.error else
+             f"liste des touches en attente {de(name)}")]
 
 
 def needs_setup(preset_id: str, engine) -> str:
@@ -343,13 +350,13 @@ def needs_setup(preset_id: str, engine) -> str:
             return "intercom"
         bus = preset_id[5:] if preset_id.startswith(("talk:", "talk_")) else ""
         return "always_on" if bus and engine.intercom.bus(bus).get("mode") == "always_on" else ""
-    if preset_id == "orch" or preset_id.startswith("orch:"):
-        orch = integ.get("orchestream") or {}
-        return "" if orch.get("url") and orch.get("token") else "orchestream"
+    if preset_id == "orch" or preset_id.startswith(("orch:", "deck:")):
+        app = preset_id[5:].partition(":")[0] if preset_id.startswith("deck:") else "orchestream"
+        return "" if deck_configured(engine.cfg, app) else app
     if preset_id == "tallies":
         return "" if integ.get("tallies") else "tallies"
     if preset_id.startswith("mv"):
-        return "" if (integ.get("multiview") or {}).get("url") else "multiview"
+        return ""  # adresse par défaut : ce poste (http://127.0.0.1:5090)
     return ""
 
 

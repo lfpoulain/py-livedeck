@@ -98,7 +98,27 @@ def normalize_button(b: dict) -> dict:
     for k, v in BUTTON_DEFAULTS.items():
         b.setdefault(k, copy.deepcopy(v))
     b.setdefault("id", new_id())
+    convert_app_keys(b)
     return b
+
+
+def convert_app_keys(b: dict) -> int:
+    """Touches orchestream d'avant les autres apps (« orchestream.key » et la condition « orchkey », sans
+    nom d'app) -> touche d'une app (« deck.key » / « deckkey ») de l'app orchestream, même identifiant.
+    Sans perte, et sans effet sur une touche déjà convertie. Nombre de conversions."""
+    n = 0
+    for lst in ("actions", "actions_off", "long_actions", "actions_cw", "actions_ccw"):
+        for i, a in enumerate(b.get(lst) or []):
+            if isinstance(a, dict) and a.get("type") == "orchestream.key":
+                b[lst][i] = {"type": "deck.key", "app": "orchestream", "key": a.get("key") or "",
+                             **({"title": a["title"]} if a.get("title") else {})}
+                n += 1
+    for f in b.get("feedbacks") or []:
+        c = f.get("cond") if isinstance(f, dict) else None
+        if isinstance(c, dict) and c.get("type") == "orchkey":
+            f["cond"] = {"type": "deckkey", "app": "orchestream", **{k: v for k, v in c.items() if k != "type"}}
+            n += 1
+    return n
 
 
 def control_kind(cid: str) -> str:
@@ -160,6 +180,7 @@ def _clean_lists(b: dict) -> None:
     for f in b.get("feedbacks") or []:
         if not isinstance(f.get("cond"), dict):
             f["cond"] = {}
+    convert_app_keys(b)
 
 
 def normalize_control(c: dict, cid: str | None = None) -> dict:

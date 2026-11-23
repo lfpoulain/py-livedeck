@@ -15,7 +15,7 @@ flowchart LR
     A --> HK[hotkeys.py<br/>pynput]
     A --> WR[webreq.py<br/>HTTP]
     A --> NS[netsend.py<br/>TCP · UDP · OSC]
-    A --> IN[integrations.py<br/>py-intercom · orchestream<br/>Tally32 · py-multiview]
+    A --> IN[integrations.py<br/>py-intercom · Tally32 · py-multiview<br/>apps /api/deck : orchestream, py-multiview]
     VX -- TALLY / ACTS / XML --> E
     IN -- état en direct --> E
     HL[health.py<br/>ping · HTTP · JSON] --> E
@@ -29,7 +29,7 @@ flowchart LR
    touche** : les phases appui / relâché d'une même touche restent dans l'ordre, sans bloquer les autres touches.
 3. Les actions parlent à vMix, au clavier, au réseau ou aux intégrations.
 4. L'état revient par vMix (abonnement `TALLY` / `ACTS` + XML lu toutes les 300 ms, et juste après chaque réponse
-   `FUNCTION`), par les intégrations (sondage de py-intercom et des tallys, flux SSE `/api/deck/events` d'orchestream-v2) et par
+   `FUNCTION`), par les intégrations (sondage de py-intercom et des tallys, flux SSE `/api/deck/events` des apps à touches décrites) et par
    `health.py` (pings, HTTP, API JSON).
 5. `feedback.py` déduit l'apparence de chaque touche, `vars.py` remplace les variables du texte ; `render.py`
    dessine la **même image** pour l'écran et pour le deck. Seules les touches dont l'image a changé sont renvoyées
@@ -40,7 +40,7 @@ flowchart LR
 | Fichier | Rôle |
 |---|---|
 | `engine.py` | Cœur : configuration (verrou, annuler / rétablir, sauvegarde différée), exécution des touches, maintien et relâché, état en direct |
-| `model.py` | Format de la configuration, valeurs par défaut, migrations (version 4), modèles de surfaces, contrôles hors grille (`page["controls"]`, case `c:<id>`), écriture atomique, sauvegardes, dossier `%APPDATA%\LiveDeck` |
+| `model.py` | Format de la configuration, valeurs par défaut, migrations (version 4), conversion des touches `orchestream.key` en touches d'app `deck.key` (`convert_app_keys`), modèles de surfaces, contrôles hors grille (`page["controls"]`, case `c:<id>`), écriture atomique, sauvegardes, dossier `%APPDATA%\LiveDeck` |
 | `vmix.py` | Client TCP vMix : commandes, abonnements, lecture du XML (inputs, textes, durées, transitions), état optimiste (`expect`), détection d'un vMix figé, latence |
 | `deck.py` | Stream Decks : détection à chaud, pages par numéro de série, rendu en cache, appuis, identification, diagnostic. `DeckHub` fait cohabiter les familles de surfaces derrière une seule API |
 | `loupedeck.py` | Pilote Loupedeck / Razer : découverte du port série, poignée de main « WebSocket », trames, écrans (RGB565), diodes RGB, vibration, décodage des molettes, du tactile et des boutons |
@@ -50,7 +50,7 @@ flowchart LR
 | `actions.py` | Catalogue des actions : catégories, champs de l'inspecteur, exécution, résumé, prochain appui, conversion en Take |
 | `feedback.py` | Conditions de retour d'état et retours automatiques déduits des actions |
 | `vars.py` | Texte dynamique : jetons `$(vmix:…)`, `$(time)`… remplacés en direct |
-| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), orchestream-v2 (touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton dans l'en-tête), Tally32, py-multiview (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
+| `integrations.py` | py-intercom (messages d'erreur, bus découverts, renvoi du « off »), `DeckApp` : client de l'API Stream Deck commune, une instance par app de `DECK_APPS` (orchestream-v2, py-multiview) — touches décrites par le serveur, suivies par le flux SSE `/api/deck/events` avec repli sur `/api/deck/state`, appui `POST /api/deck/commands/<commande>`, jeton facultatif (obligatoire pour orchestream) dans l'en-tête, messages au nom de l'app —, Tally32, py-multiview ancienne API (état complet sur `GET /status`, commandes `POST /<objet>/<verbe>`), tests de connexion, conversion des bricolages Companion |
 | `netsend.py` | Trames TCP / UDP brutes et encodeur OSC maison (sans dépendance) |
 | `presets.py` | Boutons prêts à l'emploi : catalogue de la touche vide, bibliothèque, intégrations à régler |
 | `render.py` | Dessin des touches (Pillow) : texte ajusté sans couper les mots, liseré, jauge d'appui long |

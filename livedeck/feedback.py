@@ -8,13 +8,14 @@ from . import adjust
 from .actions import F
 from .adjust import WIN_TARGETS
 from .health import JSON_OPS, json_compare, json_path, json_text, parse_targets
-from .integrations import MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, bus_label
+from .integrations import (DECK_APPS, DECK_DEFAULT_APP, MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS,
+                           bus_label, de, deck_name)
 
 RED, GREEN, YELLOW, BLUE = "#e5262b", "#22c55e", "#facc15", "#4040ff"
 OFF_BG, OFF_FG = "#1a1d24", "#5a6273"  # intégration indisponible : touche grisée
 BLACK, WHITE = "#000000", "#ffffff"
 
-# Couleur d'une touche orchestream (DeckKeyTone) : (allumée, éteinte). Un sens (« live » à l'antenne,
+# Couleur d'une touche décrite par une app (DeckKeyTone) : (allumée, éteinte). Un sens (« live » à l'antenne,
 # « success » en marche, « warning » quelque chose attend…) ou une couleur de la palette de la régie.
 ORCH_TONES = {
     "neutral": ("#6b7280", "#1f2937"), "accent": ("#6366f1", "#1e1b4b"), "success": ("#16a34a", "#052e16"),
@@ -23,9 +24,9 @@ ORCH_TONES = {
     "amber": ("#f59e0b", "#3a2604"), "blue": ("#3b82f6", "#0c1f4a"), "green": ("#22c55e", "#052e16"),
     "teal": ("#14b8a6", "#042f2e"), "orange": ("#f97316", "#431407"),
 }
-ORCH_KEY_STATES = [("show", "Toujours (texte, couleur et état d'orchestream)"), ("active", "Allumée"),
+DECK_KEY_STATES = [("show", "Toujours (texte, couleur et état donnés par l'app)"), ("active", "Allumée"),
                    ("inactive", "Éteinte"), ("unavailable", "Indisponible (avec la raison)"),
-                   ("offline", "orchestream injoignable ou jeton refusé")]
+                   ("offline", "App injoignable ou jeton refusé")]
 
 FLAGS = [("recording", "Enregistrement en cours"), ("streaming", "Stream en cours"),
          ("external", "Sortie externe active"), ("multicorder", "MultiCorder actif"),
@@ -52,9 +53,10 @@ CONDITIONS: dict[str, dict] = {
               "fields": [F("target", "Tally", "tally", "all"),
                          F("state", "Quand", "choice", "ko", [("ok", "Tous connectés à vMix"),
                                                              ("ko", "Au moins un hors ligne")])]},
-    "orchkey": {"label": "Touche orchestream",
-                "fields": [F("key", "Touche", "orch_key", ""),
-                           F("state", "Quand", "choice", "active", ORCH_KEY_STATES)]},
+    "deckkey": {"label": "Touche d'une app (orchestream, py-multiview…)",
+                "fields": [F("app", "App", "choice", DECK_DEFAULT_APP, [(k, v["label"]) for k, v in DECK_APPS.items()]),
+                           F("key", "Touche", "deck_key", ""),
+                           F("state", "Quand", "choice", "active", DECK_KEY_STATES)]},
     "multiview": {"label": "py-multiview",
                   "fields": [F("target", "Cible", "choice", "sender", MULTIVIEW_TARGETS),
                              F("ref", "Lequel", "mv_item", "", placeholder="nom ou numéro (1, 2…)",
@@ -112,8 +114,8 @@ def _ink(bg: str) -> str:
     return BLACK if 0.299 * r + 0.587 * g + 0.114 * b > 150 else WHITE
 
 
-def orch_key_look(key: dict) -> dict:
-    """Apparence d'une touche décrite par orchestream : texte (titre, puis ce qui est en cours ou la raison
+def deck_key_look(key: dict) -> dict:
+    """Apparence d'une touche décrite par une app : texte (titre, puis ce qui est en cours ou la raison
     d'indisponibilité), couleur vive si allumée, sombre sinon, grisée si elle ne peut pas servir."""
     title = str(key.get("title") or key.get("id") or "?")
     if key.get("available") is False:
@@ -125,9 +127,9 @@ def orch_key_look(key: dict) -> dict:
             "lit": lit if key.get("active") else ""}
 
 
-def _eval_orchkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
-    """Touche décrite par orchestream-v2 (flux /api/deck/events), retrouvée par son identifiant."""
-    orch = engine.orchestream
+def _eval_deckkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
+    """Touche décrite par une app (flux /api/deck/events), retrouvée par son app et son identifiant."""
+    orch = engine.deck(cond.get("app") or DECK_DEFAULT_APP)
     kid, state = cond.get("key") or "", cond.get("state", "active")
     if not kid:
         return False, {}
@@ -145,7 +147,7 @@ def _eval_orchkey(engine, b: dict, cond: dict) -> tuple[bool, dict]:
             return True, {"label": f"{base}\n{'INTROUVABLE' if orch.has_keys else '…'}", **grey}
         return False, {}
     if state == "show":
-        return True, orch_key_look(key)
+        return True, deck_key_look(key)
     if state == "unavailable":
         out = key.get("available") is False
         return out, ({"label": f"{key.get('title') or base}\n{_short(key.get('reason') or 'indisponible', 26)}"}
@@ -205,9 +207,10 @@ def _auto_press(b: dict) -> list[dict]:
             return [fb("intercom", "#2563eb", WHITE, bus=bus, state="active"),
                     fb("intercom", "#1e3a8a", WHITE, bus=bus, state="always_on"),
                     fb("intercom", OFF_BG, OFF_FG, bus=bus, state="offline")]
-        if t == "orchestream.key" and a.get("key"):
-            # Texte, couleur et état viennent d'orchestream (« show » : toujours vrai, l'apparence suit la touche)
-            return [fb("orchkey", key=a["key"], title=a.get("title") or "", state="show")]
+        if t == "deck.key" and a.get("key"):
+            # Texte, couleur et état viennent de l'app (« show » : toujours vrai, l'apparence suit la touche)
+            return [fb("deckkey", app=a.get("app") or DECK_DEFAULT_APP, key=a["key"], title=a.get("title") or "",
+                       state="show")]
         if t == "tally.reconnect":
             target = a.get("target", "all")
             return [fb("tally", "#237423", WHITE, target=target, state="ok"),
@@ -304,8 +307,8 @@ def evaluate(engine, b: dict, cond: dict) -> tuple[bool, dict]:
         ok = json_compare(val, cond.get("op", "=="), cond.get("value", ""))
         fmt = cond.get("label_fmt") or ""
         return ok, {"label": fmt.replace("\\n", "\n").replace("{value}", json_text(val))} if ok and fmt else {}
-    if t == "orchkey":
-        return _eval_orchkey(engine, b, cond)
+    if t == "deckkey":
+        return _eval_deckkey(engine, b, cond)
     if t == "multiview":
         mv = engine.multiview
         target, ref = cond.get("target", "sender"), cond.get("ref", "")
@@ -376,6 +379,7 @@ def _multiview_text(c: dict) -> str:
 def describe(f: dict) -> str:
     c = f["cond"]
     t = c.get("type")
+    app = deck_name(c.get("app") or DECK_DEFAULT_APP)
     inp = f"« {c.get('input')} »" if c.get("input") else "un input"
     mix = f" (Mix {c['mix']})" if int(c.get("mix") or 1) > 1 else ""
     what = {
@@ -394,9 +398,9 @@ def describe(f: dict) -> str:
                           + (f" « {c.get('value')} »" if c.get("op") not in ("truthy",) else ""))),
         "tally": "tous les tallys sont connectés" if c.get("state") == "ok" else "un tally est hors ligne",
         "multiview": _multiview_text(c),
-        "orchkey": {"show": "toujours : texte, couleur et état de la touche d'orchestream",
-                    "offline": "orchestream est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
-                    "unavailable": "la touche ne peut pas servir maintenant (texte : la raison d'orchestream)",
+        "deckkey": {"show": f"toujours : texte, couleur et état de la touche {de(app)}",
+                    "offline": f"{app} est injoignable ou refuse le jeton (texte : HORS LIGNE, JETON ?)",
+                    "unavailable": f"la touche ne peut pas servir maintenant (texte : la raison {de(app)})",
                     "inactive": f"la touche « {c.get('title') or c.get('key')} » est éteinte"}.get(
             c.get("state"), f"la touche « {c.get('title') or c.get('key')} » est allumée"),
         "flag": dict(FLAGS).get(c.get("flag"), "").lower(),
@@ -409,11 +413,17 @@ def describe(f: dict) -> str:
     }.get(t, t)
     if t == "level":
         return "Jauge et valeur du niveau réglé"
-    if t == "orchkey" and c.get("state") == "show":
-        return "Texte, couleur et état donnés par orchestream (grisée avec la raison si elle ne peut pas servir)"
+    if t == "deckkey" and c.get("state") == "show":
+        return (f"Texte, couleur et état donnés par {app} "
+                "(grisée avec la raison si elle ne peut pas servir)")
     effect = "liseré" if f.get("bar") and not f.get("bg") else "fond"
     color = f.get("bar") if effect == "liseré" else f.get("bg")
     name = {RED: "rouge", GREEN: "vert", YELLOW: "jaune", BLUE: "bleu", "#2563eb": "bleu", "#237423": "vert",
             "#cc0000": "rouge", OFF_BG: "gris", OFF_FG: "gris", "#1e3a8a": "bleu foncé", "#1d4ed8": "bleu",
             "#b45309": "orange"}.get((color or "").lower(), color or "")
     return f"{effect.capitalize()} {name} quand {what}"
+
+
+# Noms d'avant les touches décrites par d'autres apps qu'orchestream
+ORCH_KEY_STATES = DECK_KEY_STATES
+orch_key_look = deck_key_look

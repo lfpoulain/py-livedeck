@@ -6,7 +6,8 @@ import time
 
 from . import adjust, hotkeys, netsend, webreq, winsys
 from .adjust import BUSES, VMIX_STEP, VMIX_TARGETS, WIN_MODES, WIN_TARGETS
-from .integrations import MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS, UNREACHABLE, bus_label
+from .integrations import (DECK_APPS, DECK_DEFAULT_APP, MULTIVIEW_NEEDS_REF, MULTIVIEW_TARGET_LABEL, MULTIVIEW_TARGETS,
+                           UNREACHABLE, bus_label, deck_spec)
 from .webreq import error_text
 
 # Fonctions de transition de l'API vMix (FadeToBlack n'en est pas une : c'est un interrupteur, voir PRODUCTION)
@@ -27,10 +28,19 @@ MEDIA = [("playpause", "Lecture / pause"), ("next", "Piste suivante"), ("previou
          ("mute", "Couper le son (touche média)")]
 SCROLL_DIRS = [("vertical", "Verticale (haut / bas)"), ("horizontal", "Horizontale (gauche / droite)")]
 # action ou condition -> intégration (clé de Réglages → Intégrations et de integration_status)
-INTEGRATION_OF = {"intercom.ptt": "intercom", "orchestream.key": "orchestream", "tally.reconnect": "tallies",
+# (touche décrite par une app, « deck.key » / « deckkey » : l'intégration est son app, voir integration_of)
+INTEGRATION_OF = {"intercom.ptt": "intercom", "tally.reconnect": "tallies",
                   "multiview.control": "multiview", "multiview.volume": "multiview",
-                  "intercom": "intercom", "orchkey": "orchestream", "tally": "tallies",
-                  "multiview": "multiview"}
+                  "intercom": "intercom", "tally": "tallies", "multiview": "multiview"}
+DECK_TYPES = ("deck.key", "deckkey")  # action et condition d'une touche décrite par une app (/api/deck)
+
+
+def integration_of(item: dict | None) -> str | None:
+    """Intégration d'une action ou d'une condition (clé de Réglages → Intégrations), ou None."""
+    t = (item or {}).get("type")
+    if t in DECK_TYPES:
+        return (item or {}).get("app") or DECK_DEFAULT_APP
+    return INTEGRATION_OF.get(t)
 
 PRODUCTION = [("recording", "Enregistrement"), ("streaming", "Stream"), ("external", "Sortie externe"),
               ("multicorder", "MultiCorder"), ("fadetoblack", "Fondu au noir (FTB)"), ("snapshot", "Capture d'image")]
@@ -144,12 +154,15 @@ ACTIONS: dict[str, dict] = {
                                 F("mode", "Mode", "choice", "hold", PTT_MODES),
                                 F("fallback_keys", "Raccourci de secours (si py-intercom ne répond pas)",
                                   "hotkey", "")]},
-    "orchestream.key": {"label": "Orchestream", "cat": "Intégrations", "color": "#2a1f05",
-                        "help": "Une touche décrite par orchestream-v2 : jeu suivant, tirage, widget, raccourci "
-                                "Studio, fin du live, état d'une intégration… Texte, couleur et état viennent "
-                                "d'orchestream, en direct ; la touche se grise avec la raison quand elle ne peut "
-                                "pas servir. Demande l'adresse et un jeton API (Réglages → Intégrations).",
-                        "fields": [F("key", "Touche", "orch_key", "")]},
+    "deck.key": {"label": "Touche d'une app", "cat": "Intégrations", "color": "#2a1f05",
+                 "help": "Une touche décrite par l'app elle-même (API Stream Deck) : orchestream (jeu suivant, "
+                         "tirage, widget, raccourci Studio, fin du live…), py-multiview (flux, émission OMT, "
+                         "retour audio, routes…). Texte, couleur et état viennent de l'app, en direct ; la "
+                         "touche se grise avec la raison quand elle ne peut pas servir. Adresse (et jeton API "
+                         "si l'app en demande un) : Réglages → Intégrations.",
+                 "fields": [F("app", "App", "choice", DECK_DEFAULT_APP,
+                              [(k, v["label"]) for k, v in DECK_APPS.items()]),
+                            F("key", "Touche", "deck_key", "")]},
     "tally.reconnect": {"label": "Tallys : reconnecter", "cat": "Intégrations", "color": "#000000",
                         "help": "Demande aux Tally32 de se reconnecter à vMix. Le retour d'état montre en "
                                 "direct les tallys hors ligne.",
@@ -393,8 +406,8 @@ def execute(engine, a: dict, phase: str, ctx: dict) -> None:
             netsend.send("udp", host, a.get("port", 0), msg)
         except OSError as e:
             engine.log("error", f"OSC {host or '?'}:{a.get('port')} : {error_text(e, host)}")
-    elif t == "orchestream.key":
-        engine.orchestream.press(a.get("key") or "", a.get("title") or "")
+    elif t == "deck.key":
+        engine.deck(a.get("app") or DECK_DEFAULT_APP).press(a.get("key") or "", a.get("title") or "")
     elif t == "tally.reconnect":
         engine.tallies.reconnect(a.get("target", "all"))
     elif t == "multiview.control":
@@ -569,8 +582,8 @@ def summary(a: dict, page_names: dict | None = None) -> str:
             return "Intercom · couper tous les bus"
         mode = {"hold": "maintenu", "toggle": "basculer", "on": "ouvrir", "off": "fermer"}.get(a.get("mode"), "")
         return f"Intercom · {bus_label(a.get('bus'))} ({mode})"
-    if t == "orchestream.key":
-        return f"Orchestream · {a.get('title') or a.get('key') or 'touche à choisir'}"
+    if t == "deck.key":
+        return f"{deck_spec(a.get('app') or DECK_DEFAULT_APP)['label']} · "                f"{a.get('title') or a.get('key') or 'touche à choisir'}"
     if t == "net.send":
         data = a.get("payload") or ""
         return (f"{(a.get('proto') or 'tcp').upper()} {a.get('host') or '?'}:{a.get('port')} · "

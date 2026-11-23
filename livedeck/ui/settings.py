@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QGridLayou
 from .. import __version__, autostart
 from ..health import parse_targets
 from ..model import surface_of
-from ..integrations import integration_status, probe_intercom, probe_multiview, probe_orchestream, probe_tally
+from ..integrations import (DECK_APPS, integration_status, probe_deck, probe_intercom, probe_multiview,
+                            probe_tally)
 from . import theme as T
 from .widgets import Seg, label
 
@@ -81,7 +82,7 @@ class SettingsDialog(QDialog):
         self._probe = _Probe(self)
         self._probe.done.connect(self._probe_done)
         # fenêtre ouverte : les intégrations sont surveillées même si aucune touche ne les utilise encore
-        for svc in (engine.intercom, engine.orchestream, engine.tallies, engine.multiview):
+        for svc in (engine.intercom, *engine.deck_apps.values(), engine.tallies, engine.multiview):
             svc.set_forced(True)
         self._timer = QTimer(self, interval=500, timeout=self._refresh_status)
         self._timer.start()
@@ -92,7 +93,8 @@ class SettingsDialog(QDialog):
         # minuteur continuait d'interroger les intégrations deux fois par seconde, une fois de plus
         # à chaque ouverture des Réglages.
         self._timer.stop()
-        for svc in (self.engine.intercom, self.engine.orchestream, self.engine.tallies, self.engine.multiview):
+        for svc in (self.engine.intercom, *self.engine.deck_apps.values(), self.engine.tallies,
+                    self.engine.multiview):
             svc.set_forced(False)
         super().done(r)
 
@@ -243,6 +245,7 @@ class SettingsDialog(QDialog):
         integ = self.engine.cfg["integrations"]
         w, v = _page()
         self._tests: dict = {}
+        self._deck_edits: dict = {}  # app -> (adresse, jeton)
         v.addWidget(label("PY-INTERCOM  ·  TALKBACK", "H2"))
         row = QHBoxLayout()
         self.ic_host = QLineEdit(integ["intercom"].get("host", "127.0.0.1"))
@@ -261,23 +264,15 @@ class SettingsDialog(QDialog):
 
         v.addSpacing(6)
         v.addWidget(label("ORCHESTREAM  ·  TOUCHES DE LA RÉGIE", "H2"))
-        self.orch_url = QLineEdit(integ["orchestream"].get("url", ""))
-        self.orch_url.setPlaceholderText("http://serveur:5174")
-        v.addWidget(self.orch_url)
         # API Stream Deck d'orchestream-v2 : jeton dans l'en-tête, jamais dans l'URL.
-        row = QHBoxLayout()
-        row.addWidget(label("Jeton API", "Muted"))
-        self.orch_token = QLineEdit(integ["orchestream"].get("token", ""))
-        self.orch_token.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
-        self.orch_token.setPlaceholderText("osk_…")
-        self.orch_token.setToolTip("Jeton de l'API Stream Deck d'orchestream-v2 : dans orchestream, Réglages › "
-                                   "Sécurité › Jetons API (Stream Deck). Il n'est affiché qu'une fois à sa création ; "
-                                   "ses permissions décident des touches proposées.")
-        row.addWidget(self.orch_token, 1)
-        v.addLayout(row)
+        self.orch_url, self.orch_token = self._deck_fields(
+            v, "orchestream", "Jeton de l'API Stream Deck d'orchestream-v2 : dans orchestream, Réglages › "
+            "Sécurité › Jetons API (Stream Deck). Il n'est affiché qu'une fois à sa création ; ses permissions "
+            "décident des touches proposées.", "osk_…")
         self.orch_status = self._test_row(v, "orchestream")
         v.addWidget(label("orchestream décrit lui-même chaque touche (texte, couleur, état) et l'envoie en direct : "
-                          "choisis-la dans l'action « Orchestream » de l'inspecteur.", "Hint", True))
+                          "choisis-la dans l'action « Touche d'une app » de l'inspecteur, ou dans la "
+                          "bibliothèque (Intégrations).", "Hint", True))
 
         v.addSpacing(6)
         v.addWidget(label("TALLY32  ·  TALLYS ESP32", "H2"))
@@ -290,19 +285,51 @@ class SettingsDialog(QDialog):
 
         v.addSpacing(6)
         v.addWidget(label("PY-MULTIVIEW  ·  MULTIVIEWER SRT/OMT", "H2"))
-        self.mv_url = QLineEdit((integ.get("multiview") or {}).get("url", ""))
-        self.mv_url.setPlaceholderText("192.168.1.42:5090")
-        self.mv_url.setToolTip("Adresse du poste py-multiview. Le port 5090 est ajouté s'il manque.\n"
-                               "Dans py-multiview : Préférences → Pilotage à distance → Ouvrir l'API locale, "
-                               "en décochant « Ce poste uniquement ».")
-        v.addWidget(self.mv_url)
+        self.mv_url, self.mv_token = self._deck_fields(
+            v, "multiview", "Facultatif : seulement si un jeton est réglé dans py-multiview (Préférences → "
+            "Pilotage à distance). Vide : accès libre.", "facultatif")
+        self.mv_url.setToolTip("Adresse du poste py-multiview (vide : ce poste, 127.0.0.1:5090). Le port 5090 est "
+                               "ajouté s'il manque.\nDans py-multiview : Préférences → Pilotage à distance → Ouvrir "
+                               "l'API locale, en décochant « Ce poste uniquement » si LiveDeck tourne sur un autre PC.")
         self.mv_status = self._test_row(v, "multiview")
+        v.addWidget(label("py-multiview décrit lui-même ses touches (réception, flux, son, émission OMT, retour, "
+                          "routes) et les met à jour en direct : bibliothèque (Intégrations) ou action « Touche "
+                          "d'une app ». Les touches « py-multiview » déjà posées continuent de marcher.",
+                          "Hint", True))
+        # Autres apps qui exposent l'API Stream Deck commune : une section chacune
+        self.deck_status: dict = {}
+        for app, spec in DECK_APPS.items():
+            if app in ("orchestream", "multiview"):
+                continue
+            v.addSpacing(6)
+            v.addWidget(label(f"{spec['name'].upper()}  ·  TOUCHES DÉCRITES PAR L'APP", "H2"))
+            self._deck_fields(v, app, f"Jeton API {'(obligatoire)' if spec['token_required'] else '(facultatif)'} : "
+                                      f"{spec['token_where']}.", "" if spec["token_required"] else "facultatif")
+            self.deck_status[app] = self._test_row(v, app)
 
         v.addWidget(label("Une intégration ne travaille que si une touche l'utilise (bibliothèque « Boutons » → "
                           "Intégrations) ; pendant que cette fenêtre est ouverte, elles sont toutes surveillées.",
                           "Hint", True))
         v.addStretch()
         return w
+
+    def _deck_fields(self, v, app: str, token_tip: str, token_hint: str) -> tuple[QLineEdit, QLineEdit]:
+        """Adresse et jeton API d'une app qui décrit ses touches (/api/deck)."""
+        spec = DECK_APPS[app]
+        block = self.engine.cfg["integrations"].get(spec["cfg"]) or {}
+        url = QLineEdit(block.get("url", ""))
+        url.setPlaceholderText(f"{spec['default']} (par défaut)" if spec["default"] else spec["example"])
+        v.addWidget(url)
+        row = QHBoxLayout()
+        row.addWidget(label("Jeton API", "Muted"))
+        token = QLineEdit(block.get("token", ""))
+        token.setEchoMode(QLineEdit.PasswordEchoOnEdit)  # masqué, sauf pendant la saisie
+        token.setPlaceholderText(token_hint)
+        token.setToolTip(token_tip)
+        row.addWidget(token, 1)
+        v.addLayout(row)
+        self._deck_edits[app] = (url, token)
+        return url, token
 
     def _test(self, key: str) -> None:
         btn, result = self._tests[key]
@@ -314,16 +341,16 @@ class SettingsDialog(QDialog):
 
             def run():
                 return probe_intercom(host, port)
-        elif key == "orchestream":
-            url, token = self.orch_url.text(), self.orch_token.text()
-
-            def run():
-                return probe_orchestream(url, token)
         elif key == "multiview":
-            mv_url = self.mv_url.text()
+            mv_url, mv_token = self.mv_url.text(), self.mv_token.text()
 
             def run():
-                return probe_multiview(mv_url)
+                return probe_multiview(mv_url, mv_token)
+        elif key in self._deck_edits:
+            url, token = (w.text() for w in self._deck_edits[key])
+
+            def run():
+                return probe_deck(key, url, token)
         else:
             devices = parse_targets(self.tallies.toPlainText())
 
@@ -356,7 +383,7 @@ class SettingsDialog(QDialog):
                                  _dot(False) + "Non connecté. L'API TCP de vMix (port 8099) est active par défaut ; "
                                  "si vMix tourne sur un autre PC, indique son IP.")
         labels = {"intercom": self.ic_status, "orchestream": self.orch_status, "tallies": self.tally_status,
-                  "multiview": self.mv_status}
+                  "multiview": self.mv_status, **self.deck_status}
         for key, _, ok, text in integration_status(e):
             if key in labels:
                 labels[key].setText(_dot(ok) + html.escape(text))
@@ -375,6 +402,7 @@ class SettingsDialog(QDialog):
                  for serial, page, bright, haptic in self.deck_rows}
         moved = [s for s, (pg, _, _) in decks.items() if pg and pg != (e.cfg["decks"].get(s) or {}).get("page")]
         tallies = [{"name": n, "host": h} for n, h in parse_targets(self.tallies.toPlainText())]
+        deck = {app: (u.text().strip(), t.text().strip()) for app, (u, t) in self._deck_edits.items()}
 
         def apply(cfg):
             cfg["vmix"] = {"host": host, "port": int(port)}
@@ -393,10 +421,11 @@ class SettingsDialog(QDialog):
             integ = cfg["integrations"]
             integ["intercom"] = {**(integ.get("intercom") or {}), "host": self.ic_host.text().strip() or "127.0.0.1",
                                  "port": self.ic_port.value()}
-            integ["orchestream"] = {**(integ.get("orchestream") or {}), "url": self.orch_url.text().strip(),
-                                    "token": self.orch_token.text().strip()}
             integ["tallies"] = tallies
-            integ["multiview"] = {**(integ.get("multiview") or {}), "url": self.mv_url.text().strip()}
+            for app, (url, token) in deck.items():
+                block = integ[DECK_APPS[app]["cfg"]] = {**(integ.get(DECK_APPS[app]["cfg"]) or {}), "url": url}
+                if token or "token" in block:
+                    block["token"] = token  # pas de clé vide ajoutée : rien de modifié, pas d'« annuler »
         trial = copy.deepcopy(e.cfg)
         apply(trial)
         if trial != e.cfg:  # rien de modifié : pas d'étape « annuler » inutile

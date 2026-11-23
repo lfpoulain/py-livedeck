@@ -1,5 +1,5 @@
-"""Intégrations maison : py-intercom (talkback), orchestream-v2 (touches de la régie), Tally32 (tallys ESP32),
-py-multiview (multiviewer SRT/OMT).
+"""Intégrations maison : py-intercom (talkback), Tally32 (tallys ESP32), py-multiview (multiviewer SRT/OMT),
+et les apps qui exposent l'API Stream Deck commune /api/deck (orchestream-v2, py-multiview…).
 
 Chaque client tourne dans son propre thread et ne travaille que si une touche l'utilise (ou pendant que la
 fenêtre Réglages est ouverte). Les appels vers ces services ne passent jamais par un proxy quand l'adresse
@@ -244,7 +244,7 @@ class Intercom(_Service):
     def _set_reachable(self, ok: bool, why: str = "") -> None:
         self.error = "" if ok else why
         if ok != self.reachable:
-            if self.reachable is not None or not ok:
+            if (self.reachable is not None or not ok) and self.wanted:
                 self._log("info" if ok else "warn", f"py-intercom joignable ({self.base})" if ok
                           else (why or f"py-intercom injoignable ({self.base})"))
             self.reachable = ok
@@ -370,11 +370,12 @@ class Intercom(_Service):
         return ""
 
 
-# --- orchestream-v2 : touches décrites par le serveur (API Stream Deck, jeton) ----------------
+# --- API Stream Deck commune (/api/deck) : touches décrites par le serveur -------------------------
 #
-# orchestream décrit lui-même chaque touche que le jeton peut poser (docs/STREAM_DECK.md, « Touches ») :
-# identifiant stable, rubrique, commande et arguments, texte, couleur, allumée ou non, disponible ou non.
-# LiveDeck n'a donc aucune liste de commandes en dur : une touche enregistre seulement son « id ».
+# Contrat défini par orchestream-v2 (docs/STREAM_DECK.md) et repris par les autres apps (py-multiview…) :
+# chaque app décrit elle-même les touches qu'elle propose (identifiant stable, rubrique, commande et
+# arguments, texte, couleur, allumée ou non, disponible ou non) et pousse les changements en direct.
+# LiveDeck n'a donc aucune liste de commandes en dur : une touche enregistre l'app et l'« id » de la touche.
 
 
 def normalize_url(url: str) -> str:
@@ -384,8 +385,62 @@ def normalize_url(url: str) -> str:
     return url
 
 
+# Apps qui exposent /api/deck. « cfg » : bloc de Réglages → Intégrations (l'adresse de py-multiview sert aussi
+# à son ancienne API) ; « default » : adresse quand rien n'est saisi ; « token_required » : sans jeton, rien
+# n'est envoyé (orchestream refuse tout) ; sinon le jeton est facultatif, et seul un 401 dit qu'il en faut un.
+DECK_APPS: dict[str, dict] = {
+    "orchestream": {"name": "orchestream", "label": "Orchestream", "cfg": "orchestream", "default": "",
+                    "example": "http://serveur:5174", "token_required": True,
+                    "token_where": "dans orchestream, Réglages › Sécurité › Jetons API",
+                    "public_404": True, "port": None},
+    "multiview": {"name": "py-multiview", "label": "py-multiview", "cfg": "multiview",
+                  "default": "http://127.0.0.1:5090", "example": "192.168.1.42:5090", "token_required": False,
+                  "token_where": "dans py-multiview, Préférences → Pilotage à distance",
+                  "public_404": False, "port": 5090},
+}
+DECK_DEFAULT_APP = "orchestream"  # touches enregistrées avant l'arrivée des autres apps
+
+
+def deck_spec(app: str) -> dict:
+    return DECK_APPS.get(app) or {"name": app or "?", "label": app or "?", "cfg": app, "default": "",
+                                  "example": "http://poste:port", "token_required": False,
+                                  "token_where": "dans l'app", "public_404": False, "port": None}
+
+
+def deck_name(app: str) -> str:
+    return deck_spec(app)["name"]
+
+
+def de(name: str) -> str:
+    """« de py-multiview », « d'orchestream »."""
+    return f"d'{name}" if name[:1].lower() in "aeéèêiîoôuyh" else f"de {name}"
+
+
+def deck_url(app: str, url: str) -> str:
+    """Adresse normalisée d'une app : celle par défaut si rien n'est saisi, port ajouté s'il manque."""
+    spec = deck_spec(app)
+    url = normalize_url(url or spec["default"])
+    if url and spec["port"]:
+        scheme, _, rest = url.partition("://")
+        host, _, path = rest.partition("/")
+        if ":" not in host.strip("[]") or host.endswith("]"):
+            url = f"{scheme}://{host}:{spec['port']}" + (f"/{path}" if path else "")
+    return url
+
+
+def deck_config(cfg: dict, app: str) -> tuple[str, str]:
+    """(adresse, jeton) réglés pour une app, adresse par défaut comprise."""
+    block = (cfg.get("integrations") or {}).get(deck_spec(app)["cfg"]) or {}
+    return deck_url(app, str(block.get("url") or "")), str(block.get("token") or "").strip()
+
+
+def deck_configured(cfg: dict, app: str) -> bool:
+    url, token = deck_config(cfg, app)
+    return bool(url) and (bool(token) or not deck_spec(app)["token_required"])
+
+
 def _orch_message(data) -> str:
-    """Message d'erreur d'orchestream : {"error": {"code", "message"}} (ou {"message": "…"})."""
+    """Message d'erreur de l'API : {"error": {"code", "message"}} (ou {"message": "…"})."""
     if not isinstance(data, dict):
         return ""
     err = data.get("error")
@@ -399,33 +454,49 @@ def _orch_code(data) -> str:
     return str(err.get("code") or "") if isinstance(err, dict) else ""
 
 
-TOKEN_HELP = ("crée-en un dans orchestream (Réglages › Sécurité › Jetons API) et colle-le dans "
-              "Réglages → Intégrations")
+def token_help(app: str = DECK_DEFAULT_APP) -> str:
+    return f"crée-en un {deck_spec(app)['token_where']} et colle-le dans Réglages → Intégrations"
 
 
-def explain_orchestream(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
-    """Message en français d'un échec de l'API Stream Deck d'orchestream-v2."""
+TOKEN_HELP = token_help("orchestream")
+
+
+def explain_deck(app: str, url: str, status: int | None = None, data=None, exc: BaseException | None = None,
+                 token: str | None = None) -> str:
+    """Message en français d'un échec de l'API Stream Deck d'une app. token="" : aucun jeton envoyé."""
+    spec = deck_spec(app)
+    name = spec["name"]
     host, where = _hostport(url)
     if exc is not None:
         kind = error_kind(exc, host)
         if kind == "refused":
-            return f"orchestream ne répond pas sur {where} : le serveur est-il lancé, l'adresse et le port sont-ils bons ?"
-        return _net_text(kind, "orchestream", where)
+            return f"{name} ne répond pas sur {where} : le serveur est-il lancé, l'adresse et le port sont-ils bons ?"
+        return _net_text(kind, name, where)
     if _is_proxy_reply(status or 0, data):
-        return _net_text("proxy", "orchestream", where) + f" (HTTP {status})"
+        return _net_text("proxy", name, where) + f" (HTTP {status})"
     code, msg = _orch_code(data), _orch_message(data)
     if status == 401:
-        return f"orchestream refuse le jeton API (absent, inconnu ou révoqué) : {TOKEN_HELP}"
+        if token == "" and not spec["token_required"]:
+            return f"{name} demande un jeton API : {token_help(app)}"
+        return f"{name} refuse le jeton API (absent, inconnu ou révoqué) : {token_help(app)}"
     if status == 403:
-        return f"orchestream : {msg or 'le jeton n’a pas la permission de cette commande'}"
-    if status == 404 and code == "NOT_FOUND":  # adresse publique / tunnel : la régie n'y répond pas
+        return f"{name} : {msg or 'le jeton n’a pas la permission de cette commande'}"
+    if status == 404 and code == "NOT_FOUND" and spec["public_404"]:  # adresse publique : pas de régie
         return (f"{where} est bien orchestream-v2, mais il refuse la régie par cette adresse (adresse publique "
                 "ou tunnel) : utilise son adresse locale, ex. http://192.168.1.20:5174")
     if status == 404 and code != "COMMAND_NOT_FOUND":
-        return f"{where} répond, mais sans l'API Stream Deck d'orchestream-v2 (/api/deck) : vérifie l'adresse"
+        if app == "orchestream":
+            return f"{where} répond, mais sans l'API Stream Deck d'orchestream-v2 (/api/deck) : vérifie l'adresse"
+        return (f"{where} répond, mais sans l'API Stream Deck (/api/deck) : vérifie l'adresse, ou mets "
+                f"{name} à jour")
     if status == 429:
-        return f"orchestream : {msg or 'trop de requêtes, réessaie dans un instant'}"
-    return f"orchestream : {msg or f'erreur {status}'}"
+        return f"{name} : {msg or 'trop de requêtes, réessaie dans un instant'}"
+    return f"{name} : {msg or f'erreur {status}'}"
+
+
+def explain_orchestream(url: str, status: int | None = None, data=None, exc: BaseException | None = None) -> str:
+    """Message en français d'un échec de l'API Stream Deck d'orchestream-v2."""
+    return explain_deck("orchestream", url, status, data, exc)
 
 
 def _read_json(resp) -> object:
@@ -435,12 +506,19 @@ def _read_json(resp) -> object:
         return None
 
 
+def _auth_headers(token: str, accept: str = "application/json") -> dict:
+    """Jeton dans l'en-tête Authorization, seulement s'il est rempli (jamais dans l'URL)."""
+    headers = {"Accept": accept}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _deck_request(method: str, url: str, token: str, body: dict | None = None,
                   timeout: float = 3.0) -> tuple[int, object, dict]:
-    """Requête vers /api/deck : jeton dans l'en-tête Authorization (jamais dans l'URL, qu'orchestream
-    refuse de lire). (statut, JSON, en-têtes). Lève NET_ERRORS si injoignable."""
+    """Requête vers /api/deck : (statut, JSON, en-têtes). Lève NET_ERRORS si injoignable."""
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = _auth_headers(token)
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -455,69 +533,91 @@ def _is_state(status: int, data) -> bool:
     return status == 200 and isinstance(data, dict) and isinstance(data.get("commands"), list)
 
 
-def probe_orchestream(url: str, token: str, timeout: float = 4.0) -> tuple[bool | None, str]:
-    """Test ponctuel (bouton « Tester ») : jeton accepté, et les touches qu'il permet."""
-    url = normalize_url(url)
+def probe_deck(app: str, url: str, token: str, timeout: float = 4.0) -> tuple[bool | None, str]:
+    """Test ponctuel (bouton « Tester ») : API joignable, jeton accepté, et les touches proposées."""
+    spec = deck_spec(app)
+    name = spec["name"]
+    url, token = deck_url(app, url), (token or "").strip()
     if not url:
-        return None, "Adresse d'orchestream à renseigner (ex. http://serveur:5174)."
-    if not (token or "").strip():
-        return None, "Jeton API à renseigner (orchestream : Réglages › Sécurité › Jetons API)."
+        return None, f"Adresse de {name} à renseigner (ex. {spec['example']})."
+    if not token and spec["token_required"]:
+        return None, f"Jeton API à renseigner ({spec['token_where']})."
     try:
-        status, data, _ = _deck_request("GET", f"{url}/api/deck/state", token.strip(), timeout=timeout)
+        status, data, _ = _deck_request("GET", f"{url}/api/deck/state", token, timeout=timeout)
     except NET_ERRORS as e:
-        return False, explain_orchestream(url, exc=e)
+        return False, explain_deck(app, url, exc=e)
     if _is_state(status, data):
         tok = data.get("token") or {}
         keys = data.get("keys")
-        live = "live en cours" if (data.get("live") or {}).get("active") else "aucun live en cours"
+        who = (f"jeton « {tok.get('name') or '?'} » accepté" if token else
+               f"API Stream Deck ({tok.get('name') or 'accès libre'})")
         if not isinstance(keys, list):
-            return False, (f"jeton « {tok.get('name') or '?'} » accepté, mais cet orchestream ne décrit pas les "
-                           "touches (version trop ancienne) : mets orchestream-v2 à jour")
-        return True, f"jeton « {tok.get('name') or '?'} » accepté · {len(keys)} touche(s) · {live}"
-    return False, explain_orchestream(url, status, data)
+            return False, (f"{who}, mais cet {name} ne décrit pas les touches (version trop ancienne) : "
+                           f"mets {name} à jour")
+        extra = []
+        if app == "orchestream":
+            extra.append("live en cours" if (data.get("live") or {}).get("active") else "aucun live en cours")
+        return True, " · ".join([who, f"{len(keys)} touche(s)"] + extra)
+    return False, explain_deck(app, url, status, data, token=token)
+
+
+def probe_orchestream(url: str, token: str, timeout: float = 4.0) -> tuple[bool | None, str]:
+    return probe_deck("orchestream", url, token, timeout)
 
 
 class _StreamUnavailable(Exception):
-    """Le flux /api/deck/events ne s'ouvre pas, mais orchestream répond : lecture de l'état en secours."""
+    """Le flux /api/deck/events ne s'ouvre pas, mais l'app répond : lecture de l'état en secours."""
 
 
-class Orchestream(_Service):
-    """API Stream Deck d'orchestream-v2, authentifiée par un jeton API (en-tête uniquement).
+class DeckApp(_Service):
+    """Client de l'API Stream Deck commune d'une app (orchestream-v2, py-multiview…), une instance par app.
+    Jeton facultatif (obligatoire pour orchestream), envoyé seulement dans l'en-tête Authorization.
 
     L'état et les touches arrivent par le flux en direct GET /api/deck/events : « state » (tout) à
     l'ouverture, puis « patch » (sections changées, touches modifiées, touches disparues). Le serveur
     regarde chaque seconde : la touche change dans la seconde, sans interroger. Flux coupé : reconnexion
-    avec un délai croissant, et un nouvel état complet. Si le flux ne s'ouvre pas alors qu'orchestream
-    répond, l'état est relu chaque seconde sur GET /api/deck/state, et le flux retenté régulièrement.
+    avec un délai croissant, et un nouvel état complet. Si le flux ne s'ouvre pas alors que l'app répond,
+    l'état est relu chaque seconde sur GET /api/deck/state, et le flux retenté régulièrement.
     Appuyer : POST /api/deck/commands/<commande> avec les arguments que donne la touche."""
 
-    STALL = 45.0       # orchestream envoie un commentaire toutes les 25 s : 45 s sans rien = flux perdu
-    POLL = 1.0         # secours : lecture de l'état (limite : 120 lectures par 10 s et par jeton)
+    STALL = 45.0       # le serveur envoie un commentaire toutes les 25 s : 45 s sans rien = flux perdu
+    POLL = 1.0         # secours : lecture de l'état (orchestream : 120 lectures par 10 s et par jeton)
     RETRY_STREAM = 30.0  # secours : le flux est retenté au bout de ce délai
 
-    def __init__(self, on_change, log):
+    def __init__(self, app: str, on_change, log):
         super().__init__(on_change, log)
+        self.app = app
+        self.spec = deck_spec(app)
+        self.name = self.spec["name"]
         self.url = ""
         self.token = ""
         self.connected = False
         self.mode = ""     # "stream" (flux en direct) ou "poll" (secours), une fois connecté
         self.error = ""
+        self.auth_failed = False         # dernier refus : 401 (jeton absent, inconnu ou révoqué)
         self.state: dict = {}            # DeckState sans les touches
-        self.keys: dict[str, dict] = {}  # id -> DeckKey, dans l'ordre d'orchestream
+        self.keys: dict[str, dict] = {}  # id -> DeckKey, dans l'ordre de l'app
         self.has_keys = False            # une liste de touches a été reçue (sinon : rien à juger)
         self._retry_at = 0.0             # 429 : pas de nouvelle requête avant (Retry-After)
         self._lock = threading.Lock()
         self._resp = None                # flux ouvert, fermé de force quand il faut s'arrêter
 
+    def start(self) -> None:
+        threading.Thread(target=self._guarded, name=f"deck-{self.app}", daemon=True).start()
+
     def configure(self, url: str, token: str) -> None:
-        url, token = normalize_url(url), (token or "").strip()
+        url, token = deck_url(self.app, url), (token or "").strip()
         if (url, token) != (self.url, self.token):
             self.url, self.token = url, token
             with self._lock:
                 self.state, self.keys, self.has_keys = {}, {}, False
-            self.error = ""
+            self.error, self.auth_failed = "", False
             self._abort()
             self._wake.set()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.url) and (bool(self.token) or not self.spec["token_required"])
 
     def set_wanted(self, wanted: bool) -> None:
         super().set_wanted(wanted)
@@ -549,13 +649,16 @@ class Orchestream(_Service):
 
     # -- lecture -------------------------------------------------------------------------------
     def unavailable(self) -> str:
-        """Pourquoi les touches ne peuvent pas servir (texte court pour la touche), ou "" si tout va bien."""
+        """Pourquoi les touches ne peuvent pas servir (texte court pour la touche), ou "" si tout va bien.
+        « JETON ? » : il en faut un et il manque ; « JETON REFUSÉ » : celui qui est réglé est refusé."""
         if not self.url:
             return "ADRESSE ?"
-        if not self.token:
+        if not self.token and self.spec["token_required"]:
             return "JETON ?"
         if not self.connected:
-            return "JETON REFUSÉ" if self.error.startswith("orchestream refuse le jeton") else "HORS LIGNE"
+            if self.auth_failed:
+                return "JETON REFUSÉ" if self.token else "JETON ?"
+            return "HORS LIGNE"
         return ""
 
     def key(self, key_id: str) -> dict | None:
@@ -563,7 +666,7 @@ class Orchestream(_Service):
             return self.keys.get(key_id)
 
     def key_list(self) -> list[dict]:
-        """Touches que le jeton peut poser, dans l'ordre d'orchestream (rubriques « Live », « Jeux »…)."""
+        """Touches proposées, dans l'ordre de l'app (rubriques « Live », « Jeux »…)."""
         with self._lock:
             return list(self.keys.values())
 
@@ -577,24 +680,29 @@ class Orchestream(_Service):
             cur = cur.get(part)
         return cur
 
+    def _explain(self, status: int | None = None, data=None, exc: BaseException | None = None,
+                 url: str | None = None) -> str:
+        return explain_deck(self.app, url or self.url, status, data, exc, token=self.token)
+
     def _set_connected(self, ok: bool, why: str = "", mode: str = "") -> None:
         if ok:
-            self.error = ""
+            self.error, self.auth_failed = "", False
         elif why and why != self.error:
             self.error = why
-            self._log("warn", why)
+            if self.wanted:  # seulement surveillée (Réglages ouverts) : l'état s'affiche, sans journal
+                self._log("warn", why)
         if ok and mode != self.mode:
             self.mode = mode
             if self.connected:
-                self._log("info", "orchestream : flux en direct rétabli" if mode == "stream" else
-                          "orchestream : flux en direct indisponible, lecture de l'état chaque seconde")
+                self._log("info", f"{self.name} : flux en direct rétabli" if mode == "stream" else
+                          f"{self.name} : flux en direct indisponible, lecture de l'état chaque seconde")
                 self._on_change()
         if ok != self.connected:
             self.connected = ok
             if ok:
                 self.mode = mode
                 how = "flux en direct" if mode == "stream" else "lecture de l'état chaque seconde (secours)"
-                self._log("info", f"orchestream connecté ({self.url}, {how})")
+                self._log("info", f"{self.name} connecté ({self.url}, {how})")
             self._on_change()
 
     @staticmethod
@@ -636,7 +744,7 @@ class Orchestream(_Service):
         delay = 1.0
         poll_until = 0.0  # secours en cours jusqu'à cette heure, puis on retente le flux
         while not self._stop.is_set():
-            if not (self.active and self.url and self.token):
+            if not (self.active and self.configured):
                 self._set_connected(False)
                 self._sleep(5)
                 continue
@@ -659,7 +767,7 @@ class Orchestream(_Service):
                 delay = 1.0  # le flux avait abouti puis s'est fermé (jeton révoqué, serveur relancé) : vite
             except _StreamUnavailable as e:
                 if self._poll_once(url, token):
-                    self._log("warn", f"orchestream : flux en direct indisponible ({e}), lecture de l'état "
+                    self._log("warn", f"{self.name} : flux en direct indisponible ({e}), lecture de l'état "
                                       "chaque seconde en attendant")
                     poll_until = time.monotonic() + self.RETRY_STREAM
                     delay = 1.0
@@ -668,11 +776,12 @@ class Orchestream(_Service):
             except urllib.error.HTTPError as e:
                 data = _peek_json(e)
                 self._throttle(e.code, dict(e.headers or {}))
-                why = explain_orchestream(url, e.code, data)
-                if e.code == 401:  # jeton révoqué : orchestream bloque un jeton présenté 30 fois par minute
+                why = self._explain(e.code, data, url=url)
+                self.auth_failed = e.code == 401
+                if e.code == 401:  # jeton refusé : orchestream bloque un jeton présenté 30 fois par minute
                     delay = max(delay, 10.0)
             except NET_ERRORS as e:
-                why = "" if not self._alive(url, token) else explain_orchestream(url, exc=e)
+                why = "" if not self._alive(url, token) else self._explain(exc=e, url=url)
             if not self._alive(url, token):
                 continue
             self._set_connected(False, why)
@@ -681,8 +790,9 @@ class Orchestream(_Service):
 
     def _stream(self, url: str, token: str) -> None:
         """Ouvre GET /api/deck/events et applique les messages tant que le service en a besoin."""
-        req = urllib.request.Request(f"{url}/api/deck/events", headers={
-            "Authorization": f"Bearer {token}", "Accept": "text/event-stream", "Cache-Control": "no-cache"})
+        headers = _auth_headers(token, "text/event-stream")
+        headers["Cache-Control"] = "no-cache"
+        req = urllib.request.Request(f"{url}/api/deck/events", headers=headers)
         try:
             resp = open_url(req, self.STALL)
         except urllib.error.HTTPError as e:
@@ -730,7 +840,7 @@ class Orchestream(_Service):
             status, data, headers = _deck_request("GET", f"{url}/api/deck/state", token)
         except NET_ERRORS as e:
             if self._alive(url, token):
-                self._set_connected(False, explain_orchestream(url, exc=e))
+                self._set_connected(False, self._explain(exc=e, url=url))
             return False
         if not self._alive(url, token):
             return False
@@ -745,7 +855,8 @@ class Orchestream(_Service):
             self._set_connected(True, mode="poll")
             return True
         self._throttle(status, headers)
-        self._set_connected(False, explain_orchestream(url, status, data))
+        self.auth_failed = status == 401
+        self._set_connected(False, self._explain(status, data, url=url))
         return False
 
     def _throttle(self, status: int, headers: dict) -> None:
@@ -759,47 +870,55 @@ class Orchestream(_Service):
 
     # -- appui ---------------------------------------------------------------------------------
     def press(self, key_id: str, title: str = "") -> bool:
-        """Lance la commande de la touche avec ses arguments ; journalise la réponse d'orchestream (déjà en
+        """Lance la commande de la touche avec ses arguments ; journalise la réponse de l'app (déjà en
         français). Une touche d'état (sans commande) ne fait rien."""
+        n = self.name
         if not self.url:
-            self._log("error", "orchestream : adresse non réglée (Réglages → Intégrations)")
+            self._log("error", f"{n} : adresse non réglée (Réglages → Intégrations)")
             return False
-        if not self.token:
-            self._log("error", "orchestream : jeton API non réglé (Réglages → Intégrations)")
+        if not self.token and self.spec["token_required"]:
+            self._log("error", f"{n} : jeton API non réglé (Réglages → Intégrations)")
             return False
         k = self.key(key_id)
         name = (k or {}).get("title") or title or key_id or "?"
         if k is None:
             if not key_id:
-                self._log("error", "orchestream : aucune touche choisie (inspecteur → action Orchestream)")
+                self._log("error", f"{n} : aucune touche choisie (inspecteur → action {self.spec['label']})")
             elif self.has_keys:
-                self._log("error", f"orchestream · {name} : touche « {key_id} » inconnue d'orchestream "
+                self._log("error", f"{n} · {name} : touche « {key_id} » inconnue {de(n)} "
                                    "(supprimée, ou non permise à ce jeton)")
             else:
-                self._log("error", f"orchestream · {name} : liste des touches pas encore reçue "
+                self._log("error", f"{n} · {name} : liste des touches pas encore reçue "
                                    f"({self.error or 'connexion en cours'})")
             return False
         command = k.get("command")
         if not command:
             return False  # touche d'état : elle ne fait qu'afficher
-        args = {str(n): str(v) for n, v in (k.get("args") or {}).items()} if isinstance(k.get("args"), dict) else {}
+        args = {str(a): str(v) for a, v in (k.get("args") or {}).items()} if isinstance(k.get("args"), dict) else {}
         body = {"args": args} if args else {}
         path = urllib.parse.quote(str(command), safe=".")
         try:
             status, data, headers = _deck_request("POST", f"{self.url}/api/deck/commands/{path}", self.token, body)
         except NET_ERRORS as e:
-            self._log("error", f"orchestream · {name} : {explain_orchestream(self.url, exc=e)}")
+            self._log("error", f"{n} · {name} : {self._explain(exc=e)}")
             return False
         if 200 <= status < 300:
             msg = data.get("message") if isinstance(data, dict) else ""
-            self._log("info", f"orchestream · {msg or name}")
+            self._log("info", f"{n} · {msg or name}")
             if self.mode == "poll":
                 self._wake.set()  # secours : relit l'état tout de suite (le flux, lui, l'envoie de lui-même)
             return True
         self._throttle(status, headers)
-        self._log("error", f"orchestream · {name} : "
-                           f"{explain_orchestream(self.url, status, data).removeprefix('orchestream : ')}")
+        self.auth_failed = status == 401
+        self._log("error", f"{n} · {name} : {self._explain(status, data).removeprefix(f'{n} : ')}")
         return False
+
+
+class Orchestream(DeckApp):
+    """API Stream Deck d'orchestream-v2 (jeton obligatoire)."""
+
+    def __init__(self, on_change, log):
+        super().__init__("orchestream", on_change, log)
 
 
 def _peek_json(e: urllib.error.HTTPError) -> object:
@@ -955,11 +1074,10 @@ def explain_multiview(url: str, status: int | None = None, data=None, exc: BaseE
     return f"py-multiview : {where} a répondu HTTP {status}"
 
 
-def probe_multiview(url: str, timeout: float = 4.0) -> tuple[bool | None, str]:
-    """Test ponctuel (bouton « Tester ») : (True joignable / False, message)."""
-    url = multiview_url(url)
-    if not url:
-        return None, "Adresse non renseignée (ex. 192.168.1.42:5090)."
+def probe_multiview(url: str, token: str = "", timeout: float = 4.0) -> tuple[bool | None, str]:
+    """Test ponctuel (bouton « Tester ») : l'API d'origine (GET /status), puis l'API Stream Deck (/api/deck)
+    qui décrit ses touches. (True les deux / None joignable, touches indisponibles / False, message)."""
+    url = multiview_url(url) or deck_url("multiview", "")
     try:
         status, data = _mv_state(url, timeout)
     except NET_ERRORS as e:
@@ -971,7 +1089,9 @@ def probe_multiview(url: str, timeout: float = 4.0) -> tuple[bool | None, str]:
     bits = [f"version {data.get('version', '?')}", f"{live}/{len(streams)} flux en lecture"]
     if (data.get("sender") or {}).get("running"):
         bits.append("émission OMT en cours")
-    return True, "py-multiview : " + ", ".join(bits)
+    text = "py-multiview : " + ", ".join(bits)
+    ok, deck = probe_deck("multiview", url, token, timeout)
+    return (True if ok else None), f"{text}  ·  touches : {deck.removeprefix('py-multiview : ')}"
 
 
 class Multiview(_Service):
@@ -991,7 +1111,7 @@ class Multiview(_Service):
         self.state: dict = {}  # dernier /status reçu
 
     def configure(self, url: str) -> None:
-        url = multiview_url(url)
+        url = multiview_url(url) or deck_url("multiview", "")  # même adresse par défaut que ses touches
         if url != self.url:
             self.url, self.reachable, self.error, self.state = url, None, "", {}
         self._wake.set()
@@ -1008,7 +1128,7 @@ class Multiview(_Service):
     def _set_reachable(self, ok: bool, why: str = "") -> None:
         self.error = "" if ok else why
         if ok != self.reachable:
-            if self.reachable is not None or not ok:
+            if (self.reachable is not None or not ok) and self.wanted:
                 self._log("info" if ok else "warn",
                           f"py-multiview joignable ({self.url})" if ok else (why or "py-multiview injoignable"))
             self.reachable = ok
@@ -1141,6 +1261,53 @@ class Multiview(_Service):
 # --- état lisible (Réglages, voyants) -----------------------------------------------------------------
 
 
+def deck_status(d: DeckApp) -> tuple[bool | None, str]:
+    """(état, texte) d'une app pilotée par l'API Stream Deck commune."""
+    spec = d.spec
+    if not d.configured:
+        return None, ("Adresse et jeton API à renseigner pour l'utiliser." if not d.url else
+                      f"Jeton API à renseigner ({spec['token_where']}).")
+    if not d.active:
+        return None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."
+    if not d.connected:
+        return False, d.error or f"Connexion à {d.url}…"
+    how = "flux en direct" if d.mode == "stream" else "lecture de l'état (flux indisponible)"
+    keys = f"{len(d.keys)} touche(s)" if d.has_keys else f"touches non décrites ({d.name} à mettre à jour)"
+    parts = [keys, how]
+    if d.token:
+        parts.insert(0, f"jeton « {d.get('token.name') or '?'} »")
+    if d.app == "orchestream":
+        parts.insert(2, "live en cours" if d.get("live.active") else "aucun live")
+    return True, "  ·  ".join(parts)
+
+
+def _multiview_status(mv: "Multiview", d: DeckApp) -> tuple[bool | None, str]:
+    """py-multiview : son API d'origine (anciennes touches) et ses touches décrites, en une ligne."""
+    rows = []
+    if mv.active:
+        if mv.reachable is None:
+            rows.append((None, f"Connexion à {mv.url}…"))
+        elif not mv.reachable:
+            rows.append((False, mv.error or f"Injoignable sur {mv.url}."))
+        else:
+            streams = mv.items("stream")
+            live = sum(1 for s in streams if s.get("running"))
+            parts = [f"{live}/{len(streams)} flux en lecture"]
+            for key, text in (("sender", "émission OMT"), ("monitor", "retour audio"), ("floating", "fenêtre")):
+                if mv.running(key):
+                    parts.append(text)
+            rows.append((True, "  ·  ".join(parts)))
+    if d.active:
+        ok, text = deck_status(d)
+        rows.append((ok, f"touches : {text}" if mv.active else text))
+    if not rows:
+        return None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."
+    oks = [ok for ok, _ in rows]
+    if len(rows) == 2 and rows[0][0] is False and rows[1][0] is False:
+        rows = rows[:1]  # éteint : une seule fois
+    return (False if False in oks else None if None in oks else True), "  ·  ".join(t for _, t in rows)
+
+
 def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
     """[(clé, nom, état, texte)] des trois intégrations. état : True OK, False en défaut, None inactif ou
     pas encore connu. Une intégration n'est surveillée que si une touche l'utilise (ou si forcée)."""
@@ -1159,21 +1326,10 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
         out.append(("intercom", "py-intercom", ic.online,
                     f"{state}  ·  {buses or 'aucun bus proposé'}" if ic.online else
                     f"{state} : le client n'est pas en ligne, connecte-le au serveur intercom."))
-    orch = engine.orchestream
-    if not (orch.url and orch.token):
-        out.append(("orchestream", "orchestream", None,
-                    "Adresse et jeton API à renseigner pour l'utiliser." if not orch.url else
-                    "Jeton API à renseigner (orchestream : Réglages › Sécurité › Jetons API)."))
-    elif not orch.active:
-        out.append(("orchestream", "orchestream", None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."))
-    elif orch.connected:
-        tok = orch.get("token.name") or "?"
-        live = "live en cours" if orch.get("live.active") else "aucun live"
-        how = "flux en direct" if orch.mode == "stream" else "lecture de l'état (flux indisponible)"
-        keys = f"{len(orch.keys)} touche(s)" if orch.has_keys else "touches non décrites (orchestream à mettre à jour)"
-        out.append(("orchestream", "orchestream", True, f"jeton « {tok} »  ·  {keys}  ·  {live}  ·  {how}"))
-    else:
-        out.append(("orchestream", "orchestream", False, orch.error or f"Connexion à {orch.url}…"))
+    out.append(("orchestream", "orchestream", *deck_status(engine.orchestream)))
+    for app, spec in DECK_APPS.items():  # autres apps à touches décrites (py-multiview : plus bas, avec son API)
+        if app not in ("orchestream", "multiview"):
+            out.append((app, spec["name"], *deck_status(engine.deck(app))))
     ta = engine.tallies
     if not ta.devices:
         out.append(("tallies", "Tally32", None, "Aucun tally renseigné."))
@@ -1197,23 +1353,7 @@ def integration_status(engine) -> list[tuple[str, str, bool | None, str]]:
                 oks.append(bool(s.get("connected")))
         ok = False if False in oks else None if None in oks else True
         out.append(("tallies", "Tally32", ok, "  ·  ".join(parts)))
-    mv = engine.multiview
-    if not mv.url:
-        out.append(("multiview", "py-multiview", None, "Adresse à renseigner pour l'utiliser."))
-    elif not mv.active:
-        out.append(("multiview", "py-multiview", None, "Aucune touche ne l'utilise (« Tester » pour vérifier)."))
-    elif mv.reachable is None:
-        out.append(("multiview", "py-multiview", None, f"Connexion à {mv.url}…"))
-    elif not mv.reachable:
-        out.append(("multiview", "py-multiview", False, mv.error or f"Injoignable sur {mv.url}."))
-    else:
-        streams = mv.items("stream")
-        live = sum(1 for s in streams if s.get("running"))
-        parts = [f"{live}/{len(streams)} flux en lecture"]
-        for key, text in (("sender", "émission OMT"), ("monitor", "retour audio"), ("floating", "fenêtre")):
-            if mv.running(key):
-                parts.append(text)
-        out.append(("multiview", "py-multiview", True, "  ·  ".join(parts)))
+    out.append(("multiview", "py-multiview", *_multiview_status(engine.multiview, engine.deck("multiview"))))
     return out
 
 
@@ -1265,7 +1405,7 @@ def migrate(cfg: dict) -> list[str]:
                 if not orch.get("url"):
                     orch["url"] = on_m[0].group(1)
                 b["mode"], b["actions_off"] = "press", []
-                b["actions"] = [new_action("orchestream.key", key=f"overlay.toggle:{on_m[0].group(2)}")]
+                b["actions"] = [new_action("deck.key", app="orchestream", key=f"overlay.toggle:{on_m[0].group(2)}")]
                 b["feedbacks"] = [f for f in b.get("feedbacks", []) if f.get("cond", {}).get("type") != "toggle"]
                 counts["orch"] += 1
                 continue
